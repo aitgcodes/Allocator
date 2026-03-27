@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "Allocator Dash App",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-c", "PYTHONPATH=src /Users/vardha/miniconda3/envs/allocator/bin/python -m allocator.app"],
+      "port": 8050
+    },
+    {
+      "name": "Perplex Dash App",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-c", "PYTHONPATH=src /Users/vardha/miniconda3/envs/allocator/bin/python -m perplex.dash_app"],
+      "port": 8050
+    }
+  ]
+}

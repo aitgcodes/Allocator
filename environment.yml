@@ -1,0 +1,15 @@
+name: allocator
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+  - numpy>=1.26
+  - pandas>=2.2
+  - openpyxl>=3.1          # Excel read/write
+  - pip:
+      - dash>=2.17
+      - dash-bootstrap-components>=1.6
+      - plotly>=5.22
+      - kaleido>=0.2.1      # static image export (optional, for PNG snapshots)

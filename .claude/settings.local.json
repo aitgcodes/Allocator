@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m allocator.allocation --phase0-only --students data/sample_students.csv --faculty data/sample_faculty.csv --out reports/)",
+      "Bash(conda run:*)",
+      "Bash(/Users/vardha/miniconda3/envs/allocator/bin/python -m allocator.allocation --phase0-only --students data/sample_students.csv --faculty data/sample_faculty.csv --out reports/)",
+      "Bash(PYTHONPATH=src /Users/vardha/miniconda3/envs/allocator/bin/python -m allocator.allocation --phase0-only --students data/sample_students.csv --faculty data/sample_faculty.csv --out reports/)",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(xargs kill:*)",
+      "Bash(PYTHONPATH=src /Users/vardha/miniconda3/envs/allocator/bin/python -c \"from allocator.app import app; print\\(''''Import OK''''\\)\")",
+      "Bash(git init:*)",
+      "Bash(git add:*)",
+      "Bash(git rm:*)"
+    ]
+  }
+}
