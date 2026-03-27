@@ -117,6 +117,21 @@ def _parse_upload(contents: str, filename: str):
     return base64.b64decode(content_string)
 
 
+def _copy_snaps(snaps: SnapshotList) -> SnapshotList:
+    """Return a new SnapshotList containing the same snapshot objects.
+
+    This is a *shallow* copy of the container only — snapshot objects are
+    immutable dataclasses so sharing them is safe.  The key purpose is to
+    give ``phase0_snapshots`` its own list so that subsequent ``round1()``
+    appends (which extend ``snapshots`` in-place) do not accidentally
+    contaminate the reset checkpoint.
+    """
+    new = SnapshotList()
+    for s in snaps:
+        new.append(s)
+    return new
+
+
 def _load_from_bytes(data: bytes, filename: str, loader_fn):
     """Save bytes to a temp file and call loader_fn(path)."""
     import tempfile
@@ -551,11 +566,24 @@ app.layout = dbc.Container([
     dbc.Row(dbc.Col(_viz_card())),
 
     # hidden stores / download
-    dcc.Store(id="store-loaded",   data=False),
-    dcc.Store(id="store-phase",    data="idle"),
-    dcc.Store(id="store-r1-picks", data={}),
-    dcc.Store(id="store-playing",  data=False),
+    dcc.Store(id="store-loaded",        data=False),
+    dcc.Store(id="store-phase",         data="idle"),
+    dcc.Store(id="store-r1-picks",      data={}),
+    dcc.Store(id="store-playing",       data=False),
+    dcc.Store(id="store-pending-pick",  data=None),
     dcc.Download(id="download-report"),
+
+    # Override-confirmation modal
+    dbc.Modal([
+        dbc.ModalHeader(dbc.ModalTitle("⚠ Override protocol recommendation?")),
+        dbc.ModalBody(id="modal-confirm-body"),
+        dbc.ModalFooter([
+            dbc.Button("Confirm override", id="btn-confirm-override",
+                       color="danger",   className="me-2"),
+            dbc.Button("Cancel",          id="btn-cancel-override",
+                       color="secondary", outline=True),
+        ]),
+    ], id="modal-confirm-pick", is_open=False, centered=True, size="lg"),
 
     # Fixed toast for confirmed picks
     dbc.Toast(
@@ -718,8 +746,16 @@ def cb_run(n_phase0, n_full, loaded):
                     "faculty":          faculty,
                     "meta":             meta,
                     "snapshots":        snaps,
-                    "phase0_snapshots": snaps,
+                    "phase0_snapshots": _copy_snaps(snaps),   # separate object — never mutated by R1
                     "phase":            "phase0_done",
+                    # reset any stale allocation state from a prior run
+                    "r1_assignments":        {},
+                    "r1_faculty_loads":      {},
+                    "r1_picks":              {},
+                    "current_assignments":   {},
+                    "current_faculty_loads": {},
+                    "main_queue":            [],
+                    "main_queue_idx":        0,
                 })
                 msg = (f"Phase 0 complete — report saved to {OUTPUT_DIR}/. "
                        f"Tier A={sum(1 for s in students if s.tier=='A')} "
@@ -746,7 +782,15 @@ def cb_run(n_phase0, n_full, loaded):
                     "faculty":          faculty,
                     "meta":             meta,
                     "snapshots":        snaps,
-                    "phase0_snapshots": snaps,
+                    "phase0_snapshots": _copy_snaps(snaps),   # separate object — never mutated by R1
+                    # reset any stale allocation state from a prior run
+                    "r1_assignments":        {},
+                    "r1_faculty_loads":      {},
+                    "r1_picks":              {},
+                    "current_assignments":   {},
+                    "current_faculty_loads": {},
+                    "main_queue":            [],
+                    "main_queue_idx":        0,
                 })
             except Exception as e:
                 return f"✗ Phase 0 error: {e}", "idle", 0, {}, 0
@@ -929,12 +973,21 @@ def cb_reset_r1(n_clicks):
     faculty  = _app_state["faculty"]
 
     r1_candidates = build_r1_candidate_lists(students, faculty)
-    snaps = _app_state["phase0_snapshots"]
 
-    _app_state["r1_pending"] = r1_candidates
-    _app_state["r1_picks"]   = {}
-    _app_state["phase"]      = "r1"
-    _app_state["snapshots"]  = snaps
+    # Use a *fresh copy* of the phase-0 checkpoint so that any R1/main-alloc
+    # snapshots appended during the previous (or current) run do not carry over.
+    snaps = _copy_snaps(_app_state["phase0_snapshots"])
+
+    _app_state["r1_pending"]          = r1_candidates
+    _app_state["r1_picks"]            = {}
+    _app_state["r1_assignments"]      = {}
+    _app_state["r1_faculty_loads"]    = {}
+    _app_state["current_assignments"] = {}
+    _app_state["current_faculty_loads"] = {}
+    _app_state["main_queue"]          = []
+    _app_state["main_queue_idx"]      = 0
+    _app_state["phase"]               = "r1"
+    _app_state["snapshots"]           = snaps
 
     if snaps:
         n = len(snaps)
@@ -994,47 +1047,18 @@ def cb_proceed_main(n_clicks):
 
 
 # ---------------------------------------------------------------------------
-# Callback — manual main allocation pick
+# Helper — execute one manual pick (shared by direct pick + override confirm)
 # ---------------------------------------------------------------------------
 
-@app.callback(
-    Output("main-alloc-panel", "children",  allow_duplicate=True),
-    Output("store-phase",      "data",      allow_duplicate=True),
-    Output("step-slider",      "max",       allow_duplicate=True),
-    Output("step-slider",      "marks",     allow_duplicate=True),
-    Output("step-slider",      "value",     allow_duplicate=True),
-    Output("toast-picked",     "children",  allow_duplicate=True),
-    Output("toast-picked",     "is_open",   allow_duplicate=True),
-    Input({"type": "main-pick", "index": dash.ALL, "step": dash.ALL, "run": dash.ALL}, "n_clicks"),
-    prevent_initial_call=True,
-)
-def cb_main_alloc_pick(n_clicks_list):
-    _no_update = (dash.no_update,) * 7
-    triggered = ctx.triggered_id
-    if not triggered or not isinstance(triggered, dict):
-        return _no_update
-
-    # Guard: ignore Dash's auto-fire when buttons are dynamically added to the DOM.
-    # ctx.triggered[0]["value"] is the new n_clicks; None/0 means no real click.
-    triggered_value = ctx.triggered[0].get("value") if ctx.triggered else None
-    if not triggered_value:
-        return _no_update
-
-    if _app_state["phase"] != "main_alloc":
-        return _no_update
-
-    fid           = triggered["index"]
+def _do_pick(fid: str) -> tuple:
+    """
+    Record the assignment of the current queue student to faculty ``fid``,
+    append a snapshot, advance the queue pointer, and return the 7-tuple
+    (panel_content, phase, slider_max, slider_marks, slider_value,
+     toast_children, toast_is_open) expected by both pick callbacks.
+    """
     queue         = _app_state["main_queue"]
     idx           = _app_state["main_queue_idx"]
-
-    # Guard: ignore stale button clicks from a previous run
-    current_run = _app_state.get("main_run", 0)
-    if triggered.get("step") != idx or triggered.get("run") != current_run:
-        return _no_update
-
-    if idx >= len(queue):
-        return _no_update
-
     student       = queue[idx]
     students      = _app_state["students"]
     faculty       = _app_state["faculty"]
@@ -1042,10 +1066,11 @@ def cb_main_alloc_pick(n_clicks_list):
     faculty_map   = {f.id: f for f in faculty}
     assignments   = _app_state["current_assignments"]
     faculty_loads = _app_state["current_faculty_loads"]
+    current_run   = _app_state.get("main_run", 0)
 
     # Record assignment
-    assignments[student.id]      = fid
-    faculty_loads[fid]           = faculty_loads.get(fid, 0) + 1
+    assignments[student.id] = fid
+    faculty_loads[fid]      = faculty_loads.get(fid, 0) + 1
 
     # Append snapshot
     snaps = _app_state["snapshots"]
@@ -1054,7 +1079,7 @@ def cb_main_alloc_pick(n_clicks_list):
         rank = student.preferences.index(fid) + 1
     except ValueError:
         rank = None
-    fac  = faculty_map.get(fid)
+    fac         = faculty_map.get(fid)
     phase_label = f"Class{student.tier}"
     unassigned  = {s.id for s in students if assignments.get(s.id) is None}
     snaps.append(AllocationSnapshot(
@@ -1091,7 +1116,13 @@ def cb_main_alloc_pick(n_clicks_list):
         student_map  = {s.id: s for s in students}
         tier_color   = {"A": "success", "B": "warning", "C": "danger"}
         summary_rows = []
-        for sid, fac_id in sorted(assignments.items(), key=lambda x: (student_map.get(x[0], Student(x[0],"",0,[])).tier or "Z", -(student_map[x[0]].cpi if x[0] in student_map else 0))):
+        for sid, fac_id in sorted(
+            assignments.items(),
+            key=lambda x: (
+                student_map.get(x[0], Student(x[0], "", 0, [])).tier or "Z",
+                -(student_map[x[0]].cpi if x[0] in student_map else 0),
+            ),
+        ):
             s = student_map.get(sid)
             f = faculty_map.get(fac_id) if fac_id else None
             summary_rows.append(html.Tr([
@@ -1101,40 +1132,37 @@ def cb_main_alloc_pick(n_clicks_list):
                 html.Td(f.name if f else html.Span("Unassigned", className="text-danger")),
             ]))
 
-        # Advisor popularity: for each choice rank 1–3, count students (and by tier) per advisor
-        # pop[rank][fid] = {"total": int, "A": int, "B": int, "C": int}
-        pop: dict[int, dict[str, dict]] = {1: {}, 2: {}, 3: {}}
+        # Advisor popularity
+        pop: dict = {1: {}, 2: {}, 3: {}}
         for s in students:
-            for rank_idx, fid in enumerate(s.preferences[:3], start=1):
-                entry = pop[rank_idx].setdefault(fid, {"total": 0, "A": 0, "B": 0, "C": 0})
+            for rank_idx, pfid in enumerate(s.preferences[:3], start=1):
+                entry = pop[rank_idx].setdefault(pfid, {"total": 0, "A": 0, "B": 0, "C": 0})
                 entry["total"] += 1
                 entry[s.tier] = entry.get(s.tier, 0) + 1
 
-        # Collect all advisors mentioned in any of the 3 choices
-        all_fids = sorted(
-            {fid for r in pop.values() for fid in r},
-            key=lambda fid: -max(pop[r].get(fid, {}).get("total", 0) for r in (1, 2, 3)),
+        all_pop_fids = sorted(
+            {pfid for r in pop.values() for pfid in r},
+            key=lambda pfid: -max(pop[r].get(pfid, {}).get("total", 0) for r in (1, 2, 3)),
         )
 
-        def _cell(fid, rank_idx):
-            entry = pop[rank_idx].get(fid)
+        def _cell(pfid, rank_idx):
+            entry = pop[rank_idx].get(pfid)
             if not entry or entry["total"] == 0:
                 return html.Td("—", className="text-muted text-center")
             tier_parts = [f"{t}:{entry[t]}" for t in ("A", "B", "C") if entry.get(t)]
             return html.Td([
                 html.Span(str(entry["total"]), className="fw-bold"),
                 html.Br(),
-                html.Span("  ".join(tier_parts), className="text-muted", style={"fontSize": "0.78em"}),
+                html.Span("  ".join(tier_parts), className="text-muted",
+                          style={"fontSize": "0.78em"}),
             ], className="text-center")
 
         pop_rows = [
             html.Tr([
-                html.Td(faculty_map[fid].name if fid in faculty_map else fid),
-                _cell(fid, 1),
-                _cell(fid, 2),
-                _cell(fid, 3),
+                html.Td(faculty_map[pfid].name if pfid in faculty_map else pfid),
+                _cell(pfid, 1), _cell(pfid, 2), _cell(pfid, 3),
             ])
-            for fid in all_fids
+            for pfid in all_pop_fids
         ]
         pop_table = dbc.Table([
             html.Thead(html.Tr([
@@ -1148,19 +1176,23 @@ def cb_main_alloc_pick(n_clicks_list):
 
         n = len(snaps)
         marks = {i: str(snaps[i].step) for i in range(0, n, max(1, n // 10))}
+        assigned_count = len(assignments) - len(still_unassigned)
+        empty_labs     = sum(1 for f in faculty if faculty_loads.get(f.id, 0) == 0)
         content = html.Div([
             dbc.Alert(
                 [html.Strong("✓ Main allocation complete. "),
-                 f"{len(assignments)-len(still_unassigned)} assigned, "
-                 f"{len(still_unassigned)} unassigned."],
+                 f"{assigned_count} assigned, "
+                 f"{len(still_unassigned)} unassigned, "
+                 f"{empty_labs} empty lab{'s' if empty_labs != 1 else ''}."],
                 color="success", className="mb-3",
             ),
-            dbc.Button(
-                "⬇ Save report (CSV)", id="btn-save-report",
-                color="outline-secondary", size="sm", className="mb-3",
-            ),
+            dbc.Button("⬇ Save report (CSV)", id="btn-save-report",
+                       color="outline-secondary", size="sm", className="mb-3"),
             dbc.Table([
-                html.Thead(html.Tr([html.Th("Student"), html.Th("CPI"), html.Th("Tier"), html.Th("Advisor")])),
+                html.Thead(html.Tr([
+                    html.Th("Student"), html.Th("CPI"),
+                    html.Th("Tier"),    html.Th("Advisor"),
+                ])),
                 html.Tbody(summary_rows),
             ], bordered=True, hover=True, striped=True, size="sm"),
             html.Hr(),
@@ -1176,10 +1208,159 @@ def cb_main_alloc_pick(n_clicks_list):
     picked_fac   = faculty_map.get(fid)
     toast_msg    = [html.Strong(student.name), f" → {picked_fac.name if picked_fac else fid}"]
     next_student = queue[new_idx]
-    content      = _render_student_picker(next_student, faculty_map, faculty_loads, meta, new_idx, len(queue), run=current_run)
-    n = len(snaps)
+    content      = _render_student_picker(
+        next_student, faculty_map, faculty_loads, meta,
+        new_idx, len(queue), run=current_run,
+    )
+    n     = len(snaps)
     marks = {i: str(snaps[i].step) for i in range(0, n, max(1, n // 10))}
     return content, "main_alloc", n - 1, marks, n - 1, toast_msg, True
+
+
+# ---------------------------------------------------------------------------
+# Callback — manual main allocation pick
+# ---------------------------------------------------------------------------
+
+@app.callback(
+    Output("main-alloc-panel",    "children",  allow_duplicate=True),
+    Output("store-phase",         "data",      allow_duplicate=True),
+    Output("step-slider",         "max",       allow_duplicate=True),
+    Output("step-slider",         "marks",     allow_duplicate=True),
+    Output("step-slider",         "value",     allow_duplicate=True),
+    Output("toast-picked",        "children",  allow_duplicate=True),
+    Output("toast-picked",        "is_open",   allow_duplicate=True),
+    Output("modal-confirm-pick",  "is_open",   allow_duplicate=True),
+    Output("modal-confirm-body",  "children",  allow_duplicate=True),
+    Output("store-pending-pick",  "data",      allow_duplicate=True),
+    Input({"type": "main-pick", "index": dash.ALL, "step": dash.ALL, "run": dash.ALL}, "n_clicks"),
+    prevent_initial_call=True,
+)
+def cb_main_alloc_pick(n_clicks_list):
+    _no_update = (dash.no_update,) * 10
+    triggered = ctx.triggered_id
+    if not triggered or not isinstance(triggered, dict):
+        return _no_update
+
+    triggered_value = ctx.triggered[0].get("value") if ctx.triggered else None
+    if not triggered_value:
+        return _no_update
+
+    if _app_state["phase"] != "main_alloc":
+        return _no_update
+
+    fid         = triggered["index"]
+    queue       = _app_state["main_queue"]
+    idx         = _app_state["main_queue_idx"]
+    current_run = _app_state.get("main_run", 0)
+    if triggered.get("step") != idx or triggered.get("run") != current_run:
+        return _no_update
+    if idx >= len(queue):
+        return _no_update
+
+    student       = queue[idx]
+    faculty       = _app_state["faculty"]
+    meta          = _app_state["meta"]
+    faculty_map   = {f.id: f for f in faculty}
+    faculty_loads = _app_state["current_faculty_loads"]
+
+    # Determine protocol pick
+    advisors, _, _ = _compute_eligible_advisors(student, faculty_map, faculty_loads, meta)
+    cap_fids       = [f for f, _, _, _, at_cap in advisors if not at_cap]
+    proto_result   = _least_loaded_choice(student, cap_fids, faculty_map, faculty_loads)
+    protocol_fid   = proto_result[0] if proto_result else None
+
+    # ---- Protocol pick or no recommendation: execute immediately ----
+    if fid == protocol_fid or protocol_fid is None:
+        result = _do_pick(fid)
+        return (*result, False, dash.no_update, dash.no_update)
+
+    # ---- Override: show confirmation modal ----
+    chosen_fac   = faculty_map.get(fid)
+    protocol_fac = faculty_map.get(protocol_fid)
+    chosen_load  = faculty_loads.get(fid, 0)
+    proto_load   = faculty_loads.get(protocol_fid, 0)
+
+    try:
+        chosen_rank = student.preferences.index(fid) + 1
+    except ValueError:
+        chosen_rank = None
+    try:
+        proto_rank = student.preferences.index(protocol_fid) + 1
+    except ValueError:
+        proto_rank = None
+
+    def _rank_label(r):
+        return f"Choice #{r}" if r else "outside preferences"
+
+    modal_body = html.Div([
+        dbc.Alert(
+            [html.Strong("You are selecting a different advisor than the protocol recommends."),
+             " Please confirm your override."],
+            color="warning", className="mb-3",
+        ),
+        dbc.Row([
+            dbc.Col(dbc.Card(dbc.CardBody([
+                html.Div("★ Protocol recommendation", className="text-warning fw-bold mb-1"),
+                html.H6(protocol_fac.name if protocol_fac else protocol_fid),
+                html.Div(_rank_label(proto_rank),  className="text-muted small"),
+                html.Div(f"Load: {proto_load}/{protocol_fac.max_load if protocol_fac else '?'}",
+                         className="text-muted small"),
+            ]), color="warning", outline=True), md=6, className="mb-2"),
+            dbc.Col(dbc.Card(dbc.CardBody([
+                html.Div("Your selection", className="text-danger fw-bold mb-1"),
+                html.H6(chosen_fac.name if chosen_fac else fid),
+                html.Div(_rank_label(chosen_rank), className="text-muted small"),
+                html.Div(f"Load: {chosen_load}/{chosen_fac.max_load if chosen_fac else '?'}",
+                         className="text-muted small"),
+            ]), color="danger", outline=True), md=6, className="mb-2"),
+        ]),
+    ])
+    pending = {"fid": fid, "idx": idx, "run": current_run}
+    return (
+        dash.no_update, dash.no_update, dash.no_update, dash.no_update,
+        dash.no_update, dash.no_update, dash.no_update,
+        True, modal_body, pending,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Callback — override confirmation modal
+# ---------------------------------------------------------------------------
+
+@app.callback(
+    Output("main-alloc-panel",   "children",  allow_duplicate=True),
+    Output("store-phase",        "data",      allow_duplicate=True),
+    Output("step-slider",        "max",       allow_duplicate=True),
+    Output("step-slider",        "marks",     allow_duplicate=True),
+    Output("step-slider",        "value",     allow_duplicate=True),
+    Output("toast-picked",       "children",  allow_duplicate=True),
+    Output("toast-picked",       "is_open",   allow_duplicate=True),
+    Output("modal-confirm-pick", "is_open",   allow_duplicate=True),
+    Input("btn-confirm-override", "n_clicks"),
+    Input("btn-cancel-override",  "n_clicks"),
+    State("store-pending-pick",   "data"),
+    prevent_initial_call=True,
+)
+def cb_confirm_override(n_confirm, n_cancel, pending):
+    _no_update = (dash.no_update,) * 8
+    if not ctx.triggered_id:
+        return _no_update
+
+    # Cancel — just close the modal
+    if ctx.triggered_id == "btn-cancel-override":
+        return (*([dash.no_update] * 7), False)
+
+    # Confirm — execute the pending pick
+    if not pending or _app_state["phase"] != "main_alloc":
+        return _no_update
+
+    # Validate that the pending pick still matches the current queue position
+    current_run = _app_state.get("main_run", 0)
+    if pending.get("idx") != _app_state["main_queue_idx"] or pending.get("run") != current_run:
+        return _no_update
+
+    result = _do_pick(pending["fid"])
+    return (*result, False)   # close modal after executing
 
 
 # ---------------------------------------------------------------------------

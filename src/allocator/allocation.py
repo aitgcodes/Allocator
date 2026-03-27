@@ -316,7 +316,7 @@ def round1(
     (assignments, faculty_loads, snapshots)
     """
     faculty_map   = {f.id: f for f in faculty}
-    faculty_loads = {f.id: f.current_load for f in faculty}
+    faculty_loads = {f.id: 0 for f in faculty}   # always start fresh; current_load is not tracked
     assignments: Dict[str, Optional[str]] = {s.id: None for s in students}
     unassigned  = {s.id for s in students}
 
