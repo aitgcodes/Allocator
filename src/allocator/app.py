@@ -1014,6 +1014,12 @@ def cb_main_alloc_pick(n_clicks_list):
     if not triggered or not isinstance(triggered, dict):
         return _no_update
 
+    # Guard: ignore Dash's auto-fire when buttons are dynamically added to the DOM.
+    # ctx.triggered[0]["value"] is the new n_clicks; None/0 means no real click.
+    triggered_value = ctx.triggered[0].get("value") if ctx.triggered else None
+    if not triggered_value:
+        return _no_update
+
     if _app_state["phase"] != "main_alloc":
         return _no_update
 
