@@ -12,3 +12,4 @@ env/
 venv/
 reports/
 .DS_Store
+.claude/settings.local.json
