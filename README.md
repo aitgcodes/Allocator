@@ -12,20 +12,113 @@ An interactive web app for assigning MS thesis advisors to students following a 
 
 ---
 
-## Setup
+## Installation
 
+### Prerequisites
+
+| Tool | Mac | Linux | Windows |
+|------|-----|-------|---------|
+| Git | [git-scm.com](https://git-scm.com) or `brew install git` | `sudo apt install git` / `sudo dnf install git` | [git-scm.com](https://git-scm.com) — install with default options |
+| Conda | [Miniconda](https://docs.conda.io/en/latest/miniconda.html) (recommended) or Anaconda | Same | Same — use the **Anaconda Prompt** for all commands below |
+
+---
+
+### Step 1 — Clone the repository
+
+**Mac / Linux** — open Terminal:
+```bash
+git clone https://github.com/aitgcodes/Allocator.git
+cd Allocator
+```
+
+**Windows** — open **Anaconda Prompt** (search for it in the Start menu):
+```bat
+git clone https://github.com/aitgcodes/Allocator.git
+cd Allocator
+```
+
+---
+
+### Step 2 — Create the Conda environment
+
+This installs Python 3.11 and all required packages into an isolated environment called `allocator`.
+
+**Mac / Linux:**
 ```bash
 conda env create -f environment.yml
+```
+
+**Windows:**
+```bat
+conda env create -f environment.yml
+```
+
+> This only needs to be done **once**. It may take a few minutes the first time.
+
+---
+
+### Step 3 — Activate the environment
+
+**Mac / Linux:**
+```bash
 conda activate allocator
 ```
 
-## Run
+**Windows:**
+```bat
+conda activate allocator
+```
 
+Your prompt will change to show `(allocator)` on the left, confirming the environment is active.
+
+---
+
+### Step 4 — Launch the app
+
+**Mac / Linux:**
 ```bash
 PYTHONPATH=src python -m allocator.app
 ```
 
-Then open **http://localhost:8050** in your browser.
+**Windows:**
+```bat
+set PYTHONPATH=src && python -m allocator.app
+```
+
+You should see output like:
+```
+Dash is running on http://127.0.0.1:8050/
+```
+
+---
+
+### Step 5 — Open in your browser
+
+Open **[http://localhost:8050](http://localhost:8050)** in Chrome, Firefox, or Edge.
+
+> Keep the terminal window open while you use the app. Close it (or press `Ctrl+C`) to stop the server.
+
+---
+
+### Stopping and restarting
+
+To stop the app, press **`Ctrl+C`** in the terminal.
+
+To restart it later, you only need steps 3 and 4 — the environment is already installed:
+
+**Mac / Linux:**
+```bash
+cd Allocator
+conda activate allocator
+PYTHONPATH=src python -m allocator.app
+```
+
+**Windows:**
+```bat
+cd Allocator
+conda activate allocator
+set PYTHONPATH=src && python -m allocator.app
+```
 
 ---
 
@@ -58,6 +151,18 @@ Sample files are in `data/`.
 
 ---
 
+## Troubleshooting
+
+| Symptom | Fix |
+|---------|-----|
+| `conda: command not found` | Miniconda/Anaconda is not installed or not on PATH — reinstall and restart your terminal |
+| `ModuleNotFoundError: No module named 'allocator'` | `PYTHONPATH=src` was not set — re-run the launch command exactly as shown |
+| Browser shows "This site can't be reached" | The app is not running — check the terminal for errors and make sure Step 4 completed successfully |
+| Port 8050 already in use | Another instance is running. Stop it with `Ctrl+C`, or run `lsof -i :8050` (Mac/Linux) to find and kill it |
+| `CondaEnvException: prefix already exists` | Environment already created — skip Step 2 and go straight to Step 3 |
+
+---
+
 ## Project structure
 
 ```
@@ -68,5 +173,6 @@ src/allocator/
   state.py        – Data classes (Student, Faculty, AllocationSnapshot)
   visualizer.py   – Plotly figure builders
 data/             – Sample student and faculty CSV files
+docs/             – User manual (PDF)
 reports/          – Phase-0 reports written here
 ```

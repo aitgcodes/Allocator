@@ -168,34 +168,132 @@ story += [
     Spacer(1, 6),
 ]
 
-# ── 3. Opening the app ──────────────────────────────────────────────────────
+# ── 3. Installation ─────────────────────────────────────────────────────────
+
+def platform_table(mac_cmd, linux_cmd, win_cmd):
+    """Two-col table showing the same command on each platform."""
+    rows = [
+        [Paragraph("<b>Mac</b>",     Body), Paragraph(mac_cmd,   Code)],
+        [Paragraph("<b>Linux</b>",   Body), Paragraph(linux_cmd, Code)],
+        [Paragraph("<b>Windows</b>", Body), Paragraph(win_cmd,   Code)],
+    ]
+    t = Table(rows, colWidths=[2.8*cm, 12.9*cm])
+    t.setStyle(TableStyle([
+        ("BACKGROUND",    (0, 0), (0, -1), colors.HexColor("#e8eaf6")),
+        ("GRID",          (0, 0), (-1, -1), 0.4, colors.HexColor("#b0bec5")),
+        ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING",    (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 6),
+    ]))
+    return KeepTogether([t, Spacer(1, 8)])
+
 story += [
-    h1("3.  Starting and Opening the App"),
-    p("You need to start the app server once before opening it in your browser. "
-      "This is a one-time step each session — the server keeps running in the "
-      "background while you use the app."),
-    Spacer(1, 6),
-    h2("3.1  One-time setup  (first time only)"),
-    p("Open a Terminal (Mac / Linux) or Command Prompt (Windows) and run:"),
-    Paragraph("conda activate allocator", Code),
-    note("If the <i>allocator</i> environment has not been created yet, run "
-         "<b>conda env create -f environment.yml</b> first, then activate it."),
-    Spacer(1, 6),
-    h2("3.2  Start the server"),
-    p("In the same terminal, navigate to the project folder and run:"),
-    Paragraph("PYTHONPATH=src python -m allocator.app", Code),
-    p("You will see a message like:"),
+    h1("3.  Installation & Setup"),
+    p("The app runs locally on your computer. You need to do this setup "
+      "<b>once</b> before you can use it. After that, only Steps 5–7 are "
+      "needed each time you want to start the app."),
+    Spacer(1, 8),
+
+    # ── Step A: Install Git ──────────────────────────────────────────────
+    h2("Step 1 — Install Git"),
+    p("Git is used to download the project files. Skip this step if Git is "
+      "already installed."),
+    col_table(
+        ["Platform", "How to install"],
+        [
+            ["Mac",     "Run: brew install git   (if you have Homebrew), "
+                        "or download from https://git-scm.com"],
+            ["Linux",   "sudo apt install git   (Ubuntu/Debian)  "
+                        "or   sudo dnf install git   (Fedora/RHEL)"],
+            ["Windows", "Download and run the installer from https://git-scm.com "
+                        "— accept all default options during setup."],
+        ],
+        col_widths=[2.8*cm, 12.9*cm],
+    ),
+    Spacer(1, 10),
+
+    # ── Step B: Install Miniconda ────────────────────────────────────────
+    h2("Step 2 — Install Miniconda (Python environment manager)"),
+    p("Miniconda provides the <b>conda</b> command used to create an isolated "
+      "Python environment for this app. Skip this step if conda is already "
+      "installed."),
+    b("Go to <b>https://docs.conda.io/en/latest/miniconda.html</b>"),
+    b("Download the installer for your operating system and follow the on-screen "
+      "instructions."),
+    b("Windows users: during installation, tick "
+      "<b>\"Add Miniconda3 to PATH\"</b> or use the "
+      "<b>Anaconda Prompt</b> that is installed alongside Miniconda."),
+    Spacer(1, 10),
+
+    # ── Step C: Clone ────────────────────────────────────────────────────
+    h2("Step 3 — Download the project"),
+    p("Open a terminal (Mac/Linux) or Anaconda Prompt (Windows) and run:"),
+    platform_table(
+        "git clone https://github.com/aitgcodes/Allocator.git",
+        "git clone https://github.com/aitgcodes/Allocator.git",
+        "git clone https://github.com/aitgcodes/Allocator.git",
+    ),
+    p("Then move into the project folder:"),
+    platform_table("cd Allocator", "cd Allocator", "cd Allocator"),
+
+    # ── Step D: Create environment ───────────────────────────────────────
+    h2("Step 4 — Create the Python environment  (first time only)"),
+    p("This installs all required packages into an isolated environment called "
+      "<b>allocator</b>. It only needs to be done once."),
+    platform_table(
+        "conda env create -f environment.yml",
+        "conda env create -f environment.yml",
+        "conda env create -f environment.yml",
+    ),
+    note("This may take a few minutes the first time."),
+
+    PageBreak(),
+
+    # ── Step E: Activate ────────────────────────────────────────────────
+    h2("Step 5 — Activate the environment"),
+    p("Do this every time you open a new terminal before starting the app:"),
+    platform_table(
+        "conda activate allocator",
+        "conda activate allocator",
+        "conda activate allocator",
+    ),
+    p("Your prompt will change to show <b>(allocator)</b> on the left, "
+      "confirming the environment is active."),
+    Spacer(1, 8),
+
+    # ── Step F: Launch ───────────────────────────────────────────────────
+    h2("Step 6 — Start the app server"),
+    p("From inside the Allocator folder, with the environment active:"),
+    platform_table(
+        "PYTHONPATH=src python -m allocator.app",
+        "PYTHONPATH=src python -m allocator.app",
+        "set PYTHONPATH=src && python -m allocator.app",
+    ),
+    p("You will see:"),
     Paragraph("Dash is running on http://127.0.0.1:8050/", Code),
-    p("Leave this terminal window open. The server runs in the foreground — "
-      "closing the terminal will stop the app."),
-    Spacer(1, 6),
-    h2("3.3  Open in your browser"),
-    p("Open any modern web browser (Chrome, Firefox, Safari, Edge) and go to:"),
+    p("<b>Leave this terminal window open</b> while you use the app. "
+      "Closing it stops the server."),
+    Spacer(1, 8),
+
+    # ── Step G: Browser ──────────────────────────────────────────────────
+    h2("Step 7 — Open in your browser"),
+    p("Open Chrome, Firefox, Safari, or Edge and go to:"),
     Paragraph("http://localhost:8050", Code),
     p("The Allocator app will load. You can now upload your files and begin."),
-    note("To stop the server when you are done, go back to the terminal and "
-         "press Ctrl + C."),
-    Spacer(1, 6),
+    Spacer(1, 8),
+
+    # ── Stopping ─────────────────────────────────────────────────────────
+    h2("Stopping and restarting"),
+    p("To stop the app, press <b>Ctrl + C</b> in the terminal."),
+    p("To start it again later, only Steps 5–7 are needed "
+      "(the environment is already installed):"),
+    platform_table(
+        "cd Allocator\nconda activate allocator\nPYTHONPATH=src python -m allocator.app",
+        "cd Allocator\nconda activate allocator\nPYTHONPATH=src python -m allocator.app",
+        "cd Allocator\nconda activate allocator\nset PYTHONPATH=src && python -m allocator.app",
+    ),
+    Spacer(1, 10),
 ]
 
 # ── 4. Step-by-step walkthrough ─────────────────────────────────────────────
