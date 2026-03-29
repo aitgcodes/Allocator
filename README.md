@@ -12,6 +12,12 @@ An interactive web app for assigning MS thesis advisors to students following a 
 
 ---
 
+## Demo
+
+A short walkthrough of a full allocation run is available in [`AllocationRun.mp4`](AllocationRun.mp4).
+
+---
+
 ## Installation
 
 ### Prerequisites

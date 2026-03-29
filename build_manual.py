@@ -107,6 +107,10 @@ story += [
     p("This manual explains how to use the <b>Allocator</b> web app to assign "
       "MS thesis advisors to students. No technical knowledge is required — "
       "all you need is a web browser and two data files."),
+    Spacer(1, 6),
+    note("A short video walkthrough of a complete allocation run is available "
+         "in the repository as <b>AllocationRun.mp4</b>. Watch it before "
+         "reading this manual for a quick overview of the full workflow."),
     Spacer(1, 1*cm),
 ]
 
