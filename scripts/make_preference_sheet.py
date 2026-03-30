@@ -124,13 +124,15 @@ def convert(
     for i, col in enumerate(pref_cols, start=1):
         out[f"pref_{i}"] = df[col].str.strip()
 
-    # Collect all unique faculty names from the raw input (used to fill trailing slots)
-    all_faculty: set[str] = set()
+    # Collect all unique faculty names (ordered dict for stable ID assignment)
+    seen: dict[str, None] = {}
     for col in pref_cols:
         for val in df[col].dropna():
             val = val.strip()
             if val:
-                all_faculty.add(val)
+                seen[val] = None
+    all_faculty = set(seen.keys())
+    name_to_id = {name: f"F{i:02d}" for i, name in enumerate(seen.keys(), start=1)}
 
     # Extend output to cover every faculty (total columns = total unique faculty)
     n_faculty = len(all_faculty)
@@ -159,6 +161,9 @@ def convert(
 
     out[pref_out_cols] = out[pref_out_cols].apply(_fill_trailing, axis=1)
 
+    # Replace faculty names with their IDs (must match faculty_list.csv)
+    out[pref_out_cols] = out[pref_out_cols].replace(name_to_id)
+
     # Trim to exactly the right pref columns (input may have had more or fewer)
     out = out[["student_id", "name", "cpi"] + pref_out_cols]
 
@@ -170,15 +175,6 @@ def convert(
     print(f"Saved {len(out)} student(s) → {output_path}")
 
     # -- Build faculty output dataframe ------------------------------------
-    # Collect all non-empty faculty names from every preference column, preserving
-    # first-seen order, then deduplicate.
-    seen: dict[str, None] = {}
-    for col in pref_cols:
-        for name in df[col].dropna():
-            name = name.strip()
-            if name:
-                seen[name] = None   # dict preserves insertion order, keys = unique names
-
     unique_faculty = list(seen.keys())
     faculty_df = pd.DataFrame({
         "faculty_id": [f"F{i:02d}" for i in range(1, len(unique_faculty) + 1)],
