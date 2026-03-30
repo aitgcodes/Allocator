@@ -70,6 +70,22 @@ def find_pref_cols(df: pd.DataFrame) -> list[str]:
     return [col for _, col in matches]
 
 
+def _dedup_pref_row(row: pd.Series) -> pd.Series:
+    """Remove duplicate (non-empty) preferences, shifting remaining ones up."""
+    seen: set[str] = set()
+    result: list[str] = []
+    for val in row:
+        if pd.isna(val) or val == "":
+            continue          # skip empty slots; don't count as "seen"
+        if val not in seen:
+            seen.add(val)
+            result.append(val)
+        # duplicate → skip (effectively shifts rest up)
+    # Pad end with empty strings to preserve column count
+    result += [""] * (len(row) - len(result))
+    return pd.Series(result, index=row.index)
+
+
 # ---------------------------------------------------------------------------
 # Main conversion
 # ---------------------------------------------------------------------------
@@ -107,6 +123,44 @@ def convert(
 
     for i, col in enumerate(pref_cols, start=1):
         out[f"pref_{i}"] = df[col].str.strip()
+
+    # Collect all unique faculty names from the raw input (used to fill trailing slots)
+    all_faculty: set[str] = set()
+    for col in pref_cols:
+        for val in df[col].dropna():
+            val = val.strip()
+            if val:
+                all_faculty.add(val)
+
+    # Extend output to cover every faculty (total columns = total unique faculty)
+    n_faculty = len(all_faculty)
+    for i in range(len(pref_cols) + 1, n_faculty + 1):
+        out[f"pref_{i}"] = ""
+
+    # Deduplicate per-student preference lists (shift on duplicates)
+    pref_out_cols = [f"pref_{i}" for i in range(1, n_faculty + 1)]
+    deduped = out[pref_out_cols].apply(_dedup_pref_row, axis=1)
+    changed = (deduped.fillna("") != out[pref_out_cols].fillna("")).any(axis=1)
+    if changed.any():
+        print(f"Warning: Removed duplicate preferences in {changed.sum()} student row(s).")
+    out[pref_out_cols] = deduped
+
+    # Fill trailing empty slots with faculty the student missed (alphabetical order)
+    def _fill_trailing(row: pd.Series) -> pd.Series:
+        listed = {p for p in row if p and not pd.isna(p)}
+        missed = iter(sorted(all_faculty - listed))
+        result = []
+        for p in row:
+            if (pd.isna(p) or p == ""):
+                result.append(next(missed, ""))
+            else:
+                result.append(p)
+        return pd.Series(result, index=row.index)
+
+    out[pref_out_cols] = out[pref_out_cols].apply(_fill_trailing, axis=1)
+
+    # Trim to exactly the right pref columns (input may have had more or fewer)
+    out = out[["student_id", "name", "cpi"] + pref_out_cols]
 
     # Drop rows where both student_id and name are blank (e.g., trailing empty rows)
     out = out[~(out["student_id"].isna() & out["name"].isna())]
