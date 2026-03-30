@@ -339,9 +339,9 @@ def load_phase0_report(
     for key in ("cohort_size", "faculty_count", "N_A", "N_B", "common_max_load"):
         if key in meta:
             meta[key] = int(float(meta[key]))
-    for key in ("ratio", "p_low", "p_high", "grace"):
+    for key in ("ratio", "p_low", "p_mid", "p_high", "grace"):
         if key in meta:
-            meta[key] = float(meta[key]) if meta[key] != "" else None
+            meta[key] = float(meta[key]) if str(meta[key]) not in ("", "nan", "NaN") else None
     for key in ("p_low_pct", "p_high_pct"):
         if key in meta:
             meta[key] = int(float(meta[key])) if meta[key] != "" else None

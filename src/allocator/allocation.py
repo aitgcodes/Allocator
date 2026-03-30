@@ -159,7 +159,7 @@ def phase0(
         for s in students:
             s.tier = "A"
             s.n_tier = 2
-        meta = _build_meta(S, F, ratio, "tiny-cohort", None, None, None, None, 0.1,
+        meta = _build_meta(S, F, ratio, "tiny-cohort", None, None, None, None, None, 0.1,
                            3, 5, common_max_load)
         snaps = SnapshotList()
         assignments = {s.id: None for s in students}
@@ -186,15 +186,18 @@ def phase0(
     if max(n_top, n_mid, n_bottom) / S > 0.40:
         mode = "quartile"
         p25 = float(np.percentile(cpis, 25))
+        p50 = float(np.percentile(cpis, 50))
         p75 = float(np.percentile(cpis, 75))
         for s in students:
-            if s.cpi >= p75 - grace:
+            if s.cpi >= p75:
                 s.tier = "A"
-            elif s.cpi >= p25 - grace:
-                s.tier = "B"
+            elif s.cpi >= p50:
+                s.tier = "B1"
+            elif s.cpi >= p25:
+                s.tier = "B2"
             else:
                 s.tier = "C"
-        p_low, p_high = p25, p75
+        p_low, p_mid, p_high = p25, p50, p75
         p_low_pct, p_high_pct = 25, 75
     else:
         mode = "percentile"
@@ -205,7 +208,7 @@ def phase0(
                 s.tier = "B"
             else:
                 s.tier = "C"
-        p_low, p_high = p70, p90
+        p_low, p_mid, p_high = p70, None, p90
         p_low_pct, p_high_pct = 70, 90
 
     # --- N_tier ---
@@ -217,7 +220,7 @@ def phase0(
     for s in students:
         if s.tier == "A":
             s.n_tier = min(N_A, len(s.preferences)) or N_A
-        elif s.tier == "B":
+        elif s.tier in ("B", "B1", "B2"):
             s.n_tier = min(N_B, len(s.preferences)) or N_B
         else:
             s.n_tier = None    # Class C → global cap
@@ -225,19 +228,26 @@ def phase0(
     # --- build snapshot ---
     assignments = {s.id: None for s in students}
     unassigned  = {s.id for s in students}
-    counts = {"A": sum(1 for s in students if s.tier == "A"),
-              "B": sum(1 for s in students if s.tier == "B"),
-              "C": sum(1 for s in students if s.tier == "C")}
+    counts = {t: sum(1 for s in students if s.tier == t)
+              for t in ("A", "B", "B1", "B2", "C")}
+    if mode == "quartile":
+        tier_str = (f"A={counts['A']} B1={counts['B1']} "
+                    f"B2={counts['B2']} C={counts['C']}")
+        pct_str = (f"p{p_low_pct}={p_low:.2f} p50={p_mid:.2f} "
+                   f"p{p_high_pct}={p_high:.2f}")
+    else:
+        tier_str = f"A={counts['A']} B={counts['B']} C={counts['C']}"
+        pct_str = f"p{p_low_pct}={p_low:.2f} p{p_high_pct}={p_high:.2f}"
     event = (
         f"Phase 0 complete | mode={mode} | "
-        f"p{p_low_pct}={p_low:.2f} p{p_high_pct}={p_high:.2f} grace=±{grace} | "
+        f"{pct_str} grace=±{grace} | "
         f"S={S} F={F} ratio={ratio:.2f} | "
         f"N_A={N_A} N_B={N_B} N_C=All | "
         f"max_load(formula)={common_max_load} | "
-        f"Class A={counts['A']} B={counts['B']} C={counts['C']}"
+        f"Class {tier_str}"
     )
 
-    meta = _build_meta(S, F, ratio, mode, p_low, p_high, p_low_pct, p_high_pct, grace,
+    meta = _build_meta(S, F, ratio, mode, p_low, p_mid, p_high, p_low_pct, p_high_pct, grace,
                        N_A, N_B, common_max_load)
 
     snaps = SnapshotList()
@@ -249,7 +259,7 @@ def phase0(
     return students, faculty, meta, snaps
 
 
-def _build_meta(S, F, ratio, mode, p_low, p_high, p_low_pct, p_high_pct, grace, N_A, N_B, common_max_load) -> dict:
+def _build_meta(S, F, ratio, mode, p_low, p_mid, p_high, p_low_pct, p_high_pct, grace, N_A, N_B, common_max_load) -> dict:
     return {
         "cohort_size":      S,
         "faculty_count":    F,
@@ -258,6 +268,7 @@ def _build_meta(S, F, ratio, mode, p_low, p_high, p_low_pct, p_high_pct, grace, 
         "p_low_pct":        p_low_pct if p_low_pct is not None else "",
         "p_high_pct":       p_high_pct if p_high_pct is not None else "",
         "p_low":            round(p_low, 4) if p_low is not None else "",
+        "p_mid":            round(p_mid, 4) if p_mid is not None else "",
         "p_high":           round(p_high, 4) if p_high is not None else "",
         "grace":            grace,
         "N_A":              N_A,
@@ -450,35 +461,98 @@ def main_allocation(
         ))
 
     # -----------------------------------------------------------------------
-    # Class B round  (original B + promoted A)
+    # Class B / B1 round  (original B or B1 + promoted A)
     # -----------------------------------------------------------------------
-    pool_b_ids = {sid for sid in unassigned
-                  if student_map[sid].tier in ("A", "B")}
-    pool_b = _sorted_by_cpi([student_map[sid] for sid in pool_b_ids])
+    quartile_mode = any(student_map[sid].tier in ("B1", "B2") for sid in student_map)
 
-    snapshots.append(_snap(
-        step_ctr, "ClassB",
-        f"Class B round begins: {len(pool_b)} students "
-        f"({len(leftover_a)} promoted A + "
-        f"{len(pool_b)-len(leftover_a)} original B), cap N_B={N_B}",
-        assignments, faculty_loads, unassigned,
-    ))
+    if quartile_mode:
+        pool_b1_ids = {sid for sid in unassigned
+                       if student_map[sid].tier in ("A", "B1")}
+        pool_b1 = _sorted_by_cpi([student_map[sid] for sid in pool_b1_ids])
+        orig_b1 = sum(1 for s in pool_b1 if s.tier == "B1")
 
-    for s in pool_b:
-        cap = s.preferences[:N_B]
-        result = _least_loaded_choice(s, cap, faculty_map, faculty_loads)
-        if result:
-            fid, rank = result
-            _assign(s.id, fid, rank, "ClassB")
-
-    leftover_b = [sid for sid in unassigned
-                  if student_map[sid].tier in ("A", "B")]
-    if leftover_b:
         snapshots.append(_snap(
-            step_ctr, "ClassB",
-            f"Class B round: {len(leftover_b)} student(s) merged into Class C",
+            step_ctr, "ClassB1",
+            f"Class B1 round begins: {len(pool_b1)} students "
+            f"({len(leftover_a)} promoted A + {orig_b1} original B1), cap N_B={N_B}",
             assignments, faculty_loads, unassigned,
         ))
+
+        for s in pool_b1:
+            cap = s.preferences[:N_B]
+            result = _least_loaded_choice(s, cap, faculty_map, faculty_loads)
+            if result:
+                fid, rank = result
+                _assign(s.id, fid, rank, "ClassB1")
+
+        leftover_b1 = [sid for sid in unassigned
+                       if student_map[sid].tier in ("A", "B1")]
+        if leftover_b1:
+            snapshots.append(_snap(
+                step_ctr, "ClassB1",
+                f"Class B1 round: {len(leftover_b1)} student(s) promoted to Class B2 pool",
+                assignments, faculty_loads, unassigned,
+            ))
+
+        # --- Class B2 round  (original B2 + promoted from B1) ---
+        pool_b2_ids = {sid for sid in unassigned
+                       if student_map[sid].tier in ("A", "B1", "B2")}
+        pool_b2 = _sorted_by_cpi([student_map[sid] for sid in pool_b2_ids])
+        orig_b2   = sum(1 for s in pool_b2 if s.tier == "B2")
+        promoted  = len(pool_b2) - orig_b2
+
+        snapshots.append(_snap(
+            step_ctr, "ClassB2",
+            f"Class B2 round begins: {len(pool_b2)} students "
+            f"({promoted} promoted + {orig_b2} original B2), cap N_B={N_B}",
+            assignments, faculty_loads, unassigned,
+        ))
+
+        for s in pool_b2:
+            cap = s.preferences[:N_B]
+            result = _least_loaded_choice(s, cap, faculty_map, faculty_loads)
+            if result:
+                fid, rank = result
+                _assign(s.id, fid, rank, "ClassB2")
+
+        leftover_b2 = [sid for sid in unassigned
+                       if student_map[sid].tier in ("A", "B1", "B2")]
+        if leftover_b2:
+            snapshots.append(_snap(
+                step_ctr, "ClassB2",
+                f"Class B2 round: {len(leftover_b2)} student(s) merged into Class C",
+                assignments, faculty_loads, unassigned,
+            ))
+
+    else:
+        # Percentile mode — single Class B round
+        pool_b_ids = {sid for sid in unassigned
+                      if student_map[sid].tier in ("A", "B")}
+        pool_b = _sorted_by_cpi([student_map[sid] for sid in pool_b_ids])
+
+        snapshots.append(_snap(
+            step_ctr, "ClassB",
+            f"Class B round begins: {len(pool_b)} students "
+            f"({len(leftover_a)} promoted A + "
+            f"{len(pool_b)-len(leftover_a)} original B), cap N_B={N_B}",
+            assignments, faculty_loads, unassigned,
+        ))
+
+        for s in pool_b:
+            cap = s.preferences[:N_B]
+            result = _least_loaded_choice(s, cap, faculty_map, faculty_loads)
+            if result:
+                fid, rank = result
+                _assign(s.id, fid, rank, "ClassB")
+
+        leftover_b = [sid for sid in unassigned
+                      if student_map[sid].tier in ("A", "B")]
+        if leftover_b:
+            snapshots.append(_snap(
+                step_ctr, "ClassB",
+                f"Class B round: {len(leftover_b)} student(s) merged into Class C",
+                assignments, faculty_loads, unassigned,
+            ))
 
     # -----------------------------------------------------------------------
     # Class C round  (original C + merged A + merged B)  — global cap

@@ -329,13 +329,13 @@ def _compute_eligible_advisors(student, faculty_map, faculty_loads, meta):
             cap = student.preferences[:N_B]
             cap_label = f"top {N_B} preferences (cap extended from A→B)"
             extended = True
-    elif student.tier == "B":
+    elif student.tier in ("B", "B1", "B2"):
         cap = student.preferences[:N_B]
-        cap_label = f"top {N_B} preferences (Tier B cap)"
+        cap_label = f"top {N_B} preferences (Tier {student.tier} cap)"
         extended = False
         if not _any_free(cap):
             cap = all_fids
-            cap_label = "all faculty (cap extended B→global)"
+            cap_label = f"all faculty (cap extended {student.tier}→global)"
             extended = True
     else:  # C — global cap, preferences first then remaining
         pref_set = set(student.preferences)
@@ -360,7 +360,7 @@ def _render_student_picker(student, faculty_map, faculty_loads, meta, queue_idx,
     advisors, extended, cap_label = _compute_eligible_advisors(
         student, faculty_map, faculty_loads, meta
     )
-    tier_color = {"A": "success", "B": "warning", "C": "danger"}
+    tier_color = {"A": "success", "B": "warning", "B1": "warning", "B2": "info", "C": "danger"}
 
     # Compute the protocol's recommended pick (least-loaded within cap)
     cap_fids = [fid for fid, _, _, _, _ in advisors]
@@ -758,11 +758,19 @@ def cb_run(n_phase0, n_full, loaded):
                     "main_queue":            [],
                     "main_queue_idx":        0,
                 })
-                msg = (f"Phase 0 complete — report saved to {OUTPUT_DIR}/. "
-                       f"Tier A={sum(1 for s in students if s.tier=='A')} "
-                       f"B={sum(1 for s in students if s.tier=='B')} "
-                       f"C={sum(1 for s in students if s.tier=='C')} "
-                       f"| N_A={meta['N_A']} N_B={meta['N_B']}")
+                if meta.get("mode") == "quartile":
+                    msg = (f"Phase 0 complete — report saved to {OUTPUT_DIR}/. "
+                           f"Tier A={sum(1 for s in students if s.tier=='A')} "
+                           f"B1={sum(1 for s in students if s.tier=='B1')} "
+                           f"B2={sum(1 for s in students if s.tier=='B2')} "
+                           f"C={sum(1 for s in students if s.tier=='C')} "
+                           f"| N_A={meta['N_A']} N_B={meta['N_B']}")
+                else:
+                    msg = (f"Phase 0 complete — report saved to {OUTPUT_DIR}/. "
+                           f"Tier A={sum(1 for s in students if s.tier=='A')} "
+                           f"B={sum(1 for s in students if s.tier=='B')} "
+                           f"C={sum(1 for s in students if s.tier=='C')} "
+                           f"| N_A={meta['N_A']} N_B={meta['N_B']}")
             except Exception as e:
                 return f"✗ Phase 0 error: {e}", "idle", 0, {}, 0
         else:
@@ -1023,9 +1031,10 @@ def cb_proceed_main(n_clicks):
     faculty_loads = dict(_app_state["r1_faculty_loads"])
     faculty_map   = {f.id: f for f in faculty}
 
-    # Build queue: Class A → B → C, each by CPI desc, unassigned only
+    # Build queue in tier priority order, each tier by CPI desc, unassigned only
+    tier_order = ("A", "B1", "B2", "C") if meta.get("mode") == "quartile" else ("A", "B", "C")
     queue = []
-    for tier in ("A", "B", "C"):
+    for tier in tier_order:
         tier_students = sorted(
             [s for s in students if s.tier == tier and assignments.get(s.id) is None],
             key=lambda s: (-s.cpi, s.id),
@@ -1115,7 +1124,7 @@ def _do_pick(fid: str) -> tuple:
         _app_state["phase"] = "complete"
 
         student_map  = {s.id: s for s in students}
-        tier_color   = {"A": "success", "B": "warning", "C": "danger"}
+        tier_color   = {"A": "success", "B": "warning", "B1": "warning", "B2": "info", "C": "danger"}
         summary_rows = []
         for sid, fac_id in sorted(
             assignments.items(),
@@ -1150,7 +1159,7 @@ def _do_pick(fid: str) -> tuple:
             entry = pop[rank_idx].get(pfid)
             if not entry or entry["total"] == 0:
                 return html.Td("—", className="text-muted text-center")
-            tier_parts = [f"{t}:{entry[t]}" for t in ("A", "B", "C") if entry.get(t)]
+            tier_parts = [f"{t}:{entry[t]}" for t in ("A", "B1", "B2", "B", "C") if entry.get(t)]
             return html.Td([
                 html.Span(str(entry["total"]), className="fw-bold"),
                 html.Br(),
@@ -1484,18 +1493,32 @@ def cb_phase0_modal(open_clicks, close_clicks, is_open):
     if not meta or not students:
         return True, html.Span("No Phase-0 data yet — run Phase 0 first.", className="text-muted")
 
-    # Meta summary table
-    meta_rows = [
-        ("Cohort size",    meta.get("cohort_size", "—")),
-        ("Faculty count",  meta.get("faculty_count", "—")),
-        ("Mode",           meta.get("mode", "—")),
-        (f"p{meta.get('p_low_pct', '?')} (B cutoff)", meta.get("p_low", "—")),
-        (f"p{meta.get('p_high_pct', '?')} (A cutoff)", meta.get("p_high", "—")),
-        ("Grace ±",        meta.get("grace", "—")),
-        ("N_A",            meta.get("N_A", "—")),
-        ("N_B",            meta.get("N_B", "—")),
-        ("max_load",       meta.get("common_max_load", "—")),
-    ]
+    # Meta summary table (mode-aware labels)
+    if meta.get("mode") == "quartile":
+        meta_rows = [
+            ("Cohort size",             meta.get("cohort_size", "—")),
+            ("Faculty count",           meta.get("faculty_count", "—")),
+            ("Mode",                    meta.get("mode", "—")),
+            (f"p{meta.get('p_low_pct', '?')} (C / B2 cutoff)", meta.get("p_low", "—")),
+            ("p50 (B2 / B1 cutoff)",    meta.get("p_mid", "—")),
+            (f"p{meta.get('p_high_pct', '?')} (B1 / A cutoff)", meta.get("p_high", "—")),
+            ("Grace ±",                 meta.get("grace", "—")),
+            ("N_A",                     meta.get("N_A", "—")),
+            ("N_B (B1 & B2)",           meta.get("N_B", "—")),
+            ("max_load",                meta.get("common_max_load", "—")),
+        ]
+    else:
+        meta_rows = [
+            ("Cohort size",    meta.get("cohort_size", "—")),
+            ("Faculty count",  meta.get("faculty_count", "—")),
+            ("Mode",           meta.get("mode", "—")),
+            (f"p{meta.get('p_low_pct', '?')} (B cutoff)", meta.get("p_low", "—")),
+            (f"p{meta.get('p_high_pct', '?')} (A cutoff)", meta.get("p_high", "—")),
+            ("Grace ±",        meta.get("grace", "—")),
+            ("N_A",            meta.get("N_A", "—")),
+            ("N_B",            meta.get("N_B", "—")),
+            ("max_load",       meta.get("common_max_load", "—")),
+        ]
     meta_table = dbc.Table([
         html.Thead(html.Tr([html.Th("Parameter"), html.Th("Value")])),
         html.Tbody([html.Tr([html.Td(k), html.Td(str(v))]) for k, v in meta_rows]),
@@ -1509,7 +1532,7 @@ def cb_phase0_modal(open_clicks, close_clicks, is_open):
             html.Td(f"{s.cpi:.2f}"),
             html.Td(dbc.Badge(
                 s.tier,
-                color={"A": "success", "B": "warning", "C": "danger"}.get(s.tier, "secondary"),
+                color={"A": "success", "B": "warning", "B1": "warning", "B2": "info", "C": "danger"}.get(s.tier, "secondary"),
             )),
             html.Td(str(s.n_tier) if s.n_tier is not None else "—"),
         ])

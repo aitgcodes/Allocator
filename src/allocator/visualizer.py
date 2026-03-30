@@ -24,7 +24,13 @@ from .state import AllocationSnapshot, Faculty, Student
 # Colour palette
 # ---------------------------------------------------------------------------
 
-TIER_COLOUR = {"A": "#2196F3", "B": "#FF9800", "C": "#E53935"}  # blue, orange, red
+TIER_COLOUR = {
+    "A":  "#2196F3",   # blue
+    "B":  "#FF9800",   # orange   (percentile mode)
+    "B1": "#FF9800",   # orange   (quartile mode — top half of B)
+    "B2": "#FFB300",   # amber    (quartile mode — bottom half of B)
+    "C":  "#E53935",   # red
+}
 LOAD_COLOURS = {
     "low":  "#43A047",   # green   (load ≤ 50 % of max)
     "mid":  "#FDD835",   # yellow  (50–85 %)
@@ -335,9 +341,11 @@ def statistics_panel(
     overall_pct_1st   = 100 * assigned_within_pref1  / n if n else 0
     overall_pct_ntier = 100 * assigned_within_ntier  / n if n else 0
 
-    # --- per-tier breakdown ---
+    # --- per-tier breakdown (order handles both percentile and quartile mode) ---
     tier_stats = []
-    for tier in ("A", "B", "C"):
+    present_tiers = [t for t in ("A", "B1", "B2", "B", "C")
+                     if any(s.tier == t for s in students)]
+    for tier in present_tiers:
         tier_rows  = [r for r in rows if r["tier"] == tier]
         n_tier_val = len(tier_rows)
         n_asgn     = sum(1 for r in tier_rows if r["assigned"])
