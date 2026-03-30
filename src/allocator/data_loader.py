@@ -24,7 +24,10 @@ Phase-0 report columns (CSV):
 Phase-0 meta row:
     A separate single-row CSV:  phase0_meta.csv
     Columns: cohort_size, faculty_count, ratio, N_A, N_B, common_max_load,
-             p70, p90, grace, mode
+             mode, p_low_pct, p_high_pct, p_low, p_high, grace
+    p_low_pct / p_high_pct: which percentile was used for each tier boundary
+        (25/75 in quartile mode, 70/90 in percentile mode, blank for tiny-cohort)
+    p_low / p_high: the actual CPI value at that percentile
 """
 
 from __future__ import annotations
@@ -336,8 +339,11 @@ def load_phase0_report(
     for key in ("cohort_size", "faculty_count", "N_A", "N_B", "common_max_load"):
         if key in meta:
             meta[key] = int(float(meta[key]))
-    for key in ("ratio", "p70", "p90", "grace"):
+    for key in ("ratio", "p_low", "p_high", "grace"):
         if key in meta:
-            meta[key] = float(meta[key])
+            meta[key] = float(meta[key]) if meta[key] != "" else None
+    for key in ("p_low_pct", "p_high_pct"):
+        if key in meta:
+            meta[key] = int(float(meta[key])) if meta[key] != "" else None
 
     return students, meta

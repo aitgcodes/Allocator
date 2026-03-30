@@ -159,7 +159,7 @@ def phase0(
         for s in students:
             s.tier = "A"
             s.n_tier = 2
-        meta = _build_meta(S, F, ratio, "tiny-cohort", None, None, 0.1,
+        meta = _build_meta(S, F, ratio, "tiny-cohort", None, None, None, None, 0.1,
                            3, 5, common_max_load)
         snaps = SnapshotList()
         assignments = {s.id: None for s in students}
@@ -194,7 +194,8 @@ def phase0(
                 s.tier = "B"
             else:
                 s.tier = "C"
-        p70_used, p90_used = p25, p75
+        p_low, p_high = p25, p75
+        p_low_pct, p_high_pct = 25, 75
     else:
         mode = "percentile"
         for s in students:
@@ -204,7 +205,8 @@ def phase0(
                 s.tier = "B"
             else:
                 s.tier = "C"
-        p70_used, p90_used = p70, p90
+        p_low, p_high = p70, p90
+        p_low_pct, p_high_pct = 70, 90
 
     # --- N_tier ---
     if ratio > 4:
@@ -228,14 +230,14 @@ def phase0(
               "C": sum(1 for s in students if s.tier == "C")}
     event = (
         f"Phase 0 complete | mode={mode} | "
-        f"p70={p70_used:.2f} p90={p90_used:.2f} grace=±{grace} | "
+        f"p{p_low_pct}={p_low:.2f} p{p_high_pct}={p_high:.2f} grace=±{grace} | "
         f"S={S} F={F} ratio={ratio:.2f} | "
         f"N_A={N_A} N_B={N_B} N_C=All | "
         f"max_load(formula)={common_max_load} | "
         f"Class A={counts['A']} B={counts['B']} C={counts['C']}"
     )
 
-    meta = _build_meta(S, F, ratio, mode, p70_used, p90_used, grace,
+    meta = _build_meta(S, F, ratio, mode, p_low, p_high, p_low_pct, p_high_pct, grace,
                        N_A, N_B, common_max_load)
 
     snaps = SnapshotList()
@@ -247,14 +249,16 @@ def phase0(
     return students, faculty, meta, snaps
 
 
-def _build_meta(S, F, ratio, mode, p70, p90, grace, N_A, N_B, common_max_load) -> dict:
+def _build_meta(S, F, ratio, mode, p_low, p_high, p_low_pct, p_high_pct, grace, N_A, N_B, common_max_load) -> dict:
     return {
         "cohort_size":      S,
         "faculty_count":    F,
         "ratio":            round(ratio, 4),
         "mode":             mode,
-        "p70":              round(p70, 4) if p70 is not None else "",
-        "p90":              round(p90, 4) if p90 is not None else "",
+        "p_low_pct":        p_low_pct if p_low_pct is not None else "",
+        "p_high_pct":       p_high_pct if p_high_pct is not None else "",
+        "p_low":            round(p_low, 4) if p_low is not None else "",
+        "p_high":           round(p_high, 4) if p_high is not None else "",
         "grace":            grace,
         "N_A":              N_A,
         "N_B":              N_B,
@@ -609,7 +613,7 @@ def _cli():
             print(f"  Cohort: {meta['cohort_size']} students | "
                   f"Faculty: {meta['faculty_count']} | "
                   f"Mode: {meta['mode']}")
-            print(f"  p70={meta['p70']}  p90={meta['p90']}  grace=±{meta['grace']}")
+            print(f"  p{meta['p_low_pct']}={meta['p_low']}  p{meta['p_high_pct']}={meta['p_high']}  grace=±{meta['grace']}")
             print(f"  N_A={meta['N_A']}  N_B={meta['N_B']}  "
                   f"max_load(formula)={meta['common_max_load']}")
             counts = {}
