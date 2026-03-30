@@ -22,7 +22,7 @@ Assignment is **sequential**: students are processed one by one, and for each, t
 - `S`: number of master’s students in the cohort  
 - `F`: number of active faculty in the department  
 - `CPI_i`: core performance index (CPI) of student `i`  
-- `prefs_i`: student `i`’s ranked list of faculty preferences (no repeated faculty at any rank)
+- `prefs_i`: student `i`’s ranked list of faculty preferences, covering all `F` faculty with no repeats. When preferences are collected via a form, use `scripts/make_preference_sheet.py` to produce this list: it removes any duplicate entries (shifting subsequent preferences up) and appends any unmentioned faculty in alphabetical order to fill the remaining slots.
 
 ### 2.2 Tier Boundaries (Annual, Data‑Driven)
 

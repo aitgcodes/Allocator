@@ -128,6 +128,37 @@ set PYTHONPATH=src && python -m allocator.app
 
 ---
 
+## Preparing input files from a form export
+
+If students submitted their preferences via Google Forms (or similar), use the bundled conversion script to produce the required CSVs automatically:
+
+```bash
+python scripts/make_preference_sheet.py form_responses.csv
+```
+
+This generates two ready-to-use files:
+
+| Output file | Contents |
+|-------------|----------|
+| `preference_sheet.csv` | One row per student — `student_id`, `name`, `cpi`, `pref_1 … pref_N` where N = total unique faculty |
+| `faculty_list.csv` | One row per faculty — `faculty_id`, `name`, `max_load` (blank; fill in manually before running the app) |
+
+**What the script handles automatically:**
+- Detects `Name`, `Roll No.`, `CPI/CGPA`, and `Preference N` columns (case-insensitive, flexible naming)
+- Deduplicates each student's list — if a faculty appears more than once, the repeated entry is dropped and the remaining preferences shift up
+- Fills trailing slots with any faculty the student did not mention, listed in alphabetical order — so every student's list covers all faculty
+- Auto-assigns `faculty_id` values (`F01`, `F02`, …) in first-seen order
+
+**Options:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-o / --output` | `preference_sheet.csv` | Student output path |
+| `-f / --faculty-output` | `faculty_list.csv` | Faculty output path |
+| `--cpi-col COLUMN` | auto-detect | Override CPI column name if auto-detection fails |
+
+---
+
 ## Input files
 
 ### Students (`students.csv`)
@@ -178,6 +209,8 @@ src/allocator/
   data_loader.py  – CSV/Excel ingestion and Phase-0 report I/O
   state.py        – Data classes (Student, Faculty, AllocationSnapshot)
   visualizer.py   – Plotly figure builders
+scripts/
+  make_preference_sheet.py – Convert a form-export CSV into preference_sheet.csv and faculty_list.csv
 data/             – Sample student and faculty CSV files
 docs/             – User manual (PDF)
 reports/          – Phase-0 reports written here
