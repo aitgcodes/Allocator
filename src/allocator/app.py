@@ -30,6 +30,7 @@ Usage (Dash)
 ------
     conda activate allocator
     python -m allocator.app
+    python -m allocator.app --no-preload   # start without loading default data files
 
 Usage (HTML export)
 -------------------
@@ -1488,8 +1489,8 @@ def cb_phase0_modal(open_clicks, close_clicks, is_open):
         ("Cohort size",    meta.get("cohort_size", "—")),
         ("Faculty count",  meta.get("faculty_count", "—")),
         ("Mode",           meta.get("mode", "—")),
-        ("p70 (B cutoff)", meta.get("p70", "—")),
-        ("p90 (A cutoff)", meta.get("p90", "—")),
+        (f"p{meta.get('p_low_pct', '?')} (B cutoff)", meta.get("p_low", "—")),
+        (f"p{meta.get('p_high_pct', '?')} (A cutoff)", meta.get("p_high", "—")),
         ("Grace ±",        meta.get("grace", "—")),
         ("N_A",            meta.get("N_A", "—")),
         ("N_B",            meta.get("N_B", "—")),
@@ -1595,11 +1596,20 @@ def _run_html_mode():
 
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="MS Thesis Advisor Allocation — Dash UI")
+    parser.add_argument(
+        "--no-preload",
+        action="store_true",
+        help="Start without pre-loading the default student/faculty data files.",
+    )
+    args = parser.parse_args()
+
     if OUTPUT_MODE == "html":
         _run_html_mode()
     else:
         # Preload default data if files exist, so the app starts with data ready
-        if Path(DEFAULT_STUDENTS_PATH).exists() and Path(DEFAULT_FACULTY_PATH).exists():
+        if not args.no_preload and Path(DEFAULT_STUDENTS_PATH).exists() and Path(DEFAULT_FACULTY_PATH).exists():
             try:
                 _app_state["students"] = load_students(DEFAULT_STUDENTS_PATH)
                 _app_state["faculty"]  = load_faculty(DEFAULT_FACULTY_PATH)
@@ -1608,5 +1618,7 @@ if __name__ == "__main__":
                       f"{len(_app_state['faculty'])} faculty")
             except Exception as e:
                 print(f"Note: could not pre-load default data: {e}")
+        elif args.no_preload:
+            print("Pre-load skipped (--no-preload).")
 
         app.run(host=DASH_HOST, port=DASH_PORT, debug=DASH_DEBUG)
