@@ -108,6 +108,37 @@ def _least_loaded_choice(
     return chosen, rank
 
 
+def _nonempty_choice(
+    student: Student,
+    candidate_faculty_ids: List[str],
+    faculty_map: Dict[str, Faculty],
+    faculty_loads: Dict[str, int],
+) -> Optional[Tuple[str, int]]:
+    """
+    'nonempty' policy: prefer the highest-preferred empty lab (load == 0)
+    among candidates with remaining capacity.  If no empty lab exists,
+    fall back to the highest-preferred faculty that still has capacity
+    (earliest in the student's preference list, regardless of load).
+
+    Returns (faculty_id, preference_rank_1based), or None if no candidate
+    has remaining capacity.
+    """
+    pref_index = {fid: i for i, fid in enumerate(student.preferences)}
+    eligible = [
+        fid for fid in candidate_faculty_ids
+        if faculty_loads[fid] < faculty_map[fid].max_load
+    ]
+    if not eligible:
+        return None
+
+    empty = [fid for fid in eligible if faculty_loads[fid] == 0]
+    pool = empty if empty else eligible
+    pool.sort(key=lambda fid: pref_index.get(fid, len(student.preferences)))
+    chosen = pool[0]
+    rank = pref_index.get(chosen, -1) + 1
+    return chosen, rank
+
+
 # ---------------------------------------------------------------------------
 # Phase 0
 # ---------------------------------------------------------------------------
@@ -405,14 +436,33 @@ def main_allocation(
     snapshots: SnapshotList,
     N_A: int,
     N_B: int,
+    policy: str = "least_loaded",
 ) -> Tuple[Dict[str, Optional[str]], SnapshotList]:
     """
     Main allocation: Class A → Class B → Class C (3.3.1 + 3.3.2).
 
     Mutates assignments and faculty_loads in place; appends snapshots.
 
+    Parameters
+    ----------
+    policy : str
+        "least_loaded" (default) — assign to the least-loaded eligible
+        faculty, tie-broken by preference rank.
+        "nonempty" — prefer the highest-preferred empty lab among eligible
+        faculty; if none are empty, assign the highest-preferred with
+        remaining capacity.
+
     Returns (assignments, snapshots).
     """
+    _POLICIES = {"least_loaded", "nonempty"}
+    if policy not in _POLICIES:
+        raise ValueError(f"Unknown policy {policy!r}. Choose from {_POLICIES}.")
+
+    def _choice(student, candidates):
+        if policy == "nonempty":
+            return _nonempty_choice(student, candidates, faculty_map, faculty_loads)
+        return _least_loaded_choice(student, candidates, faculty_map, faculty_loads)
+
     faculty_map  = {f.id: f for f in faculty}
     student_map  = {s.id: s for s in students}
     unassigned   = {sid for sid, fid in assignments.items() if fid is None}
@@ -446,7 +496,7 @@ def main_allocation(
 
     for s in class_a:
         cap = s.preferences[:N_A]
-        result = _least_loaded_choice(s, cap, faculty_map, faculty_loads)
+        result = _choice(s, cap)
         if result:
             fid, rank = result
             _assign(s.id, fid, rank, "ClassA")
@@ -480,7 +530,7 @@ def main_allocation(
 
         for s in pool_b1:
             cap = s.preferences[:N_B]
-            result = _least_loaded_choice(s, cap, faculty_map, faculty_loads)
+            result = _choice(s, cap)
             if result:
                 fid, rank = result
                 _assign(s.id, fid, rank, "ClassB1")
@@ -510,7 +560,7 @@ def main_allocation(
 
         for s in pool_b2:
             cap = s.preferences[:N_B]
-            result = _least_loaded_choice(s, cap, faculty_map, faculty_loads)
+            result = _choice(s, cap)
             if result:
                 fid, rank = result
                 _assign(s.id, fid, rank, "ClassB2")
@@ -540,7 +590,7 @@ def main_allocation(
 
         for s in pool_b:
             cap = s.preferences[:N_B]
-            result = _least_loaded_choice(s, cap, faculty_map, faculty_loads)
+            result = _choice(s, cap)
             if result:
                 fid, rank = result
                 _assign(s.id, fid, rank, "ClassB")
@@ -569,7 +619,7 @@ def main_allocation(
     ))
 
     for s in pool_c:
-        result = _least_loaded_choice(s, all_fids, faculty_map, faculty_loads)
+        result = _choice(s, all_fids)
         if result:
             fid, rank = result
             _assign(s.id, fid, rank, "ClassC")
@@ -594,6 +644,7 @@ def run_full_allocation(
     faculty: List[Faculty],
     r1_picks: Optional[Dict[str, str]] = None,
     out_dir: Optional[str] = None,
+    policy: str = "least_loaded",
 ) -> Tuple[Dict[str, Optional[str]], SnapshotList, dict]:
     """
     Run Phase 0 → Round 1 → Main allocation end-to-end.
@@ -604,6 +655,8 @@ def run_full_allocation(
     faculty   : raw Faculty list (max_load=-1 where not specified)
     r1_picks  : optional Round-1 picks dict (see round1())
     out_dir   : if provided, Phase-0 report CSVs are written here
+    policy    : assignment policy for the main allocation round.
+                "least_loaded" (default) or "nonempty".
 
     Returns
     -------
@@ -614,7 +667,8 @@ def run_full_allocation(
     N_B = meta["N_B"]
     assignments, faculty_loads, snaps = round1(students, faculty, snaps, r1_picks)
     assignments, snaps = main_allocation(
-        students, faculty, assignments, faculty_loads, snaps, N_A, N_B
+        students, faculty, assignments, faculty_loads, snaps, N_A, N_B,
+        policy=policy,
     )
     return assignments, snaps, meta
 
@@ -639,6 +693,19 @@ def _cli():
         help=(
             "Run Phase 0 only: compute tiers, write phase0_report.csv and\n"
             "phase0_meta.csv to --out, then exit without running allocation."
+        ),
+    )
+    parser.add_argument(
+        "--policy",
+        default="least_loaded",
+        choices=["least_loaded", "nonempty"],
+        help=(
+            "Assignment policy for the main allocation round.\n"
+            "  least_loaded : assign to the least-loaded eligible faculty,\n"
+            "                 tie-broken by preference rank (default).\n"
+            "  nonempty     : prefer the highest-preferred empty lab;\n"
+            "                 if none are empty, assign the highest-preferred\n"
+            "                 faculty with remaining capacity."
         ),
     )
     parser.add_argument(
@@ -698,7 +765,7 @@ def _cli():
             return
 
     # full allocation
-    assignments, snaps, meta = run_full_allocation(students, faculty)
+    assignments, snaps, meta = run_full_allocation(students, faculty, policy=args.policy)
     final = snaps.last()
     assigned = sum(1 for v in final.assignments.values() if v is not None)
     print(f"\nAllocation complete: {assigned}/{len(students)} assigned")
