@@ -400,7 +400,11 @@ def _render_student_picker(student, faculty_map, faculty_loads, meta, queue_idx,
                         "Full" if at_capacity else f"{fac.max_load - load} slot{'s' if fac.max_load - load != 1 else ''} free",
                         className=f"small mt-1 {'text-danger fw-bold' if at_capacity else 'text-success'}",
                     ),
-                    *([ html.Div("★ Least-loaded · highest preferred", className="small fw-bold mt-1", style={"color": "#fd7e14"})] if is_protocol else []),
+                    *([html.Div(
+                        "★ Highest preferred with vacancy" if ALLOCATION_POLICY == "nonempty"
+                        else "★ Least-loaded · highest preferred",
+                        className="small fw-bold mt-1", style={"color": "#fd7e14"},
+                    )] if is_protocol else []),
                 ],
                 id={"type": "main-pick", "index": fid, "step": queue_idx, "run": run},
                 color=btn_color,
