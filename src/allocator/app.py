@@ -30,7 +30,6 @@ Usage (Dash)
 ------
     conda activate allocator
     python -m allocator.app
-    python -m allocator.app --no-preload   # start without loading default data files
 
 Usage (HTML export)
 -------------------
@@ -1904,11 +1903,6 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="MS Thesis Advisor Allocation — Dash UI")
     parser.add_argument(
-        "--no-preload",
-        action="store_true",
-        help="Start without pre-loading the default student/faculty data files.",
-    )
-    parser.add_argument(
         "--policy",
         default=None,
         choices=["least_loaded", "nonempty"],
@@ -1928,17 +1922,4 @@ if __name__ == "__main__":
     if OUTPUT_MODE == "html":
         _run_html_mode()
     else:
-        # Preload default data if files exist, so the app starts with data ready
-        if not args.no_preload and Path(DEFAULT_STUDENTS_PATH).exists() and Path(DEFAULT_FACULTY_PATH).exists():
-            try:
-                _app_state["students"] = load_students(DEFAULT_STUDENTS_PATH)
-                _app_state["faculty"]  = load_faculty(DEFAULT_FACULTY_PATH)
-                validate_preferences(_app_state["students"], _app_state["faculty"])
-                print(f"Pre-loaded: {len(_app_state['students'])} students, "
-                      f"{len(_app_state['faculty'])} faculty")
-            except Exception as e:
-                print(f"Note: could not pre-load default data: {e}")
-        elif args.no_preload:
-            print("Pre-load skipped (--no-preload).")
-
         app.run(host=DASH_HOST, port=DASH_PORT, debug=DASH_DEBUG)
