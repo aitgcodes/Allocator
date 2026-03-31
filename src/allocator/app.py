@@ -553,6 +553,8 @@ def _render_metrics_panel(metrics: dict) -> html.Div:
         ]),
         html.H6("Per-tier breakdown", className="mt-2 mb-1 text-muted"),
         tier_table,
+        dbc.Button("⬇ Download metrics (CSV)", id="btn-download-metrics",
+                   color="outline-secondary", size="sm", className="mt-3"),
     ])
 
 
@@ -695,6 +697,7 @@ app.layout = dbc.Container([
     dcc.Store(id="store-playing",       data=False),
     dcc.Store(id="store-pending-pick",  data=None),
     dcc.Download(id="download-report"),
+    dcc.Download(id="download-metrics"),
 
     # Override-confirmation modal
     dbc.Modal([
@@ -1714,6 +1717,41 @@ def cb_save_report(n_clicks):
         ]))
     csv_text = "\n".join(lines)
     return dcc.send_string(csv_text, filename="allocation_report.csv")
+
+
+@app.callback(
+    Output("download-metrics", "data"),
+    Input("btn-download-metrics", "n_clicks"),
+    prevent_initial_call=True,
+)
+def cb_download_metrics(n_clicks):
+    metrics     = _app_state.get("metrics") or {}
+    students    = _app_state.get("students", [])
+    student_map = {s.id: s for s in students}
+    per_student = metrics.get("per_student", {})
+
+    lines = ["student_id,name,tier,n_tier,assigned_rank,within_window,npss_score,cpi_weight,psi_score"]
+    for sid, sd in sorted(per_student.items()):
+        s      = student_map.get(sid)
+        name   = s.name if s else ""
+        n_tier = sd.get("n_tier")
+        rank   = sd.get("assigned_rank")
+        prefs_len  = len(s.preferences) if s else 0
+        n_eff      = n_tier if n_tier is not None else prefs_len
+        within_win = 1 if (rank is not None and n_eff and rank <= n_eff) else 0
+        lines.append(",".join([
+            sid,
+            name,
+            sd.get("tier", ""),
+            str(n_tier) if n_tier is not None else "",
+            str(rank)   if rank   is not None else "",
+            str(within_win),
+            f"{sd.get('npss_score', 0.0):.6f}",
+            f"{sd.get('cpi_weight', 0.0):.6f}",
+            f"{sd.get('psi_score',  0.0):.6f}",
+        ]))
+    csv_text = "\n".join(lines)
+    return dcc.send_string(csv_text, filename="metrics_report.csv")
 
 
 def _run_html_mode():
