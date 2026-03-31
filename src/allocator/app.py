@@ -664,6 +664,46 @@ def _main_alloc_card() -> dbc.Card:
     ], className="mb-3")
 
 
+def _landing_layout() -> dbc.Container:
+    """Return a full-screen centered landing page for '/'."""
+    return dbc.Container([
+        dbc.Row(
+            dbc.Col([
+                html.H1("Welcome to the Allocator App",
+                        className="text-primary text-center mb-2"),
+                html.P("MS Thesis Advisor Allocation System",
+                       className="text-muted text-center mb-4"),
+                dbc.Card([
+                    dbc.CardBody([
+                        html.Label("Allocation Policy", className="fw-bold mb-1"),
+                        dcc.Dropdown(
+                            id="landing-policy-dropdown",
+                            options=[
+                                {"label": "Least-loaded · highest preferred",
+                                 "value": "least_loaded"},
+                                {"label": "Highest preferred with vacancy",
+                                 "value": "nonempty"},
+                            ],
+                            value="least_loaded",
+                            clearable=False,
+                            className="mb-2",
+                        ),
+                        html.Div(id="landing-policy-desc",
+                                 className="text-muted small mb-3"),
+                        dbc.Button("Continue →",
+                                   id="btn-landing-continue",
+                                   color="primary",
+                                   className="float-end"),
+                    ]),
+                ], className="border-0 shadow"),
+            ], md=5),
+            justify="center",
+            align="center",
+            style={"minHeight": "80vh"},
+        ),
+    ], fluid=True)
+
+
 def _viz_card() -> dbc.Card:
     return dbc.Card([
         dbc.CardHeader("5 — Allocation replay"),
@@ -695,15 +735,25 @@ def _viz_card() -> dbc.Card:
 
 
 app.layout = dbc.Container([
-    dbc.Row(dbc.Col(html.H2("MS Thesis Advisor Allocation",
-                            className="my-3 text-primary"))),
-    dbc.Row(dbc.Col(_upload_card())),
-    dbc.Row(dbc.Col(_control_card())),
-    dbc.Row(dbc.Col(_r1_card())),
-    dbc.Row(dbc.Col(_main_alloc_card())),
-    dbc.Row(dbc.Col(_viz_card())),
+    dcc.Location(id="url", refresh=False),
+    dcc.Store(id="store-policy", data="least_loaded"),
 
-    # hidden stores / download
+    # Landing page — shown at "/"
+    html.Div(id="landing-page", children=_landing_layout()),
+
+    # Main app page — shown at "/app"
+    html.Div(id="main-page", style={"display": "none"}, children=[
+        dbc.Row(dbc.Col(html.H2("MS Thesis Advisor Allocation",
+                                className="my-3 text-primary"))),
+        dbc.Row(dbc.Col(html.Div(id="active-policy-badge", className="mb-2"))),
+        dbc.Row(dbc.Col(_upload_card())),
+        dbc.Row(dbc.Col(_control_card())),
+        dbc.Row(dbc.Col(_r1_card())),
+        dbc.Row(dbc.Col(_main_alloc_card())),
+        dbc.Row(dbc.Col(_viz_card())),
+    ]),
+
+    # Always-present hidden components (stores, downloads, modals, toast)
     dcc.Store(id="store-loaded",        data=False),
     dcc.Store(id="store-phase",         data="idle"),
     dcc.Store(id="store-r1-picks",      data={}),
@@ -712,7 +762,6 @@ app.layout = dbc.Container([
     dcc.Download(id="download-report"),
     dcc.Download(id="download-metrics"),
 
-    # Override-confirmation modal
     dbc.Modal([
         dbc.ModalHeader(dbc.ModalTitle("⚠ Override protocol recommendation?")),
         dbc.ModalBody(id="modal-confirm-body"),
@@ -724,7 +773,6 @@ app.layout = dbc.Container([
         ]),
     ], id="modal-confirm-pick", is_open=False, centered=True, size="lg"),
 
-    # Fixed toast for confirmed picks
     dbc.Toast(
         id="toast-picked",
         header="✓ Assigned",
@@ -736,7 +784,6 @@ app.layout = dbc.Container([
         color="success",
     ),
 
-    # Phase-0 data modal
     dbc.Modal([
         dbc.ModalHeader(dbc.ModalTitle("Phase 0 Results")),
         dbc.ModalBody(id="modal-phase0-body"),
@@ -745,6 +792,58 @@ app.layout = dbc.Container([
         ),
     ], id="modal-phase0", size="xl", scrollable=True, is_open=False),
 ], fluid=True)
+
+
+# ---------------------------------------------------------------------------
+# Callbacks — landing page
+# ---------------------------------------------------------------------------
+
+@app.callback(
+    Output("landing-policy-desc", "children"),
+    Input("landing-policy-dropdown", "value"),
+)
+def cb_landing_policy_desc(value):
+    if value == "nonempty":
+        return ("Prioritises the highest-preferred advisor with no students yet assigned. "
+                "Falls back to the highest-preferred advisor with remaining capacity "
+                "if no empty labs exist.")
+    return ("Assigns to the least-loaded eligible advisor, "
+            "with ties broken by preference rank.")
+
+
+@app.callback(
+    Output("url",          "pathname"),
+    Output("store-policy", "data"),
+    Input("btn-landing-continue", "n_clicks"),
+    State("landing-policy-dropdown", "value"),
+    prevent_initial_call=True,
+)
+def cb_landing_continue(n_clicks, policy):
+    global ALLOCATION_POLICY
+    chosen = policy or "least_loaded"
+    ALLOCATION_POLICY = chosen
+    return "/app", chosen
+
+
+@app.callback(
+    Output("landing-page", "style"),
+    Output("main-page",    "style"),
+    Input("url", "pathname"),
+)
+def cb_toggle_pages(pathname):
+    if pathname == "/app":
+        return {"display": "none"}, {"display": "block"}
+    return {"display": "block"}, {"display": "none"}
+
+
+@app.callback(
+    Output("active-policy-badge", "children"),
+    Input("store-policy", "data"),
+)
+def cb_policy_badge(policy):
+    label = "Highest preferred with vacancy" if policy == "nonempty" else "Least-loaded · highest preferred"
+    color = "info" if policy == "nonempty" else "secondary"
+    return dbc.Badge(f"Policy: {label}", color=color, className="mb-2")
 
 
 # ---------------------------------------------------------------------------
