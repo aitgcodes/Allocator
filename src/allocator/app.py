@@ -1635,7 +1635,22 @@ if __name__ == "__main__":
         action="store_true",
         help="Start without pre-loading the default student/faculty data files.",
     )
+    parser.add_argument(
+        "--policy",
+        default=None,
+        choices=["least_loaded", "nonempty"],
+        help=(
+            "Override the allocation policy set in ALLOCATION_POLICY.\n"
+            "  least_loaded : least-loaded eligible faculty, tie-broken by preference rank.\n"
+            "  nonempty     : prefer the highest-preferred empty lab; fall back to\n"
+            "                 highest-preferred faculty with remaining capacity."
+        ),
+    )
     args = parser.parse_args()
+
+    # Apply CLI policy override so allocation and dashboard highlighting stay in sync
+    if args.policy is not None:
+        ALLOCATION_POLICY = args.policy
 
     if OUTPUT_MODE == "html":
         _run_html_mode()
