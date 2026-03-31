@@ -95,12 +95,14 @@ from .allocation import (
     round1,
     run_full_allocation,
 )
+from .metrics import compute_metrics
 
 def _protocol_choice(student, cap_fids, faculty_map, faculty_loads):
     """Dispatch to the active policy's choice function for dashboard highlighting."""
     if ALLOCATION_POLICY == "nonempty":
         return _nonempty_choice(student, cap_fids, faculty_map, faculty_loads)
     return _least_loaded_choice(student, cap_fids, faculty_map, faculty_loads)
+
 from .data_loader import (
     load_faculty,
     load_phase0_report,
@@ -306,6 +308,7 @@ _app_state: dict = {
     "current_assignments":   {},     # live assignments during main alloc
     "current_faculty_loads": {},     # live faculty loads during main alloc
     "phase":                 "idle", # "idle"|"phase0_done"|"r1"|"r1_done"|"main_alloc"|"complete"
+    "metrics":               {},     # satisfaction metrics from compute_metrics
 }
 
 # ---------------------------------------------------------------------------
@@ -443,6 +446,126 @@ def _render_student_picker(student, faculty_map, faculty_loads, meta, queue_idx,
 
         html.H6("Select advisor:", className="mb-2 text-muted"),
         dbc.Row(advisor_cols),
+    ])
+
+
+# ---------------------------------------------------------------------------
+# Metrics panel renderer
+# ---------------------------------------------------------------------------
+
+def _render_metrics_panel(metrics: dict) -> html.Div:
+    """
+    Render the satisfaction metrics as a Dash component panel.
+
+    Includes:
+    - Primary row: NPSS with colour band (green/yellow/red)
+    - Secondary row: Mean PSI in muted style
+    - Overflow badge if overflow_count > 0
+    - Per-tier breakdown table (only tiers with count > 0)
+    """
+    if not metrics:
+        return html.Div()
+
+    npss           = metrics.get("npss", 0.0)
+    mean_psi       = metrics.get("mean_psi", 0.0)
+    overflow_count = metrics.get("overflow_count", 0)
+    per_tier       = metrics.get("per_tier", {})
+
+    # NPSS colour band
+    if npss >= 0.90:
+        npss_color = "success"
+    elif npss >= 0.75:
+        npss_color = "warning"
+    else:
+        npss_color = "danger"
+
+    # Primary NPSS row
+    primary_card = dbc.Card(dbc.CardBody([
+        html.Div([
+            html.Span(
+                f"{npss:.4f}",
+                style={"fontSize": "2rem", "fontWeight": "bold"},
+                className=f"text-{npss_color}",
+            ),
+            html.Div("NPSS (primary)", className="fw-bold"),
+            html.Small("CPI-weighted · tier-aware", className="text-muted"),
+        ]),
+    ]), className="mb-2 border-0 bg-light")
+
+    # Secondary PSI row
+    secondary_card = dbc.Card(dbc.CardBody([
+        html.Div([
+            html.Span(
+                f"{mean_psi:.4f}",
+                style={"fontSize": "1.4rem"},
+                className="text-secondary",
+            ),
+            html.Div("Mean PSI (secondary)", className="text-muted"),
+            html.Small("equal-weighted · global rank", className="text-muted"),
+        ]),
+    ]), className="mb-2 border-0 bg-light")
+
+    # Overflow badge
+    overflow_badge = []
+    if overflow_count > 0:
+        overflow_badge = [
+            dbc.Badge(
+                f"⚠ {overflow_count} overflow",
+                color="danger",
+                className="mb-2 me-2",
+                style={"fontSize": "0.9rem"},
+            )
+        ]
+
+    # Per-tier breakdown table
+    tier_rows = []
+    for tier in ("A", "B", "B1", "B2", "C"):
+        td = per_tier.get(tier, {})
+        count = td.get("count", 0)
+        if count == 0:
+            continue
+        mean_rank = td.get("mean_rank")
+        rank_str  = f"{mean_rank:.1f}" if mean_rank is not None else "—"
+        rate      = td.get("within_window_rate", 0.0) * 100
+        npss_sc   = td.get("mean_npss_score", 0.0)
+        psi_sc    = td.get("mean_psi_score", 0.0)
+        tier_rows.append(html.Tr([
+            html.Td(dbc.Badge(
+                tier,
+                color={"A": "success", "B": "warning", "B1": "warning",
+                       "B2": "info", "C": "danger"}.get(tier, "secondary"),
+            )),
+            html.Td(str(count), className="text-center"),
+            html.Td(rank_str, className="text-center"),
+            html.Td(f"{rate:.1f}%", className="text-center"),
+            html.Td(f"{npss_sc:.3f}", className="text-center"),
+            html.Td(f"{psi_sc:.3f}", className="text-center"),
+        ]))
+
+    tier_table = (
+        dbc.Table([
+            html.Thead(html.Tr([
+                html.Th("Tier"),
+                html.Th("Count", className="text-center"),
+                html.Th("Mean Rank", className="text-center"),
+                html.Th("Within-Window %", className="text-center"),
+                html.Th("NPSS", className="text-center"),
+                html.Th("PSI", className="text-center"),
+            ])),
+            html.Tbody(tier_rows),
+        ], bordered=True, size="sm", className="mb-0")
+        if tier_rows else html.P("No tier data available.", className="text-muted")
+    )
+
+    return html.Div([
+        html.H5("Satisfaction Metrics", className="mt-3 mb-2"),
+        dbc.Row([
+            dbc.Col(primary_card, md=4),
+            dbc.Col(secondary_card, md=4),
+            dbc.Col(html.Div(overflow_badge), md=4, className="d-flex align-items-center"),
+        ]),
+        html.H6("Per-tier breakdown", className="mt-2 mb-1 text-muted"),
+        tier_table,
     ])
 
 
@@ -1200,6 +1323,12 @@ def _do_pick(fid: str) -> tuple:
         marks = {i: str(snaps[i].step) for i in range(0, n, max(1, n // 10))}
         assigned_count = len(assignments) - len(still_unassigned)
         empty_labs     = sum(1 for f in faculty if faculty_loads.get(f.id, 0) == 0)
+
+        # Compute and store metrics
+        metrics = compute_metrics(_app_state["students"], assignments, len(faculty))
+        _app_state["metrics"] = metrics
+        metrics_panel = _render_metrics_panel(metrics)
+
         content = html.Div([
             dbc.Alert(
                 [html.Strong("✓ Main allocation complete. "),
@@ -1222,6 +1351,8 @@ def _do_pick(fid: str) -> tuple:
             html.P("Total students per advisor per choice (tier breakdown: A · B · C).",
                    className="text-muted small"),
             pop_table,
+            html.Hr(),
+            metrics_panel,
         ])
         toast_msg = [html.Strong(student.name), f" → {fac.name if fac else fid}"]
         return content, "complete", n - 1, marks, n - 1, toast_msg, True
@@ -1621,11 +1752,12 @@ def _run_html_mode():
     else:
         pass  # Phase 0 handled inside run_full_allocation
 
-    assignments, snaps, meta = run_full_allocation(
+    assignments, snaps, meta, metrics = run_full_allocation(
         students, faculty,
         out_dir=OUTPUT_DIR if STARTUP_MODE == "full" else None,
         policy=ALLOCATION_POLICY,
     )
+    _app_state["metrics"] = metrics
 
     out_path = Path(OUTPUT_DIR) / "allocation_output.html"
     run_html_export(students, faculty, meta, snaps, str(out_path))
