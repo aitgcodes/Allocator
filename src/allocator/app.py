@@ -1060,7 +1060,31 @@ def cb_run(n_phase0, n_full, loaded):
                 snaps = SnapshotList()
                 _app_state["snapshots"] = snaps
 
-        # Populate Round-1 candidate lists; pause for operator picks
+        # CPI-Fill skips Round 1 entirely — run Phase 1+2 directly after Phase 0.
+        if ALLOCATION_POLICY == "cpi_fill":
+            assignments   = {s.id: None for s in students}
+            faculty_loads = {f.id: 0    for f in faculty}
+            try:
+                assignments, snaps = cpi_fill_allocation(
+                    students, faculty, assignments, faculty_loads, snaps,
+                )
+            except Exception as e:
+                return f"✗ CPI-Fill error: {e}", "idle", 0, {}, 0
+            _app_state["snapshots"]           = snaps
+            _app_state["current_assignments"] = assignments
+            _app_state["phase"]               = "complete"
+            metrics = compute_metrics(students, assignments, F=len(faculty))
+            _app_state["metrics"] = metrics
+            n = len(snaps)
+            marks = {i: str(snaps[i].step) for i in range(0, n, max(1, n // 10))}
+            assigned   = sum(1 for v in assignments.values() if v is not None)
+            unassigned = sum(1 for v in assignments.values() if v is None)
+            msg = (f"CPI-Fill complete — {assigned} assigned, {unassigned} unassigned. "
+                   "See snapshot timeline for Phase 1 / Phase 2 boundary.")
+            return msg, "complete", n - 1, marks, n - 1
+
+        # For least_loaded / nonempty: populate Round-1 candidate lists;
+        # pause for operator picks.
         r1_candidates = build_r1_candidate_lists(students, faculty)
         _app_state["r1_pending"] = r1_candidates
         _app_state["r1_picks"]   = {}

@@ -830,23 +830,24 @@ def run_full_allocation(
     policy: str = "least_loaded",
 ) -> Tuple[Dict[str, Optional[str]], SnapshotList, dict, dict]:
     """
-    Run Phase 0 → Round 1 → Main allocation end-to-end.
+    Run Phase 0 → (Round 1 →) Main allocation end-to-end.
+
+    Round 1 is skipped when policy="cpi_fill"; it runs for all other policies.
 
     Parameters
     ----------
     students  : raw Student list (tier/n_tier not yet set)
     faculty   : raw Faculty list (max_load=-1 where not specified)
-    r1_picks  : optional Round-1 picks dict (see round1())
+    r1_picks  : optional Round-1 picks dict (see round1()); ignored for cpi_fill
     out_dir   : if provided, Phase-0 report CSVs are written here
-    policy    : assignment policy for the main allocation round.
-                "least_loaded" (default) — assign to the least-loaded eligible
-                faculty, tie-broken by preference rank.
-                "nonempty" — prefer the highest-preferred empty lab; fall back
-                to the highest-preferred faculty with remaining capacity.
-                "cpi_fill" — two-phase procedure: Phase 1 processes students
-                in CPI order (with N_tier cap) until the stopping condition
-                fires (unassigned == empty labs); Phase 2 assigns each
-                remaining student to their highest-preferred empty lab.
+    policy    : assignment policy.
+                "least_loaded" (default) — Phase 0 → Round 1 → assign to the
+                least-loaded eligible faculty, tie-broken by preference rank.
+                "nonempty" — Phase 0 → Round 1 → prefer the highest-preferred
+                empty lab; fall back to highest-preferred with remaining capacity.
+                "cpi_fill" — Phase 0 → Phase 1 (CPI order, highest-preferred
+                with capacity, stopping condition) → Phase 2 (highest-preferred
+                empty lab). Round 1 is not run.
 
     Returns
     -------
@@ -865,12 +866,15 @@ def run_full_allocation(
     students, faculty, meta, snaps = phase0(students, faculty, out_dir=out_dir)
     N_A = meta["N_A"]
     N_B = meta["N_B"]
-    assignments, faculty_loads, snaps = round1(students, faculty, snaps, r1_picks)
     if policy == "cpi_fill":
+        # Round 1 is skipped — CPI-Fill goes directly Phase 0 → Phase 1 → Phase 2.
+        assignments   = {s.id: None for s in students}
+        faculty_loads = {f.id: 0    for f in faculty}
         assignments, snaps = cpi_fill_allocation(
             students, faculty, assignments, faculty_loads, snaps,
         )
     else:
+        assignments, faculty_loads, snaps = round1(students, faculty, snaps, r1_picks)
         assignments, snaps = main_allocation(
             students, faculty, assignments, faculty_loads, snaps, N_A, N_B,
             policy=policy,
