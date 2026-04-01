@@ -700,12 +700,8 @@ def _control_card() -> dbc.Card:
 
 
 def _r1_card() -> dbc.Card:
-    if ALLOCATION_POLICY == "cpi_fill":
-        header = "3 — Phase 1"
-    else:
-        header = "3 — Round 1: faculty picks"
     return dbc.Card([
-        dbc.CardHeader(header),
+        dbc.CardHeader("3 — Round 1: faculty picks", id="r1-card-header"),
         dbc.CardBody(id="r1-panel", children=[
             html.Span("Load data and run Phase 0 to begin.", className="text-muted"),
         ]),
@@ -713,16 +709,10 @@ def _r1_card() -> dbc.Card:
 
 
 def _main_alloc_card() -> dbc.Card:
-    if ALLOCATION_POLICY == "cpi_fill":
-        header      = "4 — Phase 2"
-        placeholder = "Complete Phase 1 first."
-    else:
-        header      = "4 — Main Allocation"
-        placeholder = "Complete Round 1 first."
     return dbc.Card([
-        dbc.CardHeader(header),
+        dbc.CardHeader("4 — Main Allocation", id="main-alloc-card-header"),
         dbc.CardBody(id="main-alloc-panel", children=[
-            html.Span(placeholder, className="text-muted"),
+            html.Span("Complete Round 1 first.", className="text-muted"),
         ]),
     ], className="mb-3")
 
@@ -893,6 +883,17 @@ def cb_landing_continue(n_clicks, policy):
     chosen = policy or "least_loaded"
     ALLOCATION_POLICY = chosen
     return "/app", chosen
+
+
+@app.callback(
+    Output("r1-card-header",         "children"),
+    Output("main-alloc-card-header", "children"),
+    Input("store-policy", "data"),
+)
+def cb_update_section_headers(policy):
+    if policy == "cpi_fill":
+        return "3 — Phase 1", "4 — Phase 2"
+    return "3 — Round 1: faculty picks", "4 — Main Allocation"
 
 
 @app.callback(
