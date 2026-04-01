@@ -1,0 +1,103 @@
+mplement two fairness metrics for the advisor allocation system.
+Metric 1: CPI entropy per advisor. For each advisor, bucket the assigned students into CPI tiers (use either A/B/C or A/B1/B2/C as configured), compute the probability of each tier, then compute Shannon entropy 
+H
+(
+a
+)
+=
+−
+∑
+k
+p
+k
+(
+a
+)
+log
+⁡
+p
+k
+(
+a
+)
+H(a)=−∑ 
+k
+​
+ p 
+k
+​
+ (a)logp 
+k
+​
+ (a), treating 
+0
+log
+⁡
+0
+=
+0
+0log0=0. Normalize it by dividing by 
+log
+⁡
+K
+logK, where \(K\) is the number of tiers, so the score lies in 
+[
+0
+,
+1
+]
+[0,1]. Report each advisor’s normalized entropy and also the average normalized entropy across all advisors.
+Metric 2: skewness of advisor mean CPIs. For each advisor, compute the mean CPI of the students assigned to that advisor. Then compute the sample skewness of the vector of advisor-wise mean CPIs using 
+n
+(
+n
+−
+1
+)
+(
+n
+−
+2
+)
+∑
+i
+(
+x
+i
+−
+x
+ˉ
+s
+)
+3
+(n−1)(n−2)
+n
+​
+ ∑ 
+i
+​
+ ( 
+s
+x 
+i
+​
+ − 
+x
+ˉ
+ 
+​
+ ) 
+3
+ , where 
+x
+i
+x 
+i
+​
+  is advisor \(i\)’s mean CPI, 
+x
+ˉ
+x
+ˉ
+  is the average of advisor means, and \(s\) is their sample standard deviation. Report this value as a system-level measure of whether a few advisors receive much higher-CPI cohorts than others.
+The implementation should support CPI on a 0–10 scale, handle advisors with zero or one assigned student safely, and expose both per-advisor values and aggregate summary values.

@@ -1902,35 +1902,14 @@ def _do_pick(fid: str) -> tuple:
         n = len(snaps)
         marks = {i: str(snaps[i].step) for i in range(0, n, max(1, n // 10))}
 
-        assigned_count = len(assignments) - len(still_unassigned)
-        empty_labs     = sum(1 for f in faculty if faculty_loads.get(f.id, 0) == 0)
-        metrics_panel  = _render_metrics_panel(metrics)
-
-        content = html.Div([
-            dbc.Alert(
-                [html.Strong("✓ Main allocation complete. "),
-                 f"{assigned_count} assigned, "
-                 f"{len(still_unassigned)} unassigned, "
-                 f"{empty_labs} empty lab{'s' if empty_labs != 1 else ''}."],
-                color="success", className="mb-3",
-            ),
-            dbc.Button("⬇ Save report (CSV)", id="btn-save-report",
-                       color="outline-secondary", size="sm", className="mb-3"),
-            dbc.Table([
-                html.Thead(html.Tr([
-                    html.Th("Student"), html.Th("CPI"),
-                    html.Th("Tier"),    html.Th("Advisor"),
-                ])),
-                html.Tbody(summary_rows),
-            ], bordered=True, hover=True, striped=True, size="sm"),
-            html.Hr(),
-            html.H5("Advisor popularity", className="mt-2 mb-0"),
-            html.P("Total students per advisor per choice (tier breakdown: A · B · C).",
-                   className="text-muted small"),
-            pop_table,
-            html.Hr(),
-            metrics_panel,
-        ])
+        content = _build_completion_panel(
+            assignments=dict(assignments),
+            faculty_loads=dict(faculty_loads),
+            students=students,
+            faculty=faculty,
+            metrics=metrics,
+            label_text="Main allocation complete",
+        )
         toast_msg = [html.Strong(student.name), f" → {fac.name if fac else fid}"]
         return content, "complete", n - 1, marks, n - 1, toast_msg, True
 
