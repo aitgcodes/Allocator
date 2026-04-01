@@ -10,6 +10,7 @@ Secondary metric — PSI (Preference Satisfaction Index):
 
 from __future__ import annotations
 
+import math
 from typing import Dict, List, Optional, Set
 
 from .state import Student
@@ -114,10 +115,8 @@ def psi_per_student_score(
 
 _TIER_LABELS = ["A", "B", "B1", "B2", "C"]
 
-# Tier → numeric value for advisor-satisfaction computation.
-# Percentile mode uses A/B/C; quartile mode uses A/B1/B2/C.
-_PERCENTILE_TIER_VALUE: Dict[str, int] = {"A": 1, "B": 2, "C": 3}
-_QUARTILE_TIER_VALUE:   Dict[str, int] = {"A": 1, "B1": 2, "B2": 3, "C": 4}
+_PERCENTILE_TIERS = ["A", "B", "C"]
+_QUARTILE_TIERS   = ["A", "B1", "B2", "C"]
 
 
 def _build_per_tier(
@@ -310,42 +309,51 @@ def compute_advisor_metrics(
     all_faculty_ids: Optional[List[str]] = None,
 ) -> dict:
     """
-    Compute advisor-satisfaction metrics for a completed allocation.
+    Compute advisor-fairness metrics for a completed allocation.
 
-    For each advisor, the "best tier" is the tier of the strongest student
-    assigned to them, using the mapping:
-      - Percentile mode (tiers A / B / C):   A=1, B=2, C=3
-      - Quartile mode  (tiers A / B1 / B2 / C): A=1, B1=2, B2=3, C=4
+    Metric 1 — CPI entropy per advisor:
+        For each advisor, bucket their assigned students into CPI tiers, compute
+        Shannon entropy H(a) = -∑ p_k log p_k (with 0·log0 = 0), and normalize
+        by log(K) where K is the number of tiers, so the score lies in [0, 1].
+        Also reports the average normalized entropy across all assigned advisors.
+
+    Metric 2 — Skewness of advisor mean CPIs:
+        For each advisor, compute the mean CPI of their assigned students.
+        Then compute the sample skewness of those advisor-wise means:
+            n / ((n-1)(n-2)) * ∑ ((x_i - x̄) / s)³
+        Returns None when fewer than 3 advisors have students.
 
     Mode is inferred from the student tiers present (quartile mode if any
     student has tier B1 or B2).
 
     Parameters
     ----------
-    students        : list of Student (with .tier set)
+    students        : list of Student (with .tier and .cpi set)
     assignments     : {student_id: faculty_id | None}
-    all_faculty_ids : full list of faculty IDs (for fraction denominator).
-                      If omitted, the denominator is the number of advisors
-                      who received at least one student.
+    all_faculty_ids : unused (kept for call-site compatibility)
 
     Returns
     -------
     {
-        "mean_best_tier"     : float  — mean of best-tier values (advisors with ≥1 student)
-        "worst_best_tier"    : int    — highest (worst) best-tier value across those advisors
-        "fraction_with_A"    : float  — fraction of ALL advisors with ≥1 A-tier student
-        "advisors_with_A"    : int    — count of advisors with ≥1 A-tier student
-        "total_advisors"     : int    — denominator for fraction_with_A
-        "advisors_assigned"  : int    — advisors who received ≥1 student
-        "quartile_mode"      : bool   — True if quartile tier mapping was used
-        "per_faculty"        : {faculty_id: {"best_tier_value": int, "best_tier_label": str}}
+        "avg_entropy"       : float        — mean normalized entropy across assigned advisors
+        "cpi_skewness"      : float | None — sample skewness of advisor mean CPIs; None if n < 3
+        "quartile_mode"     : bool         — True if quartile tier labels (A/B1/B2/C) were used
+        "K"                 : int          — number of tiers (3 or 4)
+        "advisors_assigned" : int          — advisors who received ≥1 student
+        "per_faculty"       : {
+            faculty_id: {
+                "entropy"      : float  — normalized Shannon entropy [0, 1]
+                "mean_cpi"     : float  — mean CPI of assigned students
+                "student_count": int
+            }
+        }
     }
     """
-    # Detect mode from student tiers
-    quartile_mode = any(
-        s.tier in ("B1", "B2") for s in students if s.tier is not None
-    )
-    tier_value = _QUARTILE_TIER_VALUE if quartile_mode else _PERCENTILE_TIER_VALUE
+    # Detect quartile vs percentile mode from student tiers
+    quartile_mode = any(s.tier in ("B1", "B2") for s in students if s.tier is not None)
+    tier_labels = _QUARTILE_TIERS if quartile_mode else _PERCENTILE_TIERS
+    K = len(tier_labels)
+    log_K = math.log(K) if K > 1 else 1.0  # denominator for normalization
 
     # Group students by assigned faculty
     faculty_students: Dict[str, List[Student]] = {}
@@ -358,49 +366,63 @@ def compute_advisor_metrics(
             continue
         faculty_students.setdefault(fid, []).append(s)
 
-    # Compute best-tier value per advisor
+    # Compute per-advisor metrics
     per_faculty: Dict[str, dict] = {}
-    for fid, assigned_students in faculty_students.items():
-        best_value: Optional[int] = None
-        best_label: str = ""
-        for s in assigned_students:
-            tier_label = s.tier or "C"
-            val = tier_value.get(tier_label)
-            if val is None:
-                # Unknown tier — treat as worst possible
-                val = max(tier_value.values()) + 1
-            if best_value is None or val < best_value:
-                best_value = val
-                best_label = tier_label
-        if best_value is not None:
-            per_faculty[fid] = {
-                "best_tier_value": best_value,
-                "best_tier_label": best_label,
-            }
+    for fid, assigned in faculty_students.items():
+        n = len(assigned)
 
-    # Aggregate statistics (only over advisors who received ≥1 student)
-    best_values = [d["best_tier_value"] for d in per_faculty.values()]
-    advisors_assigned = len(best_values)
+        # --- Metric 1: normalized CPI entropy ---
+        tier_counts: Dict[str, int] = {t: 0 for t in tier_labels}
+        for s in assigned:
+            t = s.tier if s.tier in tier_counts else (tier_labels[-1])
+            tier_counts[t] += 1
 
-    mean_best_tier  = (sum(best_values) / advisors_assigned) if advisors_assigned else 0.0
-    worst_best_tier = max(best_values) if best_values else 0
+        entropy = 0.0
+        for count in tier_counts.values():
+            if count > 0:
+                p = count / n
+                entropy -= p * math.log(p)
+        normalized_entropy = entropy / log_K
 
-    # Fraction with at least one A-tier student
-    advisors_with_A = sum(1 for d in per_faculty.values() if d["best_tier_label"] == "A")
-    if all_faculty_ids is not None:
-        total_advisors = len(all_faculty_ids)
-    else:
-        total_advisors = advisors_assigned
-    fraction_with_A = (advisors_with_A / total_advisors) if total_advisors else 0.0
+        # --- Metric 2 component: mean CPI ---
+        mean_cpi = sum(s.cpi for s in assigned) / n
+
+        per_faculty[fid] = {
+            "entropy":       normalized_entropy,
+            "mean_cpi":      mean_cpi,
+            "student_count": n,
+        }
+
+    advisors_assigned = len(per_faculty)
+
+    # Average normalized entropy across all assigned advisors
+    avg_entropy = (
+        sum(d["entropy"] for d in per_faculty.values()) / advisors_assigned
+        if advisors_assigned else 0.0
+    )
+
+    # --- Metric 2: sample skewness of advisor mean CPIs ---
+    cpi_skewness: Optional[float] = None
+    if advisors_assigned >= 3:
+        means = [d["mean_cpi"] for d in per_faculty.values()]
+        n_adv = len(means)
+        x_bar = sum(means) / n_adv
+        variance = sum((x - x_bar) ** 2 for x in means) / (n_adv - 1)
+        s = math.sqrt(variance) if variance > 0 else 0.0
+        if s > 0:
+            cpi_skewness = (
+                n_adv / ((n_adv - 1) * (n_adv - 2))
+                * sum(((x - x_bar) / s) ** 3 for x in means)
+            )
+        else:
+            cpi_skewness = 0.0
 
     return {
-        "mean_best_tier":    mean_best_tier,
-        "worst_best_tier":   worst_best_tier,
-        "fraction_with_A":   fraction_with_A,
-        "advisors_with_A":   advisors_with_A,
-        "total_advisors":    total_advisors,
-        "advisors_assigned": advisors_assigned,
+        "avg_entropy":       avg_entropy,
+        "cpi_skewness":      cpi_skewness,
         "quartile_mode":     quartile_mode,
+        "K":                 K,
+        "advisors_assigned": advisors_assigned,
         "per_faculty":       per_faculty,
     }
 
@@ -453,14 +475,12 @@ def compute_metrics(
             }, ...
         },
         "advisor": {
-            "mean_best_tier":    float,
-            "worst_best_tier":   int,
-            "fraction_with_A":   float,
-            "advisors_with_A":   int,
-            "total_advisors":    int,
-            "advisors_assigned": int,
+            "avg_entropy":       float,
+            "cpi_skewness":      float | None,
             "quartile_mode":     bool,
-            "per_faculty":       {faculty_id: {"best_tier_value": int, "best_tier_label": str}},
+            "K":                 int,
+            "advisors_assigned": int,
+            "per_faculty":       {faculty_id: {"entropy": float, "mean_cpi": float, "student_count": int}},
         },
     }
     """

@@ -564,47 +564,39 @@ def _render_metrics_panel(metrics: dict) -> html.Div:
     advisor = metrics.get("advisor", {})
     advisor_section = []
     if advisor:
-        qmode     = advisor.get("quartile_mode", False)
-        tier_note = "A=1 · B1=2 · B2=3 · C=4" if qmode else "A=1 · B=2 · C=3"
-        mean_bt   = advisor.get("mean_best_tier", 0.0)
-        worst_bt  = advisor.get("worst_best_tier", 0)
-        frac_a    = advisor.get("fraction_with_A", 0.0)
-        adv_a     = advisor.get("advisors_with_A", 0)
-        total_adv = advisor.get("total_advisors", 0)
-        adv_asgn  = advisor.get("advisors_assigned", 0)
+        qmode       = advisor.get("quartile_mode", False)
+        K           = advisor.get("K", 3)
+        avg_entropy = advisor.get("avg_entropy", 0.0)
+        skewness    = advisor.get("cpi_skewness")
+        adv_asgn    = advisor.get("advisors_assigned", 0)
+        tier_note   = f"{'A · B1 · B2 · C' if qmode else 'A · B · C'} ({K} tiers)"
+
+        skew_text = f"{skewness:.3f}" if skewness is not None else "N/A"
+        skew_color = "text-warning" if skewness is not None and abs(skewness) > 1 else "text-primary"
 
         advisor_cards = dbc.Row([
             dbc.Col(dbc.Card(dbc.CardBody([
-                html.Span(f"{mean_bt:.3f}",
+                html.Span(f"{avg_entropy:.3f}",
                           style={"fontSize": "1.6rem", "fontWeight": "bold"},
                           className="text-primary"),
-                html.Div("Mean best-tier", className="fw-bold"),
-                html.Small(f"lower = better · {adv_asgn} advisors w/ students",
+                html.Div("Avg CPI entropy", className="fw-bold"),
+                html.Small(f"higher = more diverse tier mix · {adv_asgn} advisors w/ students",
                            className="text-muted"),
-            ]), className="mb-2 border-0 bg-light"), md=4),
+            ]), className="mb-2 border-0 bg-light"), md=6),
 
             dbc.Col(dbc.Card(dbc.CardBody([
-                html.Span(str(worst_bt),
+                html.Span(skew_text,
                           style={"fontSize": "1.6rem", "fontWeight": "bold"},
-                          className="text-warning"),
-                html.Div("Worst best-tier", className="fw-bold"),
-                html.Small("highest value = least satisfied advisor",
+                          className=skew_color),
+                html.Div("CPI skewness", className="fw-bold"),
+                html.Small("≈0 = balanced · + = some advisors get much higher-CPI cohorts",
                            className="text-muted"),
-            ]), className="mb-2 border-0 bg-light"), md=4),
-
-            dbc.Col(dbc.Card(dbc.CardBody([
-                html.Span(f"{frac_a:.1%}",
-                          style={"fontSize": "1.6rem", "fontWeight": "bold"},
-                          className="text-success"),
-                html.Div("Advisors with ≥1 A-tier", className="fw-bold"),
-                html.Small(f"{adv_a} / {total_adv} advisors",
-                           className="text-muted"),
-            ]), className="mb-2 border-0 bg-light"), md=4),
+            ]), className="mb-2 border-0 bg-light"), md=6),
         ])
 
         advisor_section = [
-            html.H6("Advisor Satisfaction", className="mt-3 mb-1 text-muted"),
-            html.Small(f"Tier mapping: {tier_note}", className="text-muted d-block mb-2"),
+            html.H6("Advisor Fairness", className="mt-3 mb-1 text-muted"),
+            html.Small(f"Tiers: {tier_note}", className="text-muted d-block mb-2"),
             advisor_cards,
         ]
 
