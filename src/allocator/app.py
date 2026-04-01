@@ -59,8 +59,9 @@ from typing import Dict, List, Optional
 # *** USER-CONFIGURABLE SETTINGS ***
 # ======================================================================
 
-OUTPUT_MODE   = "dash"          # "dash" | "html"
-STARTUP_MODE  = "full"          # "full" | "phase0_only" | "from_report"
+OUTPUT_MODE        = "dash"          # "dash" | "html"
+STARTUP_MODE       = "full"          # "full" | "phase0_only" | "from_report"
+ALLOCATION_POLICY  = "least_loaded"  # "least_loaded" | "nonempty"
 
 # Paths used when not uploading via the UI
 DEFAULT_STUDENTS_PATH = str(Path(__file__).parent.parent.parent / "data" / "sample_students.csv")
@@ -87,6 +88,7 @@ import plotly.graph_objects as go
 
 from .allocation import (
     _least_loaded_choice,
+    _nonempty_choice,
     build_r1_candidate_lists,
     main_allocation,
     phase0,
@@ -94,6 +96,13 @@ from .allocation import (
     run_full_allocation,
 )
 from .metrics import compute_metrics
+
+def _protocol_choice(student, cap_fids, faculty_map, faculty_loads):
+    """Dispatch to the active policy's choice function for dashboard highlighting."""
+    if ALLOCATION_POLICY == "nonempty":
+        return _nonempty_choice(student, cap_fids, faculty_map, faculty_loads)
+    return _least_loaded_choice(student, cap_fids, faculty_map, faculty_loads)
+
 from .data_loader import (
     load_faculty,
     load_phase0_report,
@@ -364,9 +373,9 @@ def _render_student_picker(student, faculty_map, faculty_loads, meta, queue_idx,
     )
     tier_color = {"A": "success", "B": "warning", "B1": "warning", "B2": "info", "C": "danger"}
 
-    # Compute the protocol's recommended pick (least-loaded within cap)
+    # Compute the protocol's recommended pick (per active allocation policy)
     cap_fids = [fid for fid, _, _, _, _ in advisors]
-    protocol_result = _least_loaded_choice(student, cap_fids, faculty_map, faculty_loads)
+    protocol_result = _protocol_choice(student, cap_fids, faculty_map, faculty_loads)
     protocol_fid = protocol_result[0] if protocol_result else None
 
     advisor_cols = []
@@ -394,7 +403,11 @@ def _render_student_picker(student, faculty_map, faculty_loads, meta, queue_idx,
                         "Full" if at_capacity else f"{fac.max_load - load} slot{'s' if fac.max_load - load != 1 else ''} free",
                         className=f"small mt-1 {'text-danger fw-bold' if at_capacity else 'text-success'}",
                     ),
-                    *([ html.Div("★ Least-loaded · highest preferred", className="small fw-bold mt-1", style={"color": "#fd7e14"})] if is_protocol else []),
+                    *([html.Div(
+                        "★ Highest preferred with vacancy" if ALLOCATION_POLICY == "nonempty"
+                        else "★ Least-loaded · highest preferred",
+                        className="small fw-bold mt-1", style={"color": "#fd7e14"},
+                    )] if is_protocol else []),
                 ],
                 id={"type": "main-pick", "index": fid, "step": queue_idx, "run": run},
                 color=btn_color,
@@ -1459,10 +1472,10 @@ def cb_main_alloc_pick(n_clicks_list):
     faculty_map   = {f.id: f for f in faculty}
     faculty_loads = _app_state["current_faculty_loads"]
 
-    # Determine protocol pick
+    # Determine protocol pick (per active allocation policy)
     advisors, _, _ = _compute_eligible_advisors(student, faculty_map, faculty_loads, meta)
     cap_fids       = [f for f, _, _, _, at_cap in advisors if not at_cap]
-    proto_result   = _least_loaded_choice(student, cap_fids, faculty_map, faculty_loads)
+    proto_result   = _protocol_choice(student, cap_fids, faculty_map, faculty_loads)
     protocol_fid   = proto_result[0] if proto_result else None
 
     # ---- Protocol pick or no recommendation: execute immediately ----
@@ -1833,6 +1846,7 @@ def _run_html_mode():
     assignments, snaps, meta, metrics = run_full_allocation(
         students, faculty,
         out_dir=OUTPUT_DIR if STARTUP_MODE == "full" else None,
+        policy=ALLOCATION_POLICY,
     )
     _app_state["metrics"] = metrics
 
@@ -1848,7 +1862,22 @@ if __name__ == "__main__":
         action="store_true",
         help="Start without pre-loading the default student/faculty data files.",
     )
+    parser.add_argument(
+        "--policy",
+        default=None,
+        choices=["least_loaded", "nonempty"],
+        help=(
+            "Override the allocation policy set in ALLOCATION_POLICY.\n"
+            "  least_loaded : least-loaded eligible faculty, tie-broken by preference rank.\n"
+            "  nonempty     : prefer the highest-preferred empty lab; fall back to\n"
+            "                 highest-preferred faculty with remaining capacity."
+        ),
+    )
     args = parser.parse_args()
+
+    # Apply CLI policy override so allocation and dashboard highlighting stay in sync
+    if args.policy is not None:
+        ALLOCATION_POLICY = args.policy
 
     if OUTPUT_MODE == "html":
         _run_html_mode()
