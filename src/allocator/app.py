@@ -1318,40 +1318,37 @@ def cb_confirm_r1(n_clicks, pick_values, pick_ids):
 # ---------------------------------------------------------------------------
 
 @app.callback(
-    Output("run-status",  "children",  allow_duplicate=True),
-    Output("store-phase", "data",      allow_duplicate=True),
-    Output("step-slider", "max",       allow_duplicate=True),
-    Output("step-slider", "marks",     allow_duplicate=True),
-    Output("step-slider", "value",     allow_duplicate=True),
+    Output("run-status",       "children",  allow_duplicate=True),
+    Output("store-phase",      "data",      allow_duplicate=True),
+    Output("step-slider",      "max",       allow_duplicate=True),
+    Output("step-slider",      "marks",     allow_duplicate=True),
+    Output("step-slider",      "value",     allow_duplicate=True),
+    Output("main-alloc-panel", "children",  allow_duplicate=True),
     Input("btn-reset-r1", "n_clicks"),
     prevent_initial_call=True,
 )
 def cb_reset_r1(n_clicks):
+    no_up6 = (dash.no_update,) * 6
     if not n_clicks:
-        return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
+        return no_up6
 
-    if _app_state["phase"] not in ("r1", "r1_done", "main_alloc", "complete"):
-        return "⚠ Run full allocation first before resetting.", dash.no_update, dash.no_update, dash.no_update, dash.no_update
+    allowed = ("r1", "r1_done", "main_alloc", "complete", "cpi_phase1_done")
+    if _app_state["phase"] not in allowed:
+        return ("⚠ Run full allocation first before resetting.",
+                *([dash.no_update] * 5))
 
-    students = _app_state["students"]
-    faculty  = _app_state["faculty"]
-
-    r1_candidates = build_r1_candidate_lists(students, faculty)
-
-    # Use a *fresh copy* of the phase-0 checkpoint so that any R1/main-alloc
-    # snapshots appended during the previous (or current) run do not carry over.
+    # Restore the phase-0 checkpoint (fresh copy so subsequent runs don't
+    # accumulate snapshots from prior runs).
     snaps = _copy_snaps(_app_state["phase0_snapshots"])
 
-    _app_state["r1_pending"]          = r1_candidates
-    _app_state["r1_picks"]            = {}
-    _app_state["r1_assignments"]      = {}
-    _app_state["r1_faculty_loads"]    = {}
-    _app_state["current_assignments"] = {}
+    _app_state["r1_picks"]              = {}
+    _app_state["r1_assignments"]        = {}
+    _app_state["r1_faculty_loads"]      = {}
+    _app_state["current_assignments"]   = {}
     _app_state["current_faculty_loads"] = {}
-    _app_state["main_queue"]          = []
-    _app_state["main_queue_idx"]      = 0
-    _app_state["phase"]               = "r1"
-    _app_state["snapshots"]           = snaps
+    _app_state["main_queue"]            = []
+    _app_state["main_queue_idx"]        = 0
+    _app_state["snapshots"]             = snaps
 
     if snaps:
         n = len(snaps)
@@ -1360,9 +1357,20 @@ def cb_reset_r1(n_clicks):
     else:
         marks, slider_max, slider_val = {}, 0, 0
 
+    if ALLOCATION_POLICY == "cpi_fill":
+        _app_state["phase"] = "phase0_done"
+        msg = "Reset — Phase 0 complete. Click 'Run full allocation' to start Phase 1."
+        panel = html.Span("Allocation reset. Ready to run Phase 1.", className="text-muted")
+        return msg, "phase0_done", slider_max, marks, slider_val, panel
+
+    students      = _app_state["students"]
+    faculty       = _app_state["faculty"]
+    r1_candidates = build_r1_candidate_lists(students, faculty)
+    _app_state["r1_pending"] = r1_candidates
+    _app_state["phase"]      = "r1"
     msg = (f"Reset — Round 1: {len(r1_candidates)} faculties have "
            "1st-choice applicants. Make picks below, then confirm.")
-    return msg, "r1", slider_max, marks, slider_val
+    return msg, "r1", slider_max, marks, slider_val, dash.no_update
 
 
 # ---------------------------------------------------------------------------
@@ -1444,6 +1452,15 @@ def cb_proceed_main(n_clicks):
 # ---------------------------------------------------------------------------
 # Callback — proceed to CPI-Fill Phase 2 (after user confirmation)
 # ---------------------------------------------------------------------------
+
+@app.callback(
+    Output("btn-cpi-proceed-phase2", "disabled"),
+    Input("btn-cpi-proceed-phase2",  "n_clicks"),
+    prevent_initial_call=True,
+)
+def cb_disable_cpi_proceed_btn(n_clicks):
+    return bool(n_clicks)
+
 
 @app.callback(
     Output("main-alloc-panel", "children",  allow_duplicate=True),
