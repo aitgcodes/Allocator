@@ -667,7 +667,7 @@ def cpi_fill_allocation(
     assignments: Dict[str, Optional[str]],
     faculty_loads: Dict[str, int],
     snapshots: SnapshotList,
-) -> Tuple[Dict[str, Optional[str]], SnapshotList]:
+) -> Tuple[Dict[str, Optional[str]], SnapshotList, bool]:
     """
     CPI-Fill policy: two-phase allocation invoked in place of main_allocation.
 
@@ -679,7 +679,8 @@ def cpi_fill_allocation(
         Assigns each remaining student to their highest-preferred empty lab
         (full preference list, no N_tier cap).
 
-    Returns (assignments, snapshots).
+    Returns (assignments, snapshots, phase2_skipped) where phase2_skipped is
+    True when all students were assigned in Phase 1 (Phase 2 queue was empty).
     """
     faculty_map = {f.id: f for f in faculty}
     student_map = {s.id: s for s in students}
@@ -815,7 +816,8 @@ def cpi_fill_allocation(
         assignments, faculty_loads, unassigned,
     ))
 
-    return assignments, snapshots
+    phase2_skipped = len(phase2_queue) == 0
+    return assignments, snapshots, phase2_skipped
 
 
 # ---------------------------------------------------------------------------
@@ -870,7 +872,7 @@ def run_full_allocation(
         # Round 1 is skipped — CPI-Fill goes directly Phase 0 → Phase 1 → Phase 2.
         assignments   = {s.id: None for s in students}
         faculty_loads = {f.id: 0    for f in faculty}
-        assignments, snaps = cpi_fill_allocation(
+        assignments, snaps, _ = cpi_fill_allocation(
             students, faculty, assignments, faculty_loads, snaps,
         )
     else:

@@ -1115,7 +1115,7 @@ def cb_run(n_phase0, n_full, loaded):
             assignments   = {s.id: None for s in students}
             faculty_loads = {f.id: 0    for f in faculty}
             try:
-                assignments, snaps = cpi_fill_allocation(
+                assignments, snaps, phase2_skipped = cpi_fill_allocation(
                     students, faculty, assignments, faculty_loads, snaps,
                 )
             except Exception as e:
@@ -1128,7 +1128,8 @@ def cb_run(n_phase0, n_full, loaded):
             _app_state["metrics"] = metrics
             n = len(snaps)
             marks = {i: str(snaps[i].step) for i in range(0, n, max(1, n // 10))}
-            content = _finalize_prompt(assignments, faculty_loads, faculty)
+            content = _finalize_prompt(assignments, faculty_loads, faculty,
+                                       phase2_skipped=phase2_skipped)
             return content, "complete", n - 1, marks, n - 1
 
         # For least_loaded / nonempty: populate Round-1 candidate lists;
@@ -1393,7 +1394,7 @@ def cb_proceed_main(n_clicks):
     if ALLOCATION_POLICY == "cpi_fill":
         snaps = _app_state["snapshots"]
         try:
-            assignments, snaps = cpi_fill_allocation(
+            assignments, snaps, phase2_skipped = cpi_fill_allocation(
                 students, faculty, assignments, faculty_loads, snaps,
             )
         except Exception as e:
@@ -1410,7 +1411,8 @@ def cb_proceed_main(n_clicks):
         _app_state["metrics"] = metrics
         n = len(snaps)
         marks = {i: str(snaps[i].step) for i in range(0, n, max(1, n // 10))}
-        content = _finalize_prompt(assignments, faculty_loads, faculty)
+        content = _finalize_prompt(assignments, faculty_loads, faculty,
+                                   phase2_skipped=phase2_skipped)
         return content, "complete", n - 1, marks, n - 1
 
     # Manual allocation for least_loaded / nonempty
@@ -1609,7 +1611,12 @@ def _build_completion_panel(
     ])
 
 
-def _finalize_prompt(assignments: dict, faculty_loads: dict, faculty: list) -> "html.Div":
+def _finalize_prompt(
+    assignments: dict,
+    faculty_loads: dict,
+    faculty: list,
+    phase2_skipped: bool = False,
+) -> "html.Div":
     """
     Return the 'Allocation complete — Finalize?' confirmation widget shown
     after Round 2 (manual, auto-run, or CPI-Fill) completes.
@@ -1617,11 +1624,12 @@ def _finalize_prompt(assignments: dict, faculty_loads: dict, faculty: list) -> "
     assigned_count   = sum(1 for v in assignments.values() if v is not None)
     unassigned_count = sum(1 for v in assignments.values() if v is None)
     empty_labs       = sum(1 for f in faculty if faculty_loads.get(f.id, 0) == 0)
+    skip_note        = " Round 2 being skipped." if phase2_skipped else ""
     return html.Div([
         dbc.Alert(
             [html.Strong("✓ Allocation complete. "),
              f"{assigned_count} assigned, {unassigned_count} unassigned, "
-             f"{empty_labs} empty lab{'s' if empty_labs != 1 else ''}. Finalize?"],
+             f"{empty_labs} empty lab{'s' if empty_labs != 1 else ''}.{skip_note} Finalize?"],
             color="success", className="mb-3",
         ),
         dbc.Button("Finalize →", id="btn-finalize-main", color="success"),
