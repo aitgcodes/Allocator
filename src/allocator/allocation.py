@@ -36,6 +36,7 @@ from typing import Dict, List, Optional, Set, Tuple
 import numpy as np
 
 from .data_loader import save_phase0_report
+from .metrics import compute_metrics
 from .state import (
     AllocationSnapshot,
     Faculty,
@@ -645,7 +646,7 @@ def run_full_allocation(
     r1_picks: Optional[Dict[str, str]] = None,
     out_dir: Optional[str] = None,
     policy: str = "least_loaded",
-) -> Tuple[Dict[str, Optional[str]], SnapshotList, dict]:
+) -> Tuple[Dict[str, Optional[str]], SnapshotList, dict, dict]:
     """
     Run Phase 0 → Round 1 → Main allocation end-to-end.
 
@@ -660,7 +661,13 @@ def run_full_allocation(
 
     Returns
     -------
-    (assignments, snapshots, meta)
+    (assignments, snapshots, meta, metrics)
+        assignments : {student_id: faculty_id | None}
+        snapshots   : SnapshotList of all allocation steps
+        meta        : cohort-level parameters dict from Phase 0
+        metrics     : satisfaction metrics dict from compute_metrics
+                      (keys: "npss", "overflow_count", "mean_psi",
+                       "per_tier", "per_student")
     """
     students, faculty, meta, snaps = phase0(students, faculty, out_dir=out_dir)
     N_A = meta["N_A"]
@@ -670,7 +677,12 @@ def run_full_allocation(
         students, faculty, assignments, faculty_loads, snaps, N_A, N_B,
         policy=policy,
     )
-    return assignments, snaps, meta
+    metrics = compute_metrics(
+        students, assignments,
+        F=len(faculty),
+        faculty_ids=[f.id for f in faculty],
+    )
+    return assignments, snaps, meta, metrics
 
 
 # ---------------------------------------------------------------------------
@@ -716,6 +728,19 @@ def _cli():
             "Skip Phase 0 and load tier assignments from an existing\n"
             "phase0_report.csv + phase0_meta.csv in REPORT_DIR.\n"
             "Still requires --faculty for capacity data."
+        ),
+    )
+    parser.add_argument(
+        "--policy",
+        default="least_loaded",
+        choices=["least_loaded", "nonempty"],
+        help=(
+            "Assignment policy for the main allocation round.\n"
+            "  least_loaded : assign to the least-loaded eligible faculty,\n"
+            "                 tie-broken by preference rank (default).\n"
+            "  nonempty     : prefer the highest-preferred empty lab;\n"
+            "                 if none are empty, assign the highest-preferred\n"
+            "                 faculty with remaining capacity."
         ),
     )
 
@@ -765,11 +790,95 @@ def _cli():
             return
 
     # full allocation
-    assignments, snaps, meta = run_full_allocation(students, faculty, policy=args.policy)
+    assignments, snaps, meta, metrics = run_full_allocation(
+        students, faculty, policy=args.policy
+    )
     final = snaps.last()
     assigned = sum(1 for v in final.assignments.values() if v is not None)
     print(f"\nAllocation complete: {assigned}/{len(students)} assigned")
     print(f"Total steps recorded: {len(snaps)}")
+
+    # ---- Satisfaction Metrics ----
+    npss          = metrics["npss"]
+    mean_psi      = metrics["mean_psi"]
+    overflow_count = metrics["overflow_count"]
+    per_tier      = metrics["per_tier"]
+    per_student   = metrics["per_student"]
+    advisor       = metrics.get("advisor", {})
+
+    print("\nSatisfaction Metrics Report")
+    print("===========================")
+
+    print("\n-- Student Satisfaction --")
+    print(f"NPSS (primary)      : {npss:.4f}   [CPI-weighted, tier-aware]")
+    print(f"Mean PSI (secondary): {mean_psi:.4f}   [equal-weighted, global rank]")
+    print(f"Overflow count      : {overflow_count}")
+    print()
+    print("Per-tier breakdown:")
+    for tier in ("A", "B", "B1", "B2", "C"):
+        td = per_tier.get(tier, {})
+        count = td.get("count", 0)
+        if count == 0:
+            continue
+        rate       = td.get("within_window_rate", 0.0) * 100
+        mean_rank  = td.get("mean_rank")
+        npss_score = td.get("mean_npss_score", 0.0)
+        psi_score  = td.get("mean_psi_score", 0.0)
+        rank_str   = f"{mean_rank:.1f}" if mean_rank is not None else "N/A"
+        print(
+            f"  Class {tier:<3} | within-window: {rate:6.1f}% | "
+            f"mean rank: {rank_str:>4} | NPSS: {npss_score:.4f} | "
+            f"PSI: {psi_score:.4f} | n={count}"
+        )
+
+    if advisor:
+        qmode          = advisor.get("quartile_mode", False)
+        tier_map_note  = "A=1,B1=2,B2=3,C=4" if qmode else "A=1,B=2,C=3"
+        mean_bt        = advisor.get("mean_best_tier", 0.0)
+        worst_bt       = advisor.get("worst_best_tier", 0)
+        frac_a         = advisor.get("fraction_with_A", 0.0)
+        adv_a          = advisor.get("advisors_with_A", 0)
+        total_adv      = advisor.get("total_advisors", 0)
+        adv_assigned   = advisor.get("advisors_assigned", 0)
+        print()
+        print("-- Advisor Satisfaction --")
+        print(f"Tier mapping        : {tier_map_note}")
+        print(f"Mean best-tier      : {mean_bt:.4f}   [lower = better; avg over {adv_assigned} advisors with ≥1 student]")
+        print(f"Worst best-tier     : {worst_bt}        [highest value across advisors with ≥1 student]")
+        print(f"Fraction with ≥1 A  : {frac_a:.4f}   [{adv_a}/{total_adv} advisors]")
+
+    # ---- Write metrics_report.csv ----
+    import csv
+    import os
+    student_map = {s.id: s for s in students}
+    out_dir_path = args.out
+    os.makedirs(out_dir_path, exist_ok=True)
+    report_path = os.path.join(out_dir_path, "metrics_report.csv")
+    with open(report_path, "w", newline="", encoding="utf-8") as fh:
+        writer = csv.writer(fh)
+        writer.writerow([
+            "student_id", "name", "tier", "n_tier",
+            "assigned_rank", "within_window",
+            "npss_score", "cpi_weight", "psi_score",
+        ])
+        for sid, sd in per_student.items():
+            s = student_map.get(sid)
+            name      = s.name if s else ""
+            tier      = sd["tier"]
+            n_tier    = sd["n_tier"]
+            rank      = sd["assigned_rank"]
+            prefs_len = len(s.preferences) if s else 0
+            n_eff     = n_tier if n_tier is not None else prefs_len
+            within    = 1 if (rank is not None and n_eff > 0 and rank <= n_eff) else 0
+            writer.writerow([
+                sid, name, tier, n_tier if n_tier is not None else "",
+                rank if rank is not None else "",
+                within,
+                f"{sd['npss_score']:.6f}",
+                f"{sd['cpi_weight']:.6f}",
+                f"{sd['psi_score']:.6f}",
+            ])
+    print(f"\nMetrics report written to: {report_path}")
 
 
 if __name__ == "__main__":
