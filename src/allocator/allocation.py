@@ -879,7 +879,11 @@ def run_full_allocation(
             students, faculty, assignments, faculty_loads, snaps, N_A, N_B,
             policy=policy,
         )
-    metrics = compute_metrics(students, assignments, F=len(faculty))
+    metrics = compute_metrics(
+        students, assignments,
+        F=len(faculty),
+        faculty_ids=[f.id for f in faculty],
+    )
     return assignments, snaps, meta, metrics
 
 
@@ -994,9 +998,12 @@ def _cli():
     overflow_count = metrics["overflow_count"]
     per_tier      = metrics["per_tier"]
     per_student   = metrics["per_student"]
+    advisor       = metrics.get("advisor", {})
 
-    print("\nSatisfaction Metrics")
-    print("--------------------")
+    print("\nSatisfaction Metrics Report")
+    print("===========================")
+
+    print("\n-- Student Satisfaction --")
     print(f"NPSS (primary)      : {npss:.4f}   [CPI-weighted, tier-aware]")
     print(f"Mean PSI (secondary): {mean_psi:.4f}   [equal-weighted, global rank]")
     print(f"Overflow count      : {overflow_count}")
@@ -1017,6 +1024,22 @@ def _cli():
             f"mean rank: {rank_str:>4} | NPSS: {npss_score:.4f} | "
             f"PSI: {psi_score:.4f} | n={count}"
         )
+
+    if advisor:
+        qmode          = advisor.get("quartile_mode", False)
+        tier_map_note  = "A=1,B1=2,B2=3,C=4" if qmode else "A=1,B=2,C=3"
+        mean_bt        = advisor.get("mean_best_tier", 0.0)
+        worst_bt       = advisor.get("worst_best_tier", 0)
+        frac_a         = advisor.get("fraction_with_A", 0.0)
+        adv_a          = advisor.get("advisors_with_A", 0)
+        total_adv      = advisor.get("total_advisors", 0)
+        adv_assigned   = advisor.get("advisors_assigned", 0)
+        print()
+        print("-- Advisor Satisfaction --")
+        print(f"Tier mapping        : {tier_map_note}")
+        print(f"Mean best-tier      : {mean_bt:.4f}   [lower = better; avg over {adv_assigned} advisors with ≥1 student]")
+        print(f"Worst best-tier     : {worst_bt}        [highest value across advisors with ≥1 student]")
+        print(f"Fraction with ≥1 A  : {frac_a:.4f}   [{adv_a}/{total_adv} advisors]")
 
     # ---- Write metrics_report.csv ----
     import csv
