@@ -10,7 +10,7 @@ Secondary metric — PSI (Preference Satisfaction Index):
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 from .state import Student
 
@@ -113,6 +113,11 @@ def psi_per_student_score(
 # ---------------------------------------------------------------------------
 
 _TIER_LABELS = ["A", "B", "B1", "B2", "C"]
+
+# Tier → numeric value for advisor-satisfaction computation.
+# Percentile mode uses A/B/C; quartile mode uses A/B1/B2/C.
+_PERCENTILE_TIER_VALUE: Dict[str, int] = {"A": 1, "B": 2, "C": 3}
+_QUARTILE_TIER_VALUE:   Dict[str, int] = {"A": 1, "B1": 2, "B2": 3, "C": 4}
 
 
 def _build_per_tier(
@@ -296,6 +301,111 @@ def compute_psi(
 
 
 # ---------------------------------------------------------------------------
+# Advisor satisfaction metrics
+# ---------------------------------------------------------------------------
+
+def compute_advisor_metrics(
+    students: List[Student],
+    assignments: Dict[str, Optional[str]],
+    all_faculty_ids: Optional[List[str]] = None,
+) -> dict:
+    """
+    Compute advisor-satisfaction metrics for a completed allocation.
+
+    For each advisor, the "best tier" is the tier of the strongest student
+    assigned to them, using the mapping:
+      - Percentile mode (tiers A / B / C):   A=1, B=2, C=3
+      - Quartile mode  (tiers A / B1 / B2 / C): A=1, B1=2, B2=3, C=4
+
+    Mode is inferred from the student tiers present (quartile mode if any
+    student has tier B1 or B2).
+
+    Parameters
+    ----------
+    students        : list of Student (with .tier set)
+    assignments     : {student_id: faculty_id | None}
+    all_faculty_ids : full list of faculty IDs (for fraction denominator).
+                      If omitted, the denominator is the number of advisors
+                      who received at least one student.
+
+    Returns
+    -------
+    {
+        "mean_best_tier"     : float  — mean of best-tier values (advisors with ≥1 student)
+        "worst_best_tier"    : int    — highest (worst) best-tier value across those advisors
+        "fraction_with_A"    : float  — fraction of ALL advisors with ≥1 A-tier student
+        "advisors_with_A"    : int    — count of advisors with ≥1 A-tier student
+        "total_advisors"     : int    — denominator for fraction_with_A
+        "advisors_assigned"  : int    — advisors who received ≥1 student
+        "quartile_mode"      : bool   — True if quartile tier mapping was used
+        "per_faculty"        : {faculty_id: {"best_tier_value": int, "best_tier_label": str}}
+    }
+    """
+    # Detect mode from student tiers
+    quartile_mode = any(
+        s.tier in ("B1", "B2") for s in students if s.tier is not None
+    )
+    tier_value = _QUARTILE_TIER_VALUE if quartile_mode else _PERCENTILE_TIER_VALUE
+
+    # Group students by assigned faculty
+    faculty_students: Dict[str, List[Student]] = {}
+    student_map = {s.id: s for s in students}
+    for sid, fid in assignments.items():
+        if fid is None:
+            continue
+        s = student_map.get(sid)
+        if s is None:
+            continue
+        faculty_students.setdefault(fid, []).append(s)
+
+    # Compute best-tier value per advisor
+    per_faculty: Dict[str, dict] = {}
+    for fid, assigned_students in faculty_students.items():
+        best_value: Optional[int] = None
+        best_label: str = ""
+        for s in assigned_students:
+            tier_label = s.tier or "C"
+            val = tier_value.get(tier_label)
+            if val is None:
+                # Unknown tier — treat as worst possible
+                val = max(tier_value.values()) + 1
+            if best_value is None or val < best_value:
+                best_value = val
+                best_label = tier_label
+        if best_value is not None:
+            per_faculty[fid] = {
+                "best_tier_value": best_value,
+                "best_tier_label": best_label,
+            }
+
+    # Aggregate statistics (only over advisors who received ≥1 student)
+    best_values = [d["best_tier_value"] for d in per_faculty.values()]
+    advisors_assigned = len(best_values)
+
+    mean_best_tier  = (sum(best_values) / advisors_assigned) if advisors_assigned else 0.0
+    worst_best_tier = max(best_values) if best_values else 0
+
+    # Fraction with at least one A-tier student
+    advisors_with_A = sum(1 for d in per_faculty.values() if d["best_tier_label"] == "A")
+    if all_faculty_ids is not None:
+        total_advisors = len(all_faculty_ids)
+    else:
+        total_advisors = advisors_assigned
+    fraction_with_A = (advisors_with_A / total_advisors) if total_advisors else 0.0
+
+    return {
+        "mean_best_tier":    mean_best_tier,
+        "worst_best_tier":   worst_best_tier,
+        "fraction_with_A":   fraction_with_A,
+        "advisors_with_A":   advisors_with_A,
+        "total_advisors":    total_advisors,
+        "advisors_assigned": advisors_assigned,
+        "quartile_mode":     quartile_mode,
+        "per_faculty":       per_faculty,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Unified entry point
 # ---------------------------------------------------------------------------
 
@@ -303,6 +413,7 @@ def compute_metrics(
     students: List[Student],
     assignments: Dict[str, Optional[str]],
     F: int,
+    faculty_ids: Optional[List[str]] = None,
 ) -> dict:
     """
     Compute all satisfaction metrics for a completed allocation.
@@ -312,6 +423,8 @@ def compute_metrics(
     students    : list of Student (with .tier, .n_tier, .cpi, .preferences set)
     assignments : {student_id: faculty_id | None}
     F           : total number of faculty (for PSI denominator)
+    faculty_ids : full list of faculty IDs (for advisor-satisfaction denominator).
+                  If omitted, only advisors who received ≥1 student are counted.
 
     Returns
     -------
@@ -339,12 +452,23 @@ def compute_metrics(
                 "cpi_weight": float,
             }, ...
         },
+        "advisor": {
+            "mean_best_tier":    float,
+            "worst_best_tier":   int,
+            "fraction_with_A":   float,
+            "advisors_with_A":   int,
+            "total_advisors":    int,
+            "advisors_assigned": int,
+            "quartile_mode":     bool,
+            "per_faculty":       {faculty_id: {"best_tier_value": int, "best_tier_label": str}},
+        },
     }
     """
     ranks       = collect_preference_ranks(students, assignments)
     npss_res    = compute_npss(students, ranks)
     psi_res     = compute_psi(students, ranks, F)
     per_tier    = _build_per_tier(students, ranks, F)
+    advisor_res = compute_advisor_metrics(students, assignments, all_faculty_ids=faculty_ids)
 
     # Build per-student detail
     weights = npss_res["weights"]
@@ -368,4 +492,5 @@ def compute_metrics(
         "mean_psi":       psi_res["mean_psi"],
         "per_tier":       per_tier,
         "per_student":    per_student,
+        "advisor":        advisor_res,
     }
