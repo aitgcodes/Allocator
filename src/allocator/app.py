@@ -309,8 +309,9 @@ _app_state: dict = {
     "main_run":              0,      # incremented each time main allocation starts (for unique button IDs)
     "current_assignments":   {},     # live assignments during main alloc
     "current_faculty_loads": {},     # live faculty loads during main alloc
-    "phase":                 "idle", # "idle"|"phase0_done"|"r1"|"r1_done"|"main_alloc"|"complete"
+    "phase":                 "idle", # "idle"|"phase0_done"|"r1"|"r1_done"|"main_alloc"|"cpi_phase1_done"|"complete"
     "metrics":               {},     # satisfaction metrics from compute_metrics
+    "cpi_phase1_stats":      {},     # stats dict from cpi_fill_phase1 (for r1-panel rendering)
 }
 
 # ---------------------------------------------------------------------------
@@ -699,8 +700,12 @@ def _control_card() -> dbc.Card:
 
 
 def _r1_card() -> dbc.Card:
+    if ALLOCATION_POLICY == "cpi_fill":
+        header = "3 — Phase 1"
+    else:
+        header = "3 — Round 1: faculty picks"
     return dbc.Card([
-        dbc.CardHeader("3 — Round 1: faculty picks"),
+        dbc.CardHeader(header),
         dbc.CardBody(id="r1-panel", children=[
             html.Span("Load data and run Phase 0 to begin.", className="text-muted"),
         ]),
@@ -708,10 +713,16 @@ def _r1_card() -> dbc.Card:
 
 
 def _main_alloc_card() -> dbc.Card:
+    if ALLOCATION_POLICY == "cpi_fill":
+        header      = "4 — Phase 2"
+        placeholder = "Complete Phase 1 first."
+    else:
+        header      = "4 — Main Allocation"
+        placeholder = "Complete Round 1 first."
     return dbc.Card([
-        dbc.CardHeader("4 — Main Allocation"),
+        dbc.CardHeader(header),
         dbc.CardBody(id="main-alloc-panel", children=[
-            html.Span("Complete Round 1 first.", className="text-muted"),
+            html.Span(placeholder, className="text-muted"),
         ]),
     ], className="mb-3")
 
@@ -1125,11 +1136,14 @@ def cb_run(n_phase0, n_full, loaded):
             _app_state["snapshots"]             = snaps
             _app_state["current_assignments"]   = assignments
             _app_state["current_faculty_loads"] = faculty_loads
+            _app_state["cpi_phase1_stats"]      = stats
             _app_state["phase"]                 = "cpi_phase1_done"
             n = len(snaps)
             marks = {i: str(snaps[i].step) for i in range(0, n, max(1, n // 10))}
-            content = _cpi_phase1_report(stats)
-            return content, "cpi_phase1_done", n - 1, marks, n - 1
+            assigned = stats["total_students"] - stats["unassigned_count"]
+            return (f"Phase 1 complete: {assigned} assigned, "
+                    f"{stats['unassigned_count']} unassigned."),  \
+                   "cpi_phase1_done", n - 1, marks, n - 1
 
         # For least_loaded / nonempty: populate Round-1 candidate lists;
         # pause for operator picks.
@@ -1262,6 +1276,26 @@ def cb_r1_panel(phase):
             html.Div(buttons, className="d-flex"),
         ]
 
+    # ---- CPI-Fill specific phases ----
+    if ALLOCATION_POLICY == "cpi_fill":
+        if phase == "cpi_phase1_done":
+            stats = _app_state.get("cpi_phase1_stats", {})
+            if stats:
+                return _cpi_phase1_report(stats)
+            return html.Span("Phase 1 complete.", className="text-muted")
+        if phase == "complete":
+            stats = _app_state.get("cpi_phase1_stats", {})
+            if stats:
+                assigned   = stats["total_students"] - stats["unassigned_count"]
+                unassigned = stats["unassigned_count"]
+                return dbc.Alert(
+                    [html.Strong("✓ Phase 1 complete. "),
+                     f"{assigned} assigned, {unassigned} proceeded to Phase 2."],
+                    color="success", className="mb-0",
+                )
+            return html.Span("✓ Phase 1 complete.", className="text-muted small")
+        return html.Span("Load data and run Phase 0 to begin.", className="text-muted")
+
     if phase in ("main_alloc", "complete"):
         return html.Span("✓ Round 1 complete — main allocation in progress below.",
                          className="text-muted small")
@@ -1348,6 +1382,7 @@ def cb_reset_r1(n_clicks):
     _app_state["current_faculty_loads"] = {}
     _app_state["main_queue"]            = []
     _app_state["main_queue_idx"]        = 0
+    _app_state["cpi_phase1_stats"]      = {}
     _app_state["snapshots"]             = snaps
 
     if snaps:
@@ -1413,11 +1448,11 @@ def cb_proceed_main(n_clicks):
         _app_state["snapshots"]             = snaps
         _app_state["current_assignments"]   = assignments
         _app_state["current_faculty_loads"] = faculty_loads
+        _app_state["cpi_phase1_stats"]      = stats
         _app_state["phase"]                 = "cpi_phase1_done"
         n = len(snaps)
         marks = {i: str(snaps[i].step) for i in range(0, n, max(1, n // 10))}
-        content = _cpi_phase1_report(stats)
-        return content, "cpi_phase1_done", n - 1, marks, n - 1
+        return dash.no_update, "cpi_phase1_done", n - 1, marks, n - 1
 
     # Manual allocation for least_loaded / nonempty
     # Build queue in tier priority order, each tier by CPI desc, unassigned only
