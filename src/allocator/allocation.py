@@ -661,26 +661,25 @@ def main_allocation(
 # CPI-Fill allocation — two-phase procedure
 # ---------------------------------------------------------------------------
 
-def cpi_fill_allocation(
+def cpi_fill_phase1(
     students: List[Student],
     faculty: List[Faculty],
     assignments: Dict[str, Optional[str]],
     faculty_loads: Dict[str, int],
     snapshots: SnapshotList,
-) -> Tuple[Dict[str, Optional[str]], SnapshotList, bool]:
+) -> Tuple[Dict[str, Optional[str]], Dict[str, int], SnapshotList, dict]:
     """
-    CPI-Fill policy: two-phase allocation invoked in place of main_allocation.
+    Run Phase 1 of the CPI-Fill policy.
 
-    Phase 1 — CPI-ordered pass with N_tier cap and stopping condition.
-        Processes unassigned students in descending CPI order.
-        Stops when len(unassigned) == len(empty_labs).
+    Processes unassigned students in descending CPI order, assigning each to
+    their highest-preferred advisor with remaining capacity. Stops when
+    len(unassigned) == len(empty_labs) (the stoppage condition).
 
-    Phase 2 — Empty-lab fill.
-        Assigns each remaining student to their highest-preferred empty lab
-        (full preference list, no N_tier cap).
-
-    Returns (assignments, snapshots, phase2_skipped) where phase2_skipped is
-    True when all students were assigned in Phase 1 (Phase 2 queue was empty).
+    Returns
+    -------
+    (assignments, faculty_loads, snapshots, stats)
+        stats keys: "phase1_assigned", "unassigned_count", "empty_labs_count",
+                    "total_students"
     """
     faculty_map = {f.id: f for f in faculty}
     student_map = {s.id: s for s in students}
@@ -691,7 +690,6 @@ def cpi_fill_allocation(
     U = len(unassigned)
     E = len(empty_labs)
 
-    # --- Entry condition validation ---
     if U < E:
         import warnings
         warnings.warn(
@@ -707,10 +705,6 @@ def cpi_fill_allocation(
     ))
 
     def _phase1_choice(student: Student) -> Optional[Tuple[str, int]]:
-        """
-        Phase 1 selection: highest-preferred advisor with remaining capacity.
-        No N_tier cap — full preference list, preference order (not load order).
-        """
         for rank, fid in enumerate(student.preferences, start=1):
             if fid in faculty_map and faculty_loads[fid] < faculty_map[fid].max_load:
                 return fid, rank
@@ -737,18 +731,15 @@ def cpi_fill_allocation(
             preference_rank={s.id: rank},
         ))
 
-    # --- Phase 1 ---
     phase1_assigned = 0
 
     if U == E:
-        # Skip Phase 1 entirely
         snapshots.append(_snap(
             step_ctr, "Phase1",
             f"Phase 1 skipped (U == E == {U}): proceeding directly to Phase 2",
             assignments, faculty_loads, unassigned,
         ))
     elif E == 0:
-        # No empty labs — run Phase 1 to completion, Phase 2 is a no-op
         for s in _sorted_by_cpi([student_map[sid] for sid in unassigned]):
             _phase1_assign(s)
         snapshots.append(_snap(
@@ -758,7 +749,6 @@ def cpi_fill_allocation(
             assignments, faculty_loads, unassigned,
         ))
     else:
-        # Normal Phase 1 with stopping condition
         for s in _sorted_by_cpi([student_map[sid] for sid in unassigned]):
             if len(unassigned) == len(empty_labs):
                 break
@@ -770,7 +760,40 @@ def cpi_fill_allocation(
             assignments, faculty_loads, unassigned,
         ))
 
-    # --- Phase 2 ---
+    stats = {
+        "phase1_assigned":  phase1_assigned,
+        "unassigned_count": len(unassigned),
+        "empty_labs_count": len(empty_labs),
+        "total_students":   len(students),
+    }
+    return assignments, faculty_loads, snapshots, stats
+
+
+def cpi_fill_phase2(
+    students: List[Student],
+    faculty: List[Faculty],
+    assignments: Dict[str, Optional[str]],
+    faculty_loads: Dict[str, int],
+    snapshots: SnapshotList,
+) -> Tuple[Dict[str, Optional[str]], SnapshotList, bool]:
+    """
+    Run Phase 2 of the CPI-Fill policy.
+
+    Assigns each remaining (unassigned) student to their highest-preferred
+    empty lab. Appends the Final snapshot.
+
+    Returns
+    -------
+    (assignments, snapshots, phase2_skipped)
+        phase2_skipped is True when Phase 2 queue was empty (all students
+        were already assigned after Phase 1).
+    """
+    faculty_map = {f.id: f for f in faculty}
+    student_map = {s.id: s for s in students}
+    unassigned  = {sid for sid, fid in assignments.items() if fid is None}
+    empty_labs  = {fid for fid, load in faculty_loads.items() if load == 0}
+    step_ctr    = [snapshots.last().step]
+
     phase2_queue = _sorted_by_cpi([student_map[sid] for sid in unassigned])
     snapshots.append(_snap(
         step_ctr, "Phase2",
@@ -818,6 +841,26 @@ def cpi_fill_allocation(
 
     phase2_skipped = len(phase2_queue) == 0
     return assignments, snapshots, phase2_skipped
+
+
+def cpi_fill_allocation(
+    students: List[Student],
+    faculty: List[Faculty],
+    assignments: Dict[str, Optional[str]],
+    faculty_loads: Dict[str, int],
+    snapshots: SnapshotList,
+) -> Tuple[Dict[str, Optional[str]], SnapshotList, bool]:
+    """
+    CPI-Fill policy: convenience wrapper that runs Phase 1 then Phase 2.
+
+    Returns (assignments, snapshots, phase2_skipped).
+    """
+    assignments, faculty_loads, snapshots, _ = cpi_fill_phase1(
+        students, faculty, assignments, faculty_loads, snapshots,
+    )
+    return cpi_fill_phase2(
+        students, faculty, assignments, faculty_loads, snapshots,
+    )
 
 
 # ---------------------------------------------------------------------------

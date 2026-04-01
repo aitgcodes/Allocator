@@ -87,6 +87,8 @@ import plotly.graph_objects as go
 
 from .allocation import (
     _least_loaded_choice,
+    cpi_fill_phase1,
+    cpi_fill_phase2,
     _nonempty_choice,
     build_r1_candidate_lists,
     cpi_fill_allocation,
@@ -1110,27 +1112,24 @@ def cb_run(n_phase0, n_full, loaded):
                 snaps = SnapshotList()
                 _app_state["snapshots"] = snaps
 
-        # CPI-Fill skips Round 1 entirely — run Phase 1+2 directly after Phase 0.
+        # CPI-Fill skips Round 1 entirely — run Phase 1 then pause for confirmation.
         if ALLOCATION_POLICY == "cpi_fill":
             assignments   = {s.id: None for s in students}
             faculty_loads = {f.id: 0    for f in faculty}
             try:
-                assignments, snaps, phase2_skipped = cpi_fill_allocation(
+                assignments, faculty_loads, snaps, stats = cpi_fill_phase1(
                     students, faculty, assignments, faculty_loads, snaps,
                 )
             except Exception as e:
-                return f"✗ CPI-Fill error: {e}", "idle", 0, {}, 0
+                return f"✗ CPI-Fill Phase 1 error: {e}", "idle", 0, {}, 0
             _app_state["snapshots"]             = snaps
             _app_state["current_assignments"]   = assignments
             _app_state["current_faculty_loads"] = faculty_loads
-            _app_state["phase"]                 = "complete"
-            metrics = compute_metrics(students, assignments, F=len(faculty))
-            _app_state["metrics"] = metrics
+            _app_state["phase"]                 = "cpi_phase1_done"
             n = len(snaps)
             marks = {i: str(snaps[i].step) for i in range(0, n, max(1, n // 10))}
-            content = _finalize_prompt(assignments, faculty_loads, faculty,
-                                       phase2_skipped=phase2_skipped)
-            return content, "complete", n - 1, marks, n - 1
+            content = _cpi_phase1_report(stats)
+            return content, "cpi_phase1_done", n - 1, marks, n - 1
 
         # For least_loaded / nonempty: populate Round-1 candidate lists;
         # pause for operator picks.
@@ -1390,30 +1389,27 @@ def cb_proceed_main(n_clicks):
     faculty_loads = dict(_app_state["r1_faculty_loads"])
     faculty_map   = {f.id: f for f in faculty}
 
-    # CPI-Fill: run automatically — no manual picker needed
+    # CPI-Fill: run Phase 1 then pause for confirmation before Phase 2.
     if ALLOCATION_POLICY == "cpi_fill":
         snaps = _app_state["snapshots"]
         try:
-            assignments, snaps, phase2_skipped = cpi_fill_allocation(
+            assignments, faculty_loads, snaps, stats = cpi_fill_phase1(
                 students, faculty, assignments, faculty_loads, snaps,
             )
         except Exception as e:
             return (
-                html.Span(f"✗ CPI-Fill error: {e}", className="text-danger"),
+                html.Span(f"✗ CPI-Fill Phase 1 error: {e}", className="text-danger"),
                 "r1_done",
                 dash.no_update, dash.no_update, dash.no_update,
             )
         _app_state["snapshots"]             = snaps
         _app_state["current_assignments"]   = assignments
         _app_state["current_faculty_loads"] = faculty_loads
-        _app_state["phase"]                 = "complete"
-        metrics = compute_metrics(students, assignments, F=len(faculty))
-        _app_state["metrics"] = metrics
+        _app_state["phase"]                 = "cpi_phase1_done"
         n = len(snaps)
         marks = {i: str(snaps[i].step) for i in range(0, n, max(1, n // 10))}
-        content = _finalize_prompt(assignments, faculty_loads, faculty,
-                                   phase2_skipped=phase2_skipped)
-        return content, "complete", n - 1, marks, n - 1
+        content = _cpi_phase1_report(stats)
+        return content, "cpi_phase1_done", n - 1, marks, n - 1
 
     # Manual allocation for least_loaded / nonempty
     # Build queue in tier priority order, each tier by CPI desc, unassigned only
@@ -1443,6 +1439,56 @@ def cb_proceed_main(n_clicks):
     run     = _app_state["main_run"]
     content = _render_student_picker(queue[0], faculty_map, faculty_loads, meta, 0, len(queue), run=run)
     return content, "main_alloc", dash.no_update, dash.no_update, dash.no_update
+
+
+# ---------------------------------------------------------------------------
+# Callback — proceed to CPI-Fill Phase 2 (after user confirmation)
+# ---------------------------------------------------------------------------
+
+@app.callback(
+    Output("main-alloc-panel", "children",  allow_duplicate=True),
+    Output("store-phase",      "data",      allow_duplicate=True),
+    Output("step-slider",      "max",       allow_duplicate=True),
+    Output("step-slider",      "marks",     allow_duplicate=True),
+    Output("step-slider",      "value",     allow_duplicate=True),
+    Input("btn-cpi-proceed-phase2", "n_clicks"),
+    prevent_initial_call=True,
+)
+def cb_cpi_proceed_phase2(n_clicks):
+    if not n_clicks:
+        return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
+
+    students      = _app_state["students"]
+    faculty       = _app_state["faculty"]
+    assignments   = dict(_app_state["current_assignments"])
+    faculty_loads = dict(_app_state["current_faculty_loads"])
+    snaps         = _app_state["snapshots"]
+
+    try:
+        assignments, snaps, phase2_skipped = cpi_fill_phase2(
+            students, faculty, assignments, faculty_loads, snaps,
+        )
+    except Exception as e:
+        return (
+            html.Span(f"✗ CPI-Fill Phase 2 error: {e}", className="text-danger"),
+            "cpi_phase1_done",
+            dash.no_update, dash.no_update, dash.no_update,
+        )
+
+    _app_state["snapshots"]             = snaps
+    _app_state["current_assignments"]   = assignments
+    _app_state["current_faculty_loads"] = faculty_loads
+    _app_state["phase"]                 = "complete"
+    metrics = compute_metrics(
+        students, assignments, len(faculty),
+        faculty_ids=[f.id for f in faculty],
+    )
+    _app_state["metrics"] = metrics
+    n = len(snaps)
+    marks = {i: str(snaps[i].step) for i in range(0, n, max(1, n // 10))}
+    content = _finalize_prompt(assignments, faculty_loads, faculty,
+                               phase2_skipped=phase2_skipped)
+    return content, "complete", n - 1, marks, n - 1
 
 
 # ---------------------------------------------------------------------------
@@ -1608,6 +1654,26 @@ def _build_completion_panel(
         pop_table,
         html.Hr(),
         metrics_panel,
+    ])
+
+
+def _cpi_phase1_report(stats: dict) -> "html.Div":
+    """
+    Return the Phase 1 completion panel shown after CPI-Fill Phase 1 stops.
+    Displays assigned / unassigned / empty-labs counts and a proceed button.
+    """
+    assigned   = stats["total_students"] - stats["unassigned_count"]
+    unassigned = stats["unassigned_count"]
+    empty_labs = stats["empty_labs_count"]
+    return html.Div([
+        dbc.Alert(
+            [html.Strong("Phase 1 complete. "),
+             f"{assigned} assigned, {unassigned} unassigned, "
+             f"{empty_labs} empty lab{'s' if empty_labs != 1 else ''}."],
+            color="info", className="mb-3",
+        ),
+        dbc.Button("Proceed to Phase 2 →", id="btn-cpi-proceed-phase2",
+                   color="primary"),
     ])
 
 
