@@ -1070,18 +1070,16 @@ def cb_run(n_phase0, n_full, loaded):
                 )
             except Exception as e:
                 return f"✗ CPI-Fill error: {e}", "idle", 0, {}, 0
-            _app_state["snapshots"]           = snaps
-            _app_state["current_assignments"] = assignments
-            _app_state["phase"]               = "complete"
+            _app_state["snapshots"]             = snaps
+            _app_state["current_assignments"]   = assignments
+            _app_state["current_faculty_loads"] = faculty_loads
+            _app_state["phase"]                 = "complete"
             metrics = compute_metrics(students, assignments, F=len(faculty))
             _app_state["metrics"] = metrics
             n = len(snaps)
             marks = {i: str(snaps[i].step) for i in range(0, n, max(1, n // 10))}
-            assigned   = sum(1 for v in assignments.values() if v is not None)
-            unassigned = sum(1 for v in assignments.values() if v is None)
-            msg = (f"CPI-Fill complete — {assigned} assigned, {unassigned} unassigned. "
-                   "See snapshot timeline for Phase 1 / Phase 2 boundary.")
-            return msg, "complete", n - 1, marks, n - 1
+            content = _finalize_prompt(assignments, faculty_loads, faculty)
+            return content, "complete", n - 1, marks, n - 1
 
         # For least_loaded / nonempty: populate Round-1 candidate lists;
         # pause for operator picks.
@@ -1165,6 +1163,27 @@ def cb_r1_panel(phase):
                 html.Td(dbc.Badge(s.tier, color=tier_color.get(s.tier, "secondary")) if s else "—"),
             ]))
 
+        r1_table = (
+            dbc.Table([
+                html.Thead(html.Tr([html.Th("Faculty"), html.Th("Student"), html.Th("CPI"), html.Th("Tier")])),
+                html.Tbody(rows),
+            ], bordered=True, size="sm", className="mb-3")
+            if rows
+            else html.P("No direct assignments in Round 1.", className="text-muted mb-3")
+        )
+
+        # All students assigned in Round 1 — ask for confirmation before finalising
+        if unassigned_count == 0:
+            return [
+                dbc.Alert(
+                    [html.Strong("All students assigned in Round 1. Round 2 skipped. "),
+                     "Finalize?"],
+                    color="info", className="mb-3",
+                ),
+                r1_table,
+                dbc.Button("Finalize →", id="btn-r1-finalize", color="success"),
+            ]
+
         proceed_label = (
             "Proceed to Main Allocation (auto-run) →"
             if ALLOCATION_POLICY == "cpi_fill"
@@ -1189,11 +1208,7 @@ def cb_r1_panel(phase):
                  f"{unassigned_count} student(s) proceed to main allocation."],
                 className="mb-3",
             ),
-            (dbc.Table([
-                html.Thead(html.Tr([html.Th("Faculty"), html.Th("Student"), html.Th("CPI"), html.Th("Tier")])),
-                html.Tbody(rows),
-            ], bordered=True, size="sm", className="mb-3") if rows
-            else html.P("No direct assignments in Round 1.", className="text-muted mb-3")),
+            r1_table,
             html.Div(buttons, className="d-flex"),
         ]
 
@@ -1337,20 +1352,15 @@ def cb_proceed_main(n_clicks):
                 "r1_done",
                 dash.no_update, dash.no_update, dash.no_update,
             )
-        _app_state["snapshots"]            = snaps
-        _app_state["current_assignments"]  = assignments
-        _app_state["phase"]                = "complete"
+        _app_state["snapshots"]             = snaps
+        _app_state["current_assignments"]   = assignments
+        _app_state["current_faculty_loads"] = faculty_loads
+        _app_state["phase"]                 = "complete"
         metrics = compute_metrics(students, assignments, F=len(faculty))
         _app_state["metrics"] = metrics
         n = len(snaps)
         marks = {i: str(snaps[i].step) for i in range(0, n, max(1, n // 10))}
-        assigned = sum(1 for v in assignments.values() if v is not None)
-        unassigned = sum(1 for v in assignments.values() if v is None)
-        content = html.Span(
-            f"✓ CPI-Fill complete — {assigned} assigned, {unassigned} unassigned. "
-            "See snapshot timeline for Phase 1 / Phase 2 boundary.",
-            className="text-success",
-        )
+        content = _finalize_prompt(assignments, faculty_loads, faculty)
         return content, "complete", n - 1, marks, n - 1
 
     # Manual allocation for least_loaded / nonempty
@@ -1421,21 +1431,229 @@ def cb_autorun_main(n_clicks):
             dash.no_update, dash.no_update, dash.no_update,
         )
 
-    _app_state["snapshots"]            = snaps
-    _app_state["current_assignments"]  = assignments
-    _app_state["phase"]                = "complete"
+    _app_state["snapshots"]             = snaps
+    _app_state["current_assignments"]   = assignments
+    _app_state["current_faculty_loads"] = faculty_loads
+    _app_state["phase"]                 = "complete"
     metrics = compute_metrics(students, assignments, F=len(faculty))
     _app_state["metrics"] = metrics
 
     n = len(snaps)
     marks = {i: str(snaps[i].step) for i in range(0, n, max(1, n // 10))}
-    assigned   = sum(1 for v in assignments.values() if v is not None)
-    unassigned = sum(1 for v in assignments.values() if v is None)
-    content = html.Span(
-        f"✓ Auto-run complete — {assigned} assigned, {unassigned} unassigned.",
-        className="text-success",
-    )
+    content = _finalize_prompt(assignments, faculty_loads, faculty)
     return content, "complete", n - 1, marks, n - 1
+
+
+# ---------------------------------------------------------------------------
+# Helper — build the full allocation completion panel
+# ---------------------------------------------------------------------------
+
+def _build_completion_panel(
+    assignments: dict,
+    faculty_loads: dict,
+    students: list,
+    faculty: list,
+    metrics: dict,
+    label_text: str,
+) -> "html.Div":
+    """
+    Return an html.Div with the full post-allocation view:
+    summary table (with pref rank), advisor popularity table, metrics panel.
+    Used by both the Round-1-only and Round-2 finalization callbacks.
+    """
+    faculty_map = {f.id: f for f in faculty}
+    student_map = {s.id: s for s in students}
+
+    tier_color   = {"A": "success", "B": "warning", "B1": "warning", "B2": "info", "C": "danger"}
+    summary_rows = []
+    for sid, fac_id in sorted(
+        assignments.items(),
+        key=lambda x: (
+            student_map.get(x[0], Student(x[0], "", 0, [])).tier or "Z",
+            -(student_map[x[0]].cpi if x[0] in student_map else 0),
+        ),
+    ):
+        s = student_map.get(sid)
+        f = faculty_map.get(fac_id) if fac_id else None
+        try:
+            rank = s.preferences.index(fac_id) + 1 if (s and fac_id) else None
+        except ValueError:
+            rank = None
+        summary_rows.append(html.Tr([
+            html.Td(s.name if s else sid),
+            html.Td(f"{s.cpi:.2f}" if s else "—"),
+            html.Td(dbc.Badge(s.tier, color=tier_color.get(s.tier, "secondary")) if s else "—"),
+            html.Td(f.name if f else html.Span("Unassigned", className="text-danger")),
+            html.Td(str(rank) if rank else "—", className="text-center"),
+        ]))
+
+    pop: dict = {1: {}, 2: {}, 3: {}}
+    for s in students:
+        for rank_idx, pfid in enumerate(s.preferences[:3], start=1):
+            entry = pop[rank_idx].setdefault(pfid, {"total": 0})
+            entry["total"] += 1
+            entry[s.tier] = entry.get(s.tier, 0) + 1
+    all_pop_fids = sorted(
+        {pfid for r in pop.values() for pfid in r},
+        key=lambda pfid: -max(pop[r].get(pfid, {}).get("total", 0) for r in (1, 2, 3)),
+    )
+
+    def _cell(pfid, rank_idx):
+        entry = pop[rank_idx].get(pfid)
+        if not entry or entry["total"] == 0:
+            return html.Td("—", className="text-muted text-center")
+        tier_parts = [f"{t}:{entry[t]}" for t in ("A", "B1", "B2", "B", "C") if entry.get(t)]
+        return html.Td([
+            html.Span(str(entry["total"]), className="fw-bold"),
+            html.Br(),
+            html.Span("  ".join(tier_parts), className="text-muted",
+                      style={"fontSize": "0.78em"}),
+        ], className="text-center")
+
+    pop_rows = [
+        html.Tr([
+            html.Td(faculty_map[pfid].name if pfid in faculty_map else pfid),
+            _cell(pfid, 1), _cell(pfid, 2), _cell(pfid, 3),
+        ])
+        for pfid in all_pop_fids
+    ]
+    pop_table = dbc.Table([
+        html.Thead(html.Tr([
+            html.Th("Advisor"),
+            html.Th("Choice #1", className="text-center"),
+            html.Th("Choice #2", className="text-center"),
+            html.Th("Choice #3", className="text-center"),
+        ])),
+        html.Tbody(pop_rows),
+    ], bordered=True, hover=True, striped=True, size="sm")
+
+    metrics_panel = _render_metrics_panel(metrics)
+    assigned_count   = sum(1 for v in assignments.values() if v is not None)
+    unassigned_count = sum(1 for v in assignments.values() if v is None)
+    empty_labs       = sum(1 for f in faculty if faculty_loads.get(f.id, 0) == 0)
+
+    return html.Div([
+        dbc.Alert(
+            [html.Strong(f"✓ {label_text}. "),
+             f"{assigned_count} assigned, {unassigned_count} unassigned, "
+             f"{empty_labs} empty lab{'s' if empty_labs != 1 else ''}."],
+            color="success", className="mb-3",
+        ),
+        dbc.Button("⬇ Save report (CSV)", id="btn-save-report",
+                   color="outline-secondary", size="sm", className="mb-3"),
+        dbc.Table([
+            html.Thead(html.Tr([
+                html.Th("Student"), html.Th("CPI"),
+                html.Th("Tier"), html.Th("Advisor"),
+                html.Th("Pref Rank", className="text-center"),
+            ])),
+            html.Tbody(summary_rows),
+        ], bordered=True, hover=True, striped=True, size="sm"),
+        html.Hr(),
+        html.H5("Advisor popularity", className="mt-2 mb-0"),
+        html.P("Total students per advisor per choice (tier breakdown: A · B · C).",
+               className="text-muted small"),
+        pop_table,
+        html.Hr(),
+        metrics_panel,
+    ])
+
+
+def _finalize_prompt(assignments: dict, faculty_loads: dict, faculty: list) -> "html.Div":
+    """
+    Return the 'Allocation complete — Finalize?' confirmation widget shown
+    after Round 2 (manual, auto-run, or CPI-Fill) completes.
+    """
+    assigned_count   = sum(1 for v in assignments.values() if v is not None)
+    unassigned_count = sum(1 for v in assignments.values() if v is None)
+    empty_labs       = sum(1 for f in faculty if faculty_loads.get(f.id, 0) == 0)
+    return html.Div([
+        dbc.Alert(
+            [html.Strong("✓ Allocation complete. "),
+             f"{assigned_count} assigned, {unassigned_count} unassigned, "
+             f"{empty_labs} empty lab{'s' if empty_labs != 1 else ''}. Finalize?"],
+            color="success", className="mb-3",
+        ),
+        dbc.Button("Finalize →", id="btn-finalize-main", color="success"),
+    ])
+
+
+# ---------------------------------------------------------------------------
+# Callback — finalise a Round-1-only allocation (all students assigned in R1)
+# ---------------------------------------------------------------------------
+
+@app.callback(
+    Output("main-alloc-panel", "children",  allow_duplicate=True),
+    Output("store-phase",      "data",      allow_duplicate=True),
+    Output("step-slider",      "max",       allow_duplicate=True),
+    Output("step-slider",      "marks",     allow_duplicate=True),
+    Output("step-slider",      "value",     allow_duplicate=True),
+    Input("btn-r1-finalize",   "n_clicks"),
+    prevent_initial_call=True,
+)
+def cb_r1_finalize(n_clicks):
+    if not n_clicks:
+        return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
+
+    students      = _app_state["students"]
+    faculty       = _app_state["faculty"]
+    assignments   = dict(_app_state["r1_assignments"])
+    faculty_loads = dict(_app_state["r1_faculty_loads"])
+    snaps         = _app_state["snapshots"]
+
+    # Append Final snapshot
+    step = (snaps.last().step + 1) if snaps and snaps.last() else 1
+    snaps.append(AllocationSnapshot(
+        step=step,
+        phase="Final",
+        event=(f"Allocation complete (Round 1 only) | "
+               f"assigned={sum(1 for v in assignments.values() if v is not None)} "
+               f"| unassigned=0"),
+        assignments=dict(assignments),
+        faculty_loads=dict(faculty_loads),
+        unassigned=set(),
+    ))
+
+    _app_state["snapshots"]             = snaps
+    _app_state["current_assignments"]   = assignments
+    _app_state["current_faculty_loads"] = faculty_loads
+    _app_state["phase"]                 = "complete"
+
+    metrics = compute_metrics(students, assignments, F=len(faculty))
+    _app_state["metrics"] = metrics
+
+    content = _build_completion_panel(
+        assignments, faculty_loads, students, faculty, metrics,
+        "Allocation complete (Round 1 only)",
+    )
+    n = len(snaps)
+    marks = {i: str(snaps[i].step) for i in range(0, n, max(1, n // 10))}
+    return content, "complete", n - 1, marks, n - 1
+
+
+# ---------------------------------------------------------------------------
+# Callback — finalise a Round-2 allocation (manual, auto-run, or CPI-Fill)
+# ---------------------------------------------------------------------------
+
+@app.callback(
+    Output("main-alloc-panel", "children", allow_duplicate=True),
+    Input("btn-finalize-main", "n_clicks"),
+    prevent_initial_call=True,
+)
+def cb_finalize_main(n_clicks):
+    if not n_clicks:
+        return dash.no_update
+    assignments   = _app_state["current_assignments"]
+    faculty_loads = _app_state["current_faculty_loads"]
+    students      = _app_state["students"]
+    faculty       = _app_state["faculty"]
+    metrics       = _app_state.get("metrics") or compute_metrics(
+        students, assignments, F=len(faculty)
+    )
+    return _build_completion_panel(
+        assignments, faculty_loads, students, faculty, metrics,
+        "Allocation complete",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1505,103 +1723,14 @@ def _do_pick(fid: str) -> tuple:
         ))
         _app_state["phase"] = "complete"
 
-        student_map  = {s.id: s for s in students}
-        tier_color   = {"A": "success", "B": "warning", "B1": "warning", "B2": "info", "C": "danger"}
-        summary_rows = []
-        for sid, fac_id in sorted(
-            assignments.items(),
-            key=lambda x: (
-                student_map.get(x[0], Student(x[0], "", 0, [])).tier or "Z",
-                -(student_map[x[0]].cpi if x[0] in student_map else 0),
-            ),
-        ):
-            s = student_map.get(sid)
-            f = faculty_map.get(fac_id) if fac_id else None
-            summary_rows.append(html.Tr([
-                html.Td(s.name if s else sid),
-                html.Td(f"{s.cpi:.2f}" if s else "—"),
-                html.Td(dbc.Badge(s.tier, color=tier_color.get(s.tier, "secondary")) if s else "—"),
-                html.Td(f.name if f else html.Span("Unassigned", className="text-danger")),
-            ]))
-
-        # Advisor popularity
-        pop: dict = {1: {}, 2: {}, 3: {}}
-        for s in students:
-            for rank_idx, pfid in enumerate(s.preferences[:3], start=1):
-                entry = pop[rank_idx].setdefault(pfid, {"total": 0, "A": 0, "B": 0, "C": 0})
-                entry["total"] += 1
-                entry[s.tier] = entry.get(s.tier, 0) + 1
-
-        all_pop_fids = sorted(
-            {pfid for r in pop.values() for pfid in r},
-            key=lambda pfid: -max(pop[r].get(pfid, {}).get("total", 0) for r in (1, 2, 3)),
-        )
-
-        def _cell(pfid, rank_idx):
-            entry = pop[rank_idx].get(pfid)
-            if not entry or entry["total"] == 0:
-                return html.Td("—", className="text-muted text-center")
-            tier_parts = [f"{t}:{entry[t]}" for t in ("A", "B1", "B2", "B", "C") if entry.get(t)]
-            return html.Td([
-                html.Span(str(entry["total"]), className="fw-bold"),
-                html.Br(),
-                html.Span("  ".join(tier_parts), className="text-muted",
-                          style={"fontSize": "0.78em"}),
-            ], className="text-center")
-
-        pop_rows = [
-            html.Tr([
-                html.Td(faculty_map[pfid].name if pfid in faculty_map else pfid),
-                _cell(pfid, 1), _cell(pfid, 2), _cell(pfid, 3),
-            ])
-            for pfid in all_pop_fids
-        ]
-        pop_table = dbc.Table([
-            html.Thead(html.Tr([
-                html.Th("Advisor"),
-                html.Th("Choice #1", className="text-center"),
-                html.Th("Choice #2", className="text-center"),
-                html.Th("Choice #3", className="text-center"),
-            ])),
-            html.Tbody(pop_rows),
-        ], bordered=True, hover=True, striped=True, size="sm")
+        # Compute and store metrics (faculty_loads IS _app_state["current_faculty_loads"])
+        metrics = compute_metrics(students, assignments, len(faculty))
+        _app_state["metrics"] = metrics
 
         n = len(snaps)
         marks = {i: str(snaps[i].step) for i in range(0, n, max(1, n // 10))}
-        assigned_count = len(assignments) - len(still_unassigned)
-        empty_labs     = sum(1 for f in faculty if faculty_loads.get(f.id, 0) == 0)
-
-        # Compute and store metrics
-        metrics = compute_metrics(_app_state["students"], assignments, len(faculty))
-        _app_state["metrics"] = metrics
-        metrics_panel = _render_metrics_panel(metrics)
-
-        content = html.Div([
-            dbc.Alert(
-                [html.Strong("✓ Main allocation complete. "),
-                 f"{assigned_count} assigned, "
-                 f"{len(still_unassigned)} unassigned, "
-                 f"{empty_labs} empty lab{'s' if empty_labs != 1 else ''}."],
-                color="success", className="mb-3",
-            ),
-            dbc.Button("⬇ Save report (CSV)", id="btn-save-report",
-                       color="outline-secondary", size="sm", className="mb-3"),
-            dbc.Table([
-                html.Thead(html.Tr([
-                    html.Th("Student"), html.Th("CPI"),
-                    html.Th("Tier"),    html.Th("Advisor"),
-                ])),
-                html.Tbody(summary_rows),
-            ], bordered=True, hover=True, striped=True, size="sm"),
-            html.Hr(),
-            html.H5("Advisor popularity", className="mt-2 mb-0"),
-            html.P("Total students per advisor per choice (tier breakdown: A · B · C).",
-                   className="text-muted small"),
-            pop_table,
-            html.Hr(),
-            metrics_panel,
-        ])
         toast_msg = [html.Strong(student.name), f" → {fac.name if fac else fid}"]
+        content = _finalize_prompt(assignments, faculty_loads, faculty)
         return content, "complete", n - 1, marks, n - 1, toast_msg, True
 
     # ---- Next student ----
