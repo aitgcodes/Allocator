@@ -140,6 +140,27 @@ def _nonempty_choice(
     return chosen, rank
 
 
+def _highest_preferred_empty(
+    student: Student,
+    faculty_map: Dict[str, Faculty],
+    faculty_loads: Dict[str, int],
+) -> Optional[Tuple[str, int]]:
+    """
+    Phase 2 selection rule for 'cpi_fill' policy.
+
+    Iterate through student.preferences in order (full list, no N_tier cap).
+    Return (faculty_id, rank_1based) for the first faculty whose
+    faculty_loads[fid] == 0 (empty lab).
+
+    Returns None if no empty lab is found — this indicates a protocol-state
+    inconsistency and the caller should raise RuntimeError.
+    """
+    for rank, fid in enumerate(student.preferences, start=1):
+        if fid in faculty_loads and faculty_loads[fid] == 0:
+            return fid, rank
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Phase 0
 # ---------------------------------------------------------------------------
@@ -637,6 +658,167 @@ def main_allocation(
 
 
 # ---------------------------------------------------------------------------
+# CPI-Fill allocation — two-phase procedure
+# ---------------------------------------------------------------------------
+
+def cpi_fill_allocation(
+    students: List[Student],
+    faculty: List[Faculty],
+    assignments: Dict[str, Optional[str]],
+    faculty_loads: Dict[str, int],
+    snapshots: SnapshotList,
+) -> Tuple[Dict[str, Optional[str]], SnapshotList]:
+    """
+    CPI-Fill policy: two-phase allocation invoked in place of main_allocation.
+
+    Phase 1 — CPI-ordered pass with N_tier cap and stopping condition.
+        Processes unassigned students in descending CPI order.
+        Stops when len(unassigned) == len(empty_labs).
+
+    Phase 2 — Empty-lab fill.
+        Assigns each remaining student to their highest-preferred empty lab
+        (full preference list, no N_tier cap).
+
+    Returns (assignments, snapshots).
+    """
+    faculty_map = {f.id: f for f in faculty}
+    student_map = {s.id: s for s in students}
+    unassigned  = {sid for sid, fid in assignments.items() if fid is None}
+    empty_labs  = {fid for fid, load in faculty_loads.items() if load == 0}
+    step_ctr    = [snapshots.last().step]
+
+    U = len(unassigned)
+    E = len(empty_labs)
+
+    # --- Entry condition validation ---
+    if U < E:
+        import warnings
+        warnings.warn(
+            f"CPI-Fill: not enough students (U={U}) to guarantee non-empty labs "
+            f"(E={E}). Proceeding with Phase 2 only.",
+            stacklevel=2,
+        )
+
+    snapshots.append(_snap(
+        step_ctr, "CPIFill",
+        f"CPI-Fill begins | U={U} E={E} U−E={U - E}",
+        assignments, faculty_loads, unassigned,
+    ))
+
+    def _phase1_choice(student: Student) -> Optional[Tuple[str, int]]:
+        """
+        Phase 1 selection: highest-preferred advisor with remaining capacity.
+        No N_tier cap — full preference list, preference order (not load order).
+        """
+        for rank, fid in enumerate(student.preferences, start=1):
+            if fid in faculty_map and faculty_loads[fid] < faculty_map[fid].max_load:
+                return fid, rank
+        return None
+
+    def _phase1_assign(s: Student) -> None:
+        nonlocal phase1_assigned
+        result = _phase1_choice(s)
+        if result is None:
+            return
+        fid, rank = result
+        assignments[s.id] = fid
+        unassigned.discard(s.id)
+        faculty_loads[fid] += 1
+        if faculty_loads[fid] == 1:
+            empty_labs.discard(fid)
+        phase1_assigned += 1
+        f = faculty_map[fid]
+        snapshots.append(_snap(
+            step_ctr, "Phase1",
+            f"Phase 1 | {s.name} ({s.id}, CPI {s.cpi:.2f}) → "
+            f"{f.name} ({fid}) | pref rank {rank} | load now {faculty_loads[fid]}",
+            assignments, faculty_loads, unassigned,
+            preference_rank={s.id: rank},
+        ))
+
+    # --- Phase 1 ---
+    phase1_assigned = 0
+
+    if U == E:
+        # Skip Phase 1 entirely
+        snapshots.append(_snap(
+            step_ctr, "Phase1",
+            f"Phase 1 skipped (U == E == {U}): proceeding directly to Phase 2",
+            assignments, faculty_loads, unassigned,
+        ))
+    elif E == 0:
+        # No empty labs — run Phase 1 to completion, Phase 2 is a no-op
+        for s in _sorted_by_cpi([student_map[sid] for sid in unassigned]):
+            _phase1_assign(s)
+        snapshots.append(_snap(
+            step_ctr, "Phase1",
+            f"Phase 1 complete (E=0, no stopping condition) | "
+            f"assigned={phase1_assigned} | U={len(unassigned)} E={len(empty_labs)}",
+            assignments, faculty_loads, unassigned,
+        ))
+    else:
+        # Normal Phase 1 with stopping condition
+        for s in _sorted_by_cpi([student_map[sid] for sid in unassigned]):
+            if len(unassigned) == len(empty_labs):
+                break
+            _phase1_assign(s)
+        snapshots.append(_snap(
+            step_ctr, "Phase1",
+            f"Phase 1 complete | assigned={phase1_assigned} | "
+            f"U={len(unassigned)} E={len(empty_labs)}",
+            assignments, faculty_loads, unassigned,
+        ))
+
+    # --- Phase 2 ---
+    phase2_queue = _sorted_by_cpi([student_map[sid] for sid in unassigned])
+    snapshots.append(_snap(
+        step_ctr, "Phase2",
+        f"Phase 2 begins | {len(phase2_queue)} student(s) | "
+        f"{len(empty_labs)} empty lab(s) to fill",
+        assignments, faculty_loads, unassigned,
+    ))
+
+    for s in phase2_queue:
+        result = _highest_preferred_empty(s, faculty_map, faculty_loads)
+        if result is None:
+            raise RuntimeError(
+                f"CPI-Fill Phase 2: no empty lab found for student {s.id} ({s.name}). "
+                "Protocol-state inconsistency — check that all faculty are in the "
+                "student's preference list."
+            )
+        fid, rank = result
+        assignments[s.id] = fid
+        unassigned.discard(s.id)
+        faculty_loads[fid] += 1
+        empty_labs.discard(fid)
+        f = faculty_map[fid]
+        snapshots.append(_snap(
+            step_ctr, "Phase2",
+            f"Phase 2 | {s.name} ({s.id}, CPI {s.cpi:.2f}) → "
+            f"{f.name} ({fid}) | pref rank {rank} | load now {faculty_loads[fid]}",
+            assignments, faculty_loads, unassigned,
+            preference_rank={s.id: rank},
+        ))
+
+    snapshots.append(_snap(
+        step_ctr, "Phase2",
+        f"Phase 2 complete | assigned={len(phase2_queue)} | "
+        f"empty labs remaining={len(empty_labs)}",
+        assignments, faculty_loads, unassigned,
+    ))
+
+    still_unassigned = [sid for sid in assignments if assignments[sid] is None]
+    snapshots.append(_snap(
+        step_ctr, "Final",
+        f"Allocation complete | assigned={len(assignments)-len(still_unassigned)} "
+        f"| unassigned={len(still_unassigned)}",
+        assignments, faculty_loads, unassigned,
+    ))
+
+    return assignments, snapshots
+
+
+# ---------------------------------------------------------------------------
 # Convenience: run full allocation in one call
 # ---------------------------------------------------------------------------
 
@@ -657,7 +839,14 @@ def run_full_allocation(
     r1_picks  : optional Round-1 picks dict (see round1())
     out_dir   : if provided, Phase-0 report CSVs are written here
     policy    : assignment policy for the main allocation round.
-                "least_loaded" (default) or "nonempty".
+                "least_loaded" (default) — assign to the least-loaded eligible
+                faculty, tie-broken by preference rank.
+                "nonempty" — prefer the highest-preferred empty lab; fall back
+                to the highest-preferred faculty with remaining capacity.
+                "cpi_fill" — two-phase procedure: Phase 1 processes students
+                in CPI order (with N_tier cap) until the stopping condition
+                fires (unassigned == empty labs); Phase 2 assigns each
+                remaining student to their highest-preferred empty lab.
 
     Returns
     -------
@@ -669,14 +858,23 @@ def run_full_allocation(
                       (keys: "npss", "overflow_count", "mean_psi",
                        "per_tier", "per_student")
     """
+    _POLICIES = {"least_loaded", "nonempty", "cpi_fill"}
+    if policy not in _POLICIES:
+        raise ValueError(f"Unknown policy {policy!r}. Choose from {_POLICIES}.")
+
     students, faculty, meta, snaps = phase0(students, faculty, out_dir=out_dir)
     N_A = meta["N_A"]
     N_B = meta["N_B"]
     assignments, faculty_loads, snaps = round1(students, faculty, snaps, r1_picks)
-    assignments, snaps = main_allocation(
-        students, faculty, assignments, faculty_loads, snaps, N_A, N_B,
-        policy=policy,
-    )
+    if policy == "cpi_fill":
+        assignments, snaps = cpi_fill_allocation(
+            students, faculty, assignments, faculty_loads, snaps,
+        )
+    else:
+        assignments, snaps = main_allocation(
+            students, faculty, assignments, faculty_loads, snaps, N_A, N_B,
+            policy=policy,
+        )
     metrics = compute_metrics(students, assignments, F=len(faculty))
     return assignments, snaps, meta, metrics
 
@@ -706,14 +904,19 @@ def _cli():
     parser.add_argument(
         "--policy",
         default="least_loaded",
-        choices=["least_loaded", "nonempty"],
+        choices=["least_loaded", "nonempty", "cpi_fill"],
         help=(
             "Assignment policy for the main allocation round.\n"
             "  least_loaded : assign to the least-loaded eligible faculty,\n"
             "                 tie-broken by preference rank (default).\n"
             "  nonempty     : prefer the highest-preferred empty lab;\n"
             "                 if none are empty, assign the highest-preferred\n"
-            "                 faculty with remaining capacity."
+            "                 faculty with remaining capacity.\n"
+            "  cpi_fill     : two-phase procedure — Phase 1 processes students\n"
+            "                 in CPI order (N_tier cap) until unassigned count\n"
+            "                 equals empty-lab count; Phase 2 assigns each\n"
+            "                 remaining student to their highest-preferred\n"
+            "                 empty lab (full preference list, no cap)."
         ),
     )
     parser.add_argument(
@@ -724,19 +927,6 @@ def _cli():
             "Skip Phase 0 and load tier assignments from an existing\n"
             "phase0_report.csv + phase0_meta.csv in REPORT_DIR.\n"
             "Still requires --faculty for capacity data."
-        ),
-    )
-    parser.add_argument(
-        "--policy",
-        default="least_loaded",
-        choices=["least_loaded", "nonempty"],
-        help=(
-            "Assignment policy for the main allocation round.\n"
-            "  least_loaded : assign to the least-loaded eligible faculty,\n"
-            "                 tie-broken by preference rank (default).\n"
-            "  nonempty     : prefer the highest-preferred empty lab;\n"
-            "                 if none are empty, assign the highest-preferred\n"
-            "                 faculty with remaining capacity."
         ),
     )
 

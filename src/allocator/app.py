@@ -89,6 +89,7 @@ from .allocation import (
     _least_loaded_choice,
     _nonempty_choice,
     build_r1_candidate_lists,
+    cpi_fill_allocation,
     main_allocation,
     phase0,
     round1,
@@ -682,6 +683,8 @@ def _landing_layout() -> dbc.Container:
                                  "value": "least_loaded"},
                                 {"label": "Highest preferred with vacancy",
                                  "value": "nonempty"},
+                                {"label": "CPI-Fill (two-phase)",
+                                 "value": "cpi_fill"},
                             ],
                             value="least_loaded",
                             clearable=False,
@@ -806,6 +809,11 @@ def cb_landing_policy_desc(value):
         return ("Prioritises the highest-preferred advisor with no students yet assigned. "
                 "Falls back to the highest-preferred advisor with remaining capacity "
                 "if no empty labs exist.")
+    if value == "cpi_fill":
+        return ("Two-phase procedure: Phase 1 processes students in descending CPI order "
+                "(N_tier cap) until the number of unassigned students equals the number "
+                "of empty labs; Phase 2 assigns each remaining student to their "
+                "highest-preferred empty lab (full preference list, no cap).")
     return ("Assigns to the least-loaded eligible advisor, "
             "with ties broken by preference rank.")
 
@@ -840,8 +848,12 @@ def cb_toggle_pages(pathname):
     Input("store-policy", "data"),
 )
 def cb_policy_badge(policy):
-    label = "Highest preferred with vacancy" if policy == "nonempty" else "Least-loaded · highest preferred"
-    color = "info" if policy == "nonempty" else "secondary"
+    if policy == "nonempty":
+        label, color = "Highest preferred with vacancy", "info"
+    elif policy == "cpi_fill":
+        label, color = "CPI-Fill (two-phase)", "warning"
+    else:
+        label, color = "Least-loaded · highest preferred", "secondary"
     return dbc.Badge(f"Policy: {label}", color=color, className="mb-2")
 
 
@@ -1129,10 +1141,28 @@ def cb_r1_panel(phase):
                 html.Td(dbc.Badge(s.tier, color=tier_color.get(s.tier, "secondary")) if s else "—"),
             ]))
 
+        proceed_label = (
+            "Proceed to Main Allocation (auto-run) →"
+            if ALLOCATION_POLICY == "cpi_fill"
+            else "Proceed to Main Allocation (manual) →"
+        )
+        buttons = [
+            dbc.Button(proceed_label, id="btn-proceed-main", color="success"),
+        ]
+        if ALLOCATION_POLICY != "cpi_fill":
+            buttons.append(
+                dbc.Button(
+                    "Auto-run allocation →",
+                    id="btn-autorun-main",
+                    color="primary",
+                    className="ms-2",
+                )
+            )
+
         return [
             html.P(
                 [html.Strong(f"{len(assigned)} direct assignment(s)"), f" in Round 1. "
-                 f"{unassigned_count} student(s) proceed to manual main allocation."],
+                 f"{unassigned_count} student(s) proceed to main allocation."],
                 className="mb-3",
             ),
             (dbc.Table([
@@ -1140,7 +1170,7 @@ def cb_r1_panel(phase):
                 html.Tbody(rows),
             ], bordered=True, size="sm", className="mb-3") if rows
             else html.P("No direct assignments in Round 1.", className="text-muted mb-3")),
-            dbc.Button("Proceed to Main Allocation →", id="btn-proceed-main", color="success"),
+            html.Div(buttons, className="d-flex"),
         ]
 
     if phase in ("main_alloc", "complete"):
@@ -1252,13 +1282,16 @@ def cb_reset_r1(n_clicks):
 
 @app.callback(
     Output("main-alloc-panel", "children"),
-    Output("store-phase",      "data",    allow_duplicate=True),
+    Output("store-phase",      "data",     allow_duplicate=True),
+    Output("step-slider",      "max",      allow_duplicate=True),
+    Output("step-slider",      "marks",    allow_duplicate=True),
+    Output("step-slider",      "value",    allow_duplicate=True),
     Input("btn-proceed-main",  "n_clicks"),
     prevent_initial_call=True,
 )
 def cb_proceed_main(n_clicks):
     if not n_clicks:
-        return dash.no_update, dash.no_update
+        return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
 
     students      = _app_state["students"]
     faculty       = _app_state["faculty"]
@@ -1267,6 +1300,36 @@ def cb_proceed_main(n_clicks):
     faculty_loads = dict(_app_state["r1_faculty_loads"])
     faculty_map   = {f.id: f for f in faculty}
 
+    # CPI-Fill: run automatically — no manual picker needed
+    if ALLOCATION_POLICY == "cpi_fill":
+        snaps = _app_state["snapshots"]
+        try:
+            assignments, snaps = cpi_fill_allocation(
+                students, faculty, assignments, faculty_loads, snaps,
+            )
+        except Exception as e:
+            return (
+                html.Span(f"✗ CPI-Fill error: {e}", className="text-danger"),
+                "r1_done",
+                dash.no_update, dash.no_update, dash.no_update,
+            )
+        _app_state["snapshots"]            = snaps
+        _app_state["current_assignments"]  = assignments
+        _app_state["phase"]                = "complete"
+        metrics = compute_metrics(students, assignments, F=len(faculty))
+        _app_state["metrics"] = metrics
+        n = len(snaps)
+        marks = {i: str(snaps[i].step) for i in range(0, n, max(1, n // 10))}
+        assigned = sum(1 for v in assignments.values() if v is not None)
+        unassigned = sum(1 for v in assignments.values() if v is None)
+        content = html.Span(
+            f"✓ CPI-Fill complete — {assigned} assigned, {unassigned} unassigned. "
+            "See snapshot timeline for Phase 1 / Phase 2 boundary.",
+            className="text-success",
+        )
+        return content, "complete", n - 1, marks, n - 1
+
+    # Manual allocation for least_loaded / nonempty
     # Build queue in tier priority order, each tier by CPI desc, unassigned only
     tier_order = ("A", "B1", "B2", "C") if meta.get("mode") == "quartile" else ("A", "B", "C")
     queue = []
@@ -1285,11 +1348,70 @@ def cb_proceed_main(n_clicks):
     _app_state["phase"]                 = "main_alloc"
 
     if not queue:
-        return html.Span("All students already assigned in Round 1.", className="text-success"), "complete"
+        return (
+            html.Span("All students already assigned in Round 1.", className="text-success"),
+            "complete",
+            dash.no_update, dash.no_update, dash.no_update,
+        )
 
     run     = _app_state["main_run"]
     content = _render_student_picker(queue[0], faculty_map, faculty_loads, meta, 0, len(queue), run=run)
-    return content, "main_alloc"
+    return content, "main_alloc", dash.no_update, dash.no_update, dash.no_update
+
+
+# ---------------------------------------------------------------------------
+# Callback — auto-run main allocation (least_loaded / nonempty)
+# ---------------------------------------------------------------------------
+
+@app.callback(
+    Output("main-alloc-panel", "children",  allow_duplicate=True),
+    Output("store-phase",      "data",      allow_duplicate=True),
+    Output("step-slider",      "max",       allow_duplicate=True),
+    Output("step-slider",      "marks",     allow_duplicate=True),
+    Output("step-slider",      "value",     allow_duplicate=True),
+    Input("btn-autorun-main",  "n_clicks"),
+    prevent_initial_call=True,
+)
+def cb_autorun_main(n_clicks):
+    if not n_clicks:
+        return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
+
+    students      = _app_state["students"]
+    faculty       = _app_state["faculty"]
+    meta          = _app_state["meta"]
+    assignments   = dict(_app_state["r1_assignments"])
+    faculty_loads = dict(_app_state["r1_faculty_loads"])
+    snaps         = _app_state["snapshots"]
+    N_A           = meta["N_A"]
+    N_B           = meta["N_B"]
+
+    try:
+        assignments, snaps = main_allocation(
+            students, faculty, assignments, faculty_loads, snaps, N_A, N_B,
+            policy=ALLOCATION_POLICY,
+        )
+    except Exception as e:
+        return (
+            html.Span(f"✗ Auto-run error: {e}", className="text-danger"),
+            "r1_done",
+            dash.no_update, dash.no_update, dash.no_update,
+        )
+
+    _app_state["snapshots"]            = snaps
+    _app_state["current_assignments"]  = assignments
+    _app_state["phase"]                = "complete"
+    metrics = compute_metrics(students, assignments, F=len(faculty))
+    _app_state["metrics"] = metrics
+
+    n = len(snaps)
+    marks = {i: str(snaps[i].step) for i in range(0, n, max(1, n // 10))}
+    assigned   = sum(1 for v in assignments.values() if v is not None)
+    unassigned = sum(1 for v in assignments.values() if v is None)
+    content = html.Span(
+        f"✓ Auto-run complete — {assigned} assigned, {unassigned} unassigned.",
+        className="text-success",
+    )
+    return content, "complete", n - 1, marks, n - 1
 
 
 # ---------------------------------------------------------------------------
@@ -1905,12 +2027,15 @@ if __name__ == "__main__":
     parser.add_argument(
         "--policy",
         default=None,
-        choices=["least_loaded", "nonempty"],
+        choices=["least_loaded", "nonempty", "cpi_fill"],
         help=(
             "Override the allocation policy set in ALLOCATION_POLICY.\n"
             "  least_loaded : least-loaded eligible faculty, tie-broken by preference rank.\n"
             "  nonempty     : prefer the highest-preferred empty lab; fall back to\n"
-            "                 highest-preferred faculty with remaining capacity."
+            "                 highest-preferred faculty with remaining capacity.\n"
+            "  cpi_fill     : two-phase procedure — Phase 1 in CPI order with N_tier\n"
+            "                 cap until stopping condition fires; Phase 2 assigns each\n"
+            "                 remaining student to their highest-preferred empty lab."
         ),
     )
     args = parser.parse_args()
