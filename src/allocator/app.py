@@ -474,13 +474,19 @@ def _render_metrics_panel(metrics: dict) -> html.Div:
     overflow_count = metrics.get("overflow_count", 0)
     per_tier       = metrics.get("per_tier", {})
 
-    # NPSS colour band
+    # NPSS colour band and interpretation label
     if npss >= 0.90:
         npss_color = "success"
+        npss_label = "Excellent"
     elif npss >= 0.75:
         npss_color = "warning"
+        npss_label = "Good"
+    elif npss >= 0.60:
+        npss_color = "danger"
+        npss_label = "Moderate"
     else:
         npss_color = "danger"
+        npss_label = "Poor"
 
     # Primary NPSS row
     primary_card = dbc.Card(dbc.CardBody([
@@ -488,6 +494,11 @@ def _render_metrics_panel(metrics: dict) -> html.Div:
             html.Span(
                 f"{npss:.4f}",
                 style={"fontSize": "2rem", "fontWeight": "bold"},
+                className=f"text-{npss_color}",
+            ),
+            html.Span(
+                f" — {npss_label}",
+                style={"fontSize": "1rem", "fontWeight": "600"},
                 className=f"text-{npss_color}",
             ),
             html.Div("NPSS (primary)", className="fw-bold"),
@@ -2317,7 +2328,27 @@ def cb_download_metrics(n_clicks):
     student_map = {s.id: s for s in students}
     per_student = metrics.get("per_student", {})
 
-    lines = ["student_id,name,tier,n_tier,assigned_rank,within_window,npss_score,cpi_weight,psi_score"]
+    # Summary header block
+    npss       = metrics.get("npss", 0.0)
+    mean_psi   = metrics.get("mean_psi", 0.0)
+    overflow   = metrics.get("overflow_count", 0)
+    if npss >= 0.90:
+        npss_rating = "Excellent"
+    elif npss >= 0.75:
+        npss_rating = "Good"
+    elif npss >= 0.60:
+        npss_rating = "Moderate"
+    else:
+        npss_rating = "Poor"
+
+    lines = [
+        f"# NPSS,{npss:.6f}",
+        f"# NPSS_rating,{npss_rating}",
+        f"# mean_PSI,{mean_psi:.6f}",
+        f"# overflow_count,{overflow}",
+        "#",
+        "student_id,name,tier,n_tier,assigned_rank,within_window,npss_score,cpi_weight,psi_score",
+    ]
     for sid, sd in sorted(per_student.items()):
         s      = student_map.get(sid)
         name   = s.name if s else ""
