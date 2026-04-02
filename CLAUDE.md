@@ -32,6 +32,22 @@ PYTHONPATH=src python -m allocator.allocation --phase0-only \
   --out reports/
 ```
 
+**Full allocation CLI (with policy selection):**
+```bash
+PYTHONPATH=src python -m allocator.allocation \
+  --students data/sample_students.csv \
+  --faculty data/sample_faculty.csv \
+  --policy least_loaded   # or: nonempty | cpi_fill
+  --out reports/
+```
+
+**Policy comparison study (stats folder):**
+```bash
+PYTHONPATH=src python stats/run_study.py
+# → generates 4 synthetic datasets + runs both policies on all 5 datasets
+# → writes stats/policy_report.md
+```
+
 **Preprocess form exports:**
 ```bash
 python scripts/make_preference_sheet.py form_responses.csv
@@ -62,9 +78,9 @@ Load CSVs → Phase 0 (tier + N_tier + max_load)
 
 ### Allocation policies (set via `ALLOCATION_POLICY` in `app.py`)
 
-- **`least_loaded`** — assign to least-loaded advisor within student's N_tier window
-- **`nonempty`** — prefer advisors with zero load (empty labs); fall back to least-loaded
-- **`cpi_fill`** — two-phase: Phase 1 processes students in CPI order (stops when `unassigned == empty_labs`); Phase 2 assigns remaining students to their highest-preferred empty lab
+- **`least_loaded`** *(default)* — Phase 0 → Round 1 → class-wise assignment to the least-loaded advisor within the student's `N_tier` window; ties broken by preference rank. See `docs/policy_least_loaded.md`.
+- **`nonempty`** — Phase 0 → Round 1 → class-wise assignment preferring the highest-preferred **empty lab** (load = 0) first; falls back to highest-preferred advisor with remaining capacity. See `docs/policy_nonempty.md`.
+- **`cpi_fill`** — Phase 0 → CPI-Fill Phase 1 (students processed in descending CPI order, assigned to highest-preferred advisor with capacity, stops when `unassigned == empty_labs`) → Phase 2 (each remaining student goes to their highest-preferred empty lab). Round 1 is **skipped**. See `docs/policy_cpi_fill.md`.
 
 ### Snapshot/replay model
 
@@ -96,3 +112,7 @@ Sample data: `data/sample_students.csv` (24 students, 8 faculty)
 
 - `MSThesisAllocationProtocol.md` — full protocol specification
 - `NPSS_Metric.md` — NPSS/PSI metric definitions
+- `docs/policy_least_loaded.md` — `least_loaded` policy: pipeline, assignment rule, trade-offs
+- `docs/policy_nonempty.md` — `nonempty` policy: pipeline, assignment rule, trade-offs
+- `docs/policy_cpi_fill.md` — `cpi_fill` policy: Phase 1/2 mechanics, stopping condition, trade-offs
+- `stats/policy_report.md` — empirical comparison of `least_loaded` vs `cpi_fill` across 5 datasets

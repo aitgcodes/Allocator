@@ -7,8 +7,20 @@ An interactive web app for assigning MS thesis advisors to students following a 
 ## What it does
 
 1. **Phase 0** — Classifies students into tiers (A / B / C) based on CPI percentiles and sets each faculty's maximum student load.
-2. **Round 1** — Each faculty picks one student from those who listed them as their first choice.
-3. **Main allocation** — Remaining students are assigned interactively, class-by-class in decreasing CPI order. The app recommends the least-loaded highest-preferred advisor for each student; manual overrides require confirmation.
+2. **Round 1** — Each faculty picks one student from those who listed them as their first choice *(skipped under the `cpi_fill` policy)*.
+3. **Main allocation** — Remaining students are assigned interactively following the active allocation policy (see below). The app recommends an advisor for each student; manual overrides require confirmation.
+
+### Allocation policies
+
+Three policies are available, selected by setting `ALLOCATION_POLICY` in `app.py` or via the `--policy` CLI flag:
+
+| Policy | Pipeline | Core rule | Best for |
+|--------|----------|-----------|----------|
+| `least_loaded` *(default)* | Phase 0 → Round 1 → Class A→B→C | Assign to the least-loaded eligible advisor within the student's `N_tier` window | Balanced advisor loads; robust default |
+| `nonempty` | Phase 0 → Round 1 → Class A→B→C | Prefer the highest-preferred **empty lab** first; fall back to highest-preferred with capacity | Departments requiring every advisor to receive at least one student as early as possible |
+| `cpi_fill` | Phase 0 → CPI-Fill Phase 1 → Phase 2 | Process students in strict descending CPI order; Phase 2 guarantees no empty labs | Merit-first access; guaranteed no empty labs |
+
+Full descriptions: [`docs/policy_least_loaded.md`](docs/policy_least_loaded.md) · [`docs/policy_nonempty.md`](docs/policy_nonempty.md) · [`docs/policy_cpi_fill.md`](docs/policy_cpi_fill.md)
 
 ---
 
@@ -205,13 +217,23 @@ Sample files are in `data/`.
 ```
 src/allocator/
   app.py          – Dash application and callbacks
-  allocation.py   – Phase 0 / Round 1 / main allocation logic
+  allocation.py   – Phase 0 / Round 1 / main allocation / CPI-Fill logic
   data_loader.py  – CSV/Excel ingestion and Phase-0 report I/O
   state.py        – Data classes (Student, Faculty, AllocationSnapshot)
   visualizer.py   – Plotly figure builders
+  metrics.py      – NPSS and PSI satisfaction metrics
 scripts/
   make_preference_sheet.py – Convert a form-export CSV into preference_sheet.csv and faculty_list.csv
 data/             – Sample student and faculty CSV files
-docs/             – User manual (PDF)
+docs/             – User manual (PDF) and policy reference docs
+  policy_least_loaded.md  – least_loaded policy specification
+  policy_nonempty.md      – nonempty policy specification
+  policy_cpi_fill.md      – cpi_fill policy specification
+stats/            – Policy comparison study
+  run_study.py        – Generates synthetic datasets and runs both policies
+  policy_report.md    – Comparison report (tables, deltas, recommendations)
+  students_*.csv      – Synthetic preference sheets used in the study
 reports/          – Phase-0 reports written here
+test/             – Real preference data (preference_sheet.csv, faculty_list.csv)
+tests/            – Pytest test suite
 ```
