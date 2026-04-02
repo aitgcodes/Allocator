@@ -125,12 +125,14 @@ story += [
         ["Phase", "What happens"],
         [
             ["Phase 0", "Students are grouped into Tiers A, B, or C based on their CPI. "
-                        "Each faculty's maximum student load is also calculated."],
+                        "Each faculty's maximum student load is also calculated. "
+                        "This phase runs for all policies."],
             ["Round 1", "Each faculty member picks one student from among those who listed "
-                        "that faculty as their first choice (highest CPI wins if there is a tie)."],
-            ["Main allocation", "All remaining students are assigned interactively, "
-                                "starting with the highest-CPI students. "
-                                "The app recommends the best advisor for each student; "
+                        "that faculty as their first choice (highest CPI wins if there is a tie). "
+                        "Skipped when the cpi_fill policy is active."],
+            ["Main allocation", "All remaining students are assigned following the active policy "
+                                "(least_loaded, nonempty, or cpi_fill — see Section 9). "
+                                "The app recommends an advisor for each student; "
                                 "you can accept or override."],
         ],
         col_widths=[3.5*cm, 12.2*cm],
@@ -351,10 +353,11 @@ story += [
     PageBreak(),
     h1("5.  Understanding the Recommendation"),
     p("When you reach a student during the main allocation, the app computes the "
-      "<b>protocol recommendation</b> — the single advisor that best satisfies two "
-      "criteria at once:"),
+      "<b>protocol recommendation</b> based on the active allocation policy "
+      "(see Section 9). Under the default <b>least_loaded</b> policy, the "
+      "recommendation satisfies two criteria at once:"),
     b("<b>Least loaded</b> — the advisor with the fewest students assigned so far "
-      "(among those who still have capacity)."),
+      "(among those who still have capacity and within the student's N_tier window)."),
     b("<b>Highest preferred</b> — if two advisors have the same load, the one "
       "ranked higher in the student's preference list is chosen."),
     Spacer(1, 6),
@@ -425,9 +428,114 @@ story += [
     Spacer(1, 10),
 ]
 
-# ── 9. Troubleshooting ───────────────────────────────────────────────────────
+# ── 9. Allocation policies ───────────────────────────────────────────────────
 story += [
-    h1("9.  Troubleshooting"),
+    PageBreak(),
+    h1("9.  Allocation Policies"),
+    p("The Allocator supports three assignment policies. The active policy is "
+      "set by your system administrator and determines how the main allocation "
+      "phase works. All policies share the same Phase 0 tiering step."),
+    Spacer(1, 6),
+    col_table(
+        ["Policy", "Pipeline", "Core assignment rule", "Best for"],
+        [
+            ["least_loaded\n(default)",
+             "Phase 0 → Round 1 → Class A→B→C",
+             "Assign to the least-loaded eligible advisor within the student's "
+             "N_tier preference window. Ties broken by preference rank.",
+             "Balanced advisor loads; robust general-purpose default."],
+            ["nonempty",
+             "Phase 0 → Round 1 → Class A→B→C",
+             "Prefer the highest-preferred advisor with zero current students "
+             "(empty lab). If none are empty, fall back to highest-preferred "
+             "with remaining capacity.",
+             "Departments that require every advisor to receive at least one "
+             "student as early as possible."],
+            ["cpi_fill",
+             "Phase 0 → CPI-Fill Phase 1 → Phase 2",
+             "Phase 1: process students in descending CPI order; assign to "
+             "highest-preferred advisor with capacity; stop when unassigned "
+             "count equals empty-lab count. Phase 2: each remaining student "
+             "fills their preferred empty lab. Round 1 is skipped.",
+             "Merit-first access to top advisors; guaranteed no empty labs."],
+        ],
+        col_widths=[2.8*cm, 3.8*cm, 5.5*cm, 3.6*cm],
+    ),
+    Spacer(1, 8),
+    note("Full technical specifications for each policy are in "
+         "docs/policy_least_loaded.md, docs/policy_nonempty.md, and "
+         "docs/policy_cpi_fill.md."),
+    Spacer(1, 10),
+]
+
+# ── 10. Satisfaction metrics ─────────────────────────────────────────────────
+story += [
+    h1("10.  Satisfaction Metrics"),
+    p("After the allocation completes, the app computes three complementary "
+      "metrics to evaluate the quality and fairness of the outcome."),
+    Spacer(1, 6),
+
+    h2("10.1  NPSS — Normalized Preference Satisfaction Score  (primary)"),
+    p("NPSS measures how well the allocation honours student preferences, "
+      "weighted by CPI and enforcing the tier protection window."),
+    b("For each student, a score between 0 and 1 is computed: "
+      "<b>1.0</b> = assigned to 1st choice; "
+      "<b>1/N_tier</b> = assigned to last protected choice; "
+      "<b>0</b> = assigned outside the protection window (overflow)."),
+    b("The per-student scores are aggregated using CPI-proportional weights, "
+      "so high-CPI students contribute more to the total — reflecting the "
+      "protocol's stronger preference protection for top-tier students."),
+    b("NPSS lies in [0, 1]. Scores above 0.90 are excellent; below 0.60 "
+      "indicates systematic mismatch. See <b>NPSS_Metric.md</b> for the "
+      "full definition and interpretation guide."),
+    Spacer(1, 8),
+
+    h2("10.2  PSI — Preference Satisfaction Index  (secondary)"),
+    p("PSI is a policy-agnostic, equal-weighted complement to NPSS. "
+      "It asks: on average, how near the top of their list did each student land?"),
+    b("Per-student score: PSI_i = 1 − (rank − 1) / (F − 1), where F is the "
+      "total number of faculty. This maps rank 1 to 1.0 and rank F to 0.0."),
+    b("All students receive equal weight — unlike NPSS, a Class C student's "
+      "outcome matters as much as a Class A student's."),
+    b("Divergence between NPSS and PSI is informative: if NPSS is high but "
+      "PSI is lower, top-CPI students are well served but lower-CPI students "
+      "are landing further down their lists. See <b>PSI_Metric.md</b>."),
+    Spacer(1, 8),
+
+    h2("10.3  Advisor Fairness Metrics"),
+    p("These metrics evaluate whether the allocation distributes students "
+      "equitably across faculty, rather than concentrating particular CPI "
+      "tiers at certain advisors."),
+    b("<b>Normalised CPI Entropy</b> — for each advisor, the Shannon entropy "
+      "of the tier distribution of their assigned students, normalised to [0, 1]. "
+      "1.0 = equal mix of all tiers; 0.0 = all students from a single tier. "
+      "The system-level summary reports the average entropy across all advisors."),
+    b("<b>CPI Skewness</b> — the sample skewness of the vector of per-advisor "
+      "mean CPIs. Values near 0 indicate symmetric distribution; positive "
+      "skewness means a few advisors attract disproportionately high-CPI cohorts; "
+      "negative skewness means the reverse. See <b>Advisor_Metrics.md</b>."),
+    Spacer(1, 8),
+
+    col_table(
+        ["Metric", "Range", "Higher is better?", "Purpose"],
+        [
+            ["NPSS", "[0, 1]", "Yes",
+             "CPI-weighted, tier-aware student satisfaction (primary)"],
+            ["PSI",  "[0, 1]", "Yes",
+             "Equal-weighted raw preference satisfaction (secondary)"],
+            ["Avg CPI Entropy", "[0, 1]", "Yes",
+             "Advisor-level tier diversity"],
+            ["CPI Skewness", "any real", "Closer to 0",
+             "System-level CPI concentration across advisors"],
+        ],
+        col_widths=[3.2*cm, 2*cm, 3*cm, 7.5*cm],
+    ),
+    Spacer(1, 10),
+]
+
+# ── 11. Troubleshooting ──────────────────────────────────────────────────────
+story += [
+    h1("11.  Troubleshooting"),
     col_table(
         ["Problem", "What to do"],
         [
@@ -452,8 +560,12 @@ story += [
 # Footer note
 story += [
     hr(),
-    Paragraph("For technical support or to report a bug, contact your system administrator.",
-              Note),
+    Paragraph(
+        "For technical support or to report a bug, contact your system administrator. "
+        "Full metric and policy documentation is available in the repository: "
+        "NPSS_Metric.md · PSI_Metric.md · Advisor_Metrics.md · docs/policy_*.md",
+        Note,
+    ),
 ]
 
 # ---------------------------------------------------------------------------
