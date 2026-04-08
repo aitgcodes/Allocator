@@ -1,6 +1,7 @@
 # Allocation Policy Comparison Study
 
 **Policies compared:** `least_loaded` vs `cpi_fill`
+**Abbreviations:** LL = `least_loaded`, CF = `cpi_fill` (used in table annotations and inline comparisons throughout this report)
 **Datasets:** 1 original + 4 synthetic (random, clustered, polarised, uniform_high_cpi)
 **Metrics:** NPSS (primary, CPI-weighted), PSI (secondary, equal-weighted),
   advisor avg entropy, CPI skewness of advisor load
