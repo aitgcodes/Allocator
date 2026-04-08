@@ -11,7 +11,7 @@
 
 | Dataset | Students | Faculty | Description |
 |---------|----------|---------|-------------|
-| **Original** | 44 | 31 | Real anonymised preference data from the IISER-B MS thesis allocation form. Students submitted ranked lists of all 31 faculty; CPI values span 5.6–9.7. Used as the ground-truth baseline. |
+| **Original** | 44 | 31 | Real anonymised preference data from the 2024 IISER-B MS thesis allocation form. Students submitted ranked lists of all 31 faculty; CPI values span 5.6–9.7. Used as the ground-truth baseline. |
 | **Sample 1 (Random)** | 44 | 31 | Fully synthetic cohort. Each student's preference list is an independent uniform random shuffle of all faculty, and CPI values are drawn uniformly from [5.5, 10.0]. Models a cohort with no shared popularity bias and no CPI–preference correlation. Serves as a statistical null baseline. |
 | **Sample 2 (Clustered)** | 44 | 31 | Simulates high advisor popularity concentration. 70% of students rank the same 8 "popular" faculty first (in random order), then fill the remaining 23 slots randomly; the other 30% have fully random lists. CPI is drawn uniformly from [5.5, 10.0]. Stress-tests how each policy handles bottlenecked demand on a small advisor subset. |
 | **Sample 3 (Polarised)** | 44 | 31 | Simulates a CPI-stratified preference split. Students with CPI ≥ 7.75 rank the top-half faculty (F01–F15) before the bottom-half (F16–F31), while lower-CPI students do the opposite. CPI is drawn uniformly from [5.5, 10.0]. Tests whether CPI-ordered processing (`cpi_fill`) exploits the natural alignment between merit and preference group. |
