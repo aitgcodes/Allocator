@@ -223,7 +223,7 @@ assignments already score 0 in NPSS — they are diagnostic columns, not indepen
 | NPSS (primary, ≥ 0.04) | 0 | 1 (Random) | 4 |
 | PSI (secondary, ≥ 0.025) | 1 (High-CPI) | 0 | 4 |
 | Advisor Entropy (≥ 0.02) | 1 (Polarised) | 0 | 4 |
-| CPI Skewness |abs| (≥ 0.10) | 1 (High-CPI) | 2 (Orig / Clustered) | 2 |
+| CPI Skewness (≥ 0.10, compared as \|abs\|) | 1 (High-CPI) | 2 (Orig / Clustered) | 2 |
 | Overflow Count | *(diagnostic — subsumed by NPSS)* | | |
 | % In Window | *(diagnostic — subsumed by NPSS)* | | |
 
