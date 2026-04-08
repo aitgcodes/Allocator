@@ -139,16 +139,17 @@ and declared a draw.
 ## 4. Per-Dataset Policy Deltas (cpi_fill − least_loaded)
 
 Positive ΔNPSS / ΔPSI means `cpi_fill` is better; negative means `least_loaded` is better.
-Entries marked **[draw]** did not meet the significance threshold. Entries marked **[win]** did.
+Entries marked **[draw]** did not meet the significance threshold. Entries marked **[win LL]** or **[win CF]** crossed the threshold in favour of the named policy.
+ΔSkewness = Δ|abs| = |CF| − |LL|; negative means CF has lower absolute skewness (better CPI balance across advisors).
 Overflow and % In Window columns are shown for diagnostic context only (not used to declare wins).
 
 | Dataset | ΔNPSS | ΔPSI | ΔOverflow *(diag)* | Δ% In Window *(diag)* | ΔAvg Entropy | ΔSkewness |
 |---------|-------|------|-----------|--------------|--------------|-----------|
-| Original | +0.0102 **[draw]** | −0.0220 **[draw]** | +0 | +0.0% | +0.0000 **[draw]** | −0.2564 **[cpi_fill win]** |
-| Sample 1 (Random) | +0.0829 **[cpi_fill win]** | +0.0091 **[draw]** | +0 | +0.0% | −0.0161 **[draw]** | −0.3210 **[cpi_fill win]** |
-| Sample 2 (Clustered) | −0.0275 **[draw]** | −0.0106 **[draw]** | +2 | −4.5% | +0.0161 **[draw]** | +0.1387 **[draw]** |
-| Sample 3 (Polarised) | +0.0183 **[draw]** | −0.0121 **[draw]** | +0 | +0.0% | −0.0323 **[LL win]** | −0.0464 **[draw]** |
-| Sample 4 (High-CPI) | +0.0083 **[draw]** | −0.0265 **[LL win]** | +0 | +0.0% | +0.0000 **[draw]** | −0.1285 **[cpi_fill win]** |
+| Original | +0.0102 **[draw]** | −0.0220 **[draw]** | +0 | +0.0% | +0.0000 **[draw]** | −0.2564 **[win CF]** |
+| Sample 1 (Random) | +0.0829 **[win CF]** | +0.0091 **[draw]** | +0 | +0.0% | −0.0161 **[draw]** | +0.0028 **[draw]** |
+| Sample 2 (Clustered) | −0.0275 **[draw]** | −0.0106 **[draw]** | +2 | −4.5% | +0.0161 **[draw]** | −0.1003 **[win CF]** |
+| Sample 3 (Polarised) | +0.0183 **[draw]** | −0.0121 **[draw]** | +0 | +0.0% | −0.0323 **[win LL]** | −0.0464 **[draw]** |
+| Sample 4 (High-CPI) | +0.0083 **[draw]** | −0.0265 **[win LL]** | +0 | +0.0% | +0.0000 **[draw]** | +0.1285 **[win LL]** |
 
 ## 5. Assigned Preference Rank Distributions
 
@@ -179,7 +180,7 @@ Overflow and % In Window columns are shown for diagnostic context only (not used
 - NPSS: cpi_fill=0.9685 vs LL=0.8856 (Δ=+0.083) — **cpi_fill wins; largest and most reliable delta in study**
 - PSI: near-identical (0.9727 vs 0.9636, Δ=+0.009) — **draw**
 - Advisor entropy: LL slightly higher (0.1935 vs 0.1774, Δ=−0.016) — **draw**
-- CPI skewness: cpi_fill reduces |skewness| by 0.321 — **cpi_fill wins**
+- CPI skewness: |LL|=0.159 vs |CF|=0.162, Δ=+0.003 — **draw** (signed values flip direction but magnitudes are essentially identical)
 - *Note: With random preferences, cpi_fill's ordered processing avoids contention more effectively. This is the only dataset where NPSS shows a clear, threshold-crossing policy difference.*
 
 ### Sample 2 (Clustered)
@@ -187,7 +188,8 @@ Overflow and % In Window columns are shown for diagnostic context only (not used
 - PSI: LL=0.8924 vs cpi_fill=0.8818 (Δ=−0.011) — **draw**
 - Overflow *(diagnostic)*: LL=5, cpi_fill=7 (Δ=+2) — not a deciding metric, but explains the NPSS gap: cpi_fill's serial pass exhausts popular advisors early, forcing more mid-tier students out of their preference window (scored 0 in NPSS)
 - % In Window *(diagnostic)*: LL=88.6% vs cpi_fill=84.1% (Δ=−4.5 pp) — same phenomenon; shown for context only
-- All metrics: **draw** (NPSS delta directionally favours LL but does not cross the 0.04 threshold)
+- CPI skewness: |LL|=0.120 vs |CF|=0.019, Δ=−0.100 — **CF wins**; CF produces a more evenly distributed CPI spread despite the clustered pressure
+- All other metrics: **draw** (NPSS delta directionally favours LL but does not cross the 0.04 threshold)
 - *Note: Clustered demand stresses both policies severely. The overflow and window-miss diagnostics are useful for understanding *why* both policies produce low NPSS here, but since out-of-window assignments already score 0 in NPSS, these columns add no independent evidence beyond what NPSS already captures. Neither policy resolves the structural bottleneck.*
 
 ### Sample 3 (Polarised)
@@ -201,7 +203,7 @@ Overflow and % In Window columns are shown for diagnostic context only (not used
 - NPSS: cpi_fill=0.9569 vs LL=0.9486 (Δ=+0.008) — **draw**
 - PSI: LL=0.9902 vs cpi_fill=0.9636 (Δ=−0.027) — **LL wins; largest PSI delta in study**
 - Advisor entropy: identical (0.1935 each)
-- CPI skewness: cpi_fill reduces |skewness| by 0.129 — **cpi_fill wins**
+- CPI skewness: |CF|=0.434 vs |LL|=0.306, Δ=+0.129 — **LL wins**; CF's serial pass in a uniform-CPI cohort actually increases absolute CPI concentration relative to LL
 - *Note: When the cohort is uniformly high-CPI, cpi_fill's merit-ordering provides no real differentiation — everyone is equally "meritorious". Yet its serial processing still produces a longer rank tail (max rank 31 vs 4), hurting PSI for the unlucky students at the back of the queue.*
 
 ---
@@ -221,12 +223,12 @@ assignments already score 0 in NPSS — they are diagnostic columns, not indepen
 | NPSS (primary, ≥ 0.04) | 0 | 1 (Random) | 4 |
 | PSI (secondary, ≥ 0.025) | 1 (High-CPI) | 0 | 4 |
 | Advisor Entropy (≥ 0.02) | 1 (Polarised) | 0 | 4 |
-| CPI Skewness (≥ 0.10) | 0 | 3 (Orig / Rand / High-CPI) | 2 |
+| CPI Skewness |abs| (≥ 0.10) | 1 (High-CPI) | 2 (Orig / Clustered) | 2 |
 | Overflow Count | *(diagnostic — subsumed by NPSS)* | | |
 | % In Window | *(diagnostic — subsumed by NPSS)* | | |
 
 **The central finding: the two policies are broadly equivalent across most scenarios.**
-Across the four independent deciding metrics, there are only 5 threshold-crossing results
+Across the four independent deciding metrics, there are only 6 threshold-crossing results
 total — out of a possible 20 (4 metrics × 5 datasets). Meaningful differences appear only
 in specific structural conditions, not as a general tendency.
 
@@ -239,10 +241,14 @@ in specific structural conditions, not as a general tendency.
    structural signal, cpi_fill's ordered pass avoids accidental contention, improving merit-weighted
    satisfaction for mid-tier students.
 
-2. **CPI skewness reduction (3 of 5 datasets):** cpi_fill consistently distributes CPI more
-   evenly across advisors. This is the most robust signal in the study — it persists across
-   random, original, and high-CPI cohorts with deltas well above threshold (0.256–0.321).
-   If advisor CPI diversity is an institutional goal, this is the strongest argument for cpi_fill.
+2. **CPI skewness reduction (2 of 5 datasets, using |abs|):** When absolute skewness is compared
+   consistently, CF wins on Original (Δ=−0.256) and Clustered (Δ=−0.100). The Random dataset is
+   a draw — the signed values flip direction but the magnitudes are nearly identical (0.159 vs 0.162).
+   On the High-CPI dataset, LL actually wins (Δ=+0.129): CF's serial pass in a uniform-CPI cohort
+   increases CPI concentration rather than reducing it. The skewness signal is real but narrower
+   than the signed-delta analysis suggested; it applies to structured or stressed cohorts, not
+   uniformly across all scenarios. If advisor CPI diversity is an institutional goal, CF is still
+   the directional choice, but the evidence is not as uniform as previously reported.
 
 **`least_loaded` shows a directional advantage in one situation, but no threshold-crossing win:**
 
@@ -268,7 +274,7 @@ policy value judgement, not a metric win.
 | Situation | Recommended Policy | Reason |
 |-----------|-------------------|--------|
 | Preferences are largely uncorrelated | `cpi_fill` | Only scenario with a threshold-crossing NPSS advantage (Δ=+0.083) |
-| Advisor CPI diversity matters institutionally | `cpi_fill` | Most robust signal in study: skewness reduction in 3 of 5 datasets above threshold |
+| Advisor CPI diversity matters institutionally | `cpi_fill` | CF wins skewness on Original and Clustered datasets; draw on Random; LL wins on High-CPI — directional lean toward CF in structured cohorts, not universally |
 | Many students competing for few advisors | `least_loaded` | Directional NPSS lean (Δ=−0.028); LL's load-spreading is less likely to exhaust popular capacity early — no independent metric win, but the mechanism is structurally sound |
 | Cohort is uniformly high-CPI | `least_loaded` | cpi_fill's merit-ordering adds no differentiation; PSI penalty is real (only threshold-crossing PSI result in study) |
 | Institution prioritises merit-based access | `cpi_fill` | Structural design intent; Tier A/B1 gains are real even when overall metrics do not separate |
@@ -277,7 +283,7 @@ policy value judgement, not a metric win.
 ### 7d. Summary
 
 > **The honest conclusion is that neither policy is uniformly superior.** Across 5 datasets and
-> 4 independent deciding metrics (NPSS, PSI, Advisor Entropy, CPI Skewness), only 5 of a
+> 4 independent deciding metrics (NPSS, PSI, Advisor Entropy, CPI |abs| Skewness), only 6 of a
 > possible 20 pairwise comparisons cross the significance threshold. Overflow Count and
 > % In Window, while useful diagnostics, are not independent criteria — both are already
 > absorbed into NPSS through the zero-weight penalty for out-of-window assignments. The two
