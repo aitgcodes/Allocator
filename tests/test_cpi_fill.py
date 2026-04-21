@@ -63,7 +63,7 @@ def test_phase1_stopping_condition():
     assignments   = {s.id: None for s in students}
     faculty_loads = {"f1": 1, "f2": 1, "f3": 0, "f4": 0}
 
-    result_assignments, snaps = _run(students, faculty, assignments, faculty_loads)
+    result_assignments, snaps, _ = _run(students, faculty, assignments, faculty_loads)
 
     assert all(v is not None for v in result_assignments.values()), \
         "All students should be assigned"
@@ -92,7 +92,7 @@ def test_phase2_fills_all_empty_labs():
     assignments   = {s.id: None for s in students}
     faculty_loads = {"f1": 0, "f2": 0, "f3": 0}
 
-    result_assignments, _ = _run(students, faculty, assignments, faculty_loads)
+    result_assignments, _, _ = _run(students, faculty, assignments, faculty_loads)
 
     assert all(v is not None for v in result_assignments.values()), \
         "All students should be assigned"
@@ -123,7 +123,7 @@ def test_phase2_respects_preference_order():
     assignments   = {"s1": None}
     faculty_loads = {"f1": 1, "f2": 0, "f3": 1, "f4": 1, "f5": 0}
 
-    result_assignments, _ = _run(students, faculty, assignments, faculty_loads)
+    result_assignments, _, _ = _run(students, faculty, assignments, faculty_loads)
 
     assert result_assignments["s1"] == "f2", \
         f"Expected assignment to f2 (rank 2), got {result_assignments['s1']}"
@@ -146,7 +146,7 @@ def test_phase2_dynamic_empty_lab_state():
     assignments   = {"s1": None, "s2": None}
     faculty_loads = {"f1": 0, "f2": 0}
 
-    result_assignments, _ = _run(students, faculty, assignments, faculty_loads)
+    result_assignments, _, _ = _run(students, faculty, assignments, faculty_loads)
 
     # s1 (higher CPI) should get f1; s2 gets f2
     assert result_assignments["s1"] == "f1", \
@@ -169,7 +169,7 @@ def test_u_equals_e_phase1_skipped():
     assignments   = {"s1": None, "s2": None}
     faculty_loads = {"f1": 0, "f2": 0}   # U=2, E=2
 
-    result_assignments, snaps = _run(students, faculty, assignments, faculty_loads)
+    result_assignments, snaps, _ = _run(students, faculty, assignments, faculty_loads)
 
     # No Phase1 assignment events
     phase1_assigns = [s for s in snaps if s.phase == "Phase1" and "→" in s.event]
@@ -198,7 +198,7 @@ def test_e_equals_0_phase2_noop():
     assignments   = {"s1": None, "s2": None}
     faculty_loads = {"f1": 1, "f2": 1}   # E=0
 
-    result_assignments, snaps = _run(students, faculty, assignments, faculty_loads)
+    result_assignments, snaps, _ = _run(students, faculty, assignments, faculty_loads)
 
     # Phase 2 should have zero assignment events
     phase2_assigns = [s for s in snaps if s.phase == "Phase2" and "→" in s.event]
@@ -225,7 +225,7 @@ def test_u_less_than_e_raises():
     import warnings
     with warnings.catch_warnings(record=True) as w:
         warnings.simplefilter("always")
-        result_assignments, _ = _run(students, faculty, assignments, faculty_loads)
+        result_assignments, _, _ = _run(students, faculty, assignments, faculty_loads)
         assert any("not enough students" in str(warning.message).lower()
                    for warning in w), "Expected a warning about insufficient students"
 
@@ -255,7 +255,7 @@ def test_phase1_cpi_ordering():
     assignments   = {s.id: None for s in students}
     faculty_loads = {"f1": 1, "f2": 1, "f3": 0, "f4": 0}
 
-    result_assignments, snaps = _run(students, faculty, assignments, faculty_loads)
+    result_assignments, snaps, _ = _run(students, faculty, assignments, faculty_loads)
 
     phase1_events = [s for s in snaps if s.phase == "Phase1" and "→" in s.event]
     assert len(phase1_events) == 2, \
@@ -297,7 +297,7 @@ def test_phase1_assigns_highest_preferred_not_least_loaded():
     import warnings
     with warnings.catch_warnings(record=True):
         warnings.simplefilter("always")
-        result_assignments, _ = _run(students, faculty, assignments, faculty_loads)
+        result_assignments, _, _ = _run(students, faculty, assignments, faculty_loads)
 
     # s1 should get f1 (rank 1), not f2 (rank 2, but load=0)
     assert result_assignments["s1"] == "f1", \

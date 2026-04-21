@@ -309,9 +309,17 @@ _app_state: dict = {
     "main_run":              0,      # incremented each time main allocation starts (for unique button IDs)
     "current_assignments":   {},     # live assignments during main alloc
     "current_faculty_loads": {},     # live faculty loads during main alloc
-    "phase":                 "idle", # "idle"|"phase0_done"|"r1"|"r1_done"|"main_alloc"|"cpi_phase1_done"|"complete"
+    "phase":                 "idle", # "idle"|"phase0_done"|"r1"|"r1_done"|"main_alloc"|"cpi_phase1_alloc"|"cpi_phase1_done"|"cpi_phase2_alloc"|"complete"
     "metrics":               {},     # satisfaction metrics from compute_metrics
     "cpi_phase1_stats":      {},     # stats dict from cpi_fill_phase1 (for r1-panel rendering)
+    "cpi_p1_queue":          [],     # ordered Student list for CPI-Fill Phase 1 manual
+    "cpi_p1_queue_idx":      0,      # current position in cpi_p1_queue
+    "cpi_p1_run":            0,      # run counter (makes button IDs unique across re-runs)
+    "cpi_p1_assigned":       0,      # assignments made so far in Phase 1 manual
+    "cpi_p1_e_is_zero":      False,  # True when E==0 at Phase 1 start (no stopping condition)
+    "cpi_p2_queue":          [],     # ordered Student list for CPI-Fill Phase 2 manual
+    "cpi_p2_queue_idx":      0,      # current position in cpi_p2_queue
+    "cpi_p2_run":            0,      # run counter
 }
 
 # ---------------------------------------------------------------------------
@@ -1074,6 +1082,13 @@ def cb_run(n_phase0, n_full, loaded):
                     "current_faculty_loads": {},
                     "main_queue":            [],
                     "main_queue_idx":        0,
+                    "cpi_p1_queue":          [],
+                    "cpi_p1_queue_idx":      0,
+                    "cpi_p1_assigned":       0,
+                    "cpi_p1_e_is_zero":      False,
+                    "cpi_p2_queue":          [],
+                    "cpi_p2_queue_idx":      0,
+                    "cpi_phase1_stats":      {},
                 })
                 if meta.get("mode") == "quartile":
                     msg = (f"Phase 0 complete — report saved to {OUTPUT_DIR}/. "
@@ -1117,6 +1132,13 @@ def cb_run(n_phase0, n_full, loaded):
                     "current_faculty_loads": {},
                     "main_queue":            [],
                     "main_queue_idx":        0,
+                    "cpi_p1_queue":          [],
+                    "cpi_p1_queue_idx":      0,
+                    "cpi_p1_assigned":       0,
+                    "cpi_p1_e_is_zero":      False,
+                    "cpi_p2_queue":          [],
+                    "cpi_p2_queue_idx":      0,
+                    "cpi_phase1_stats":      {},
                 })
             except Exception as e:
                 return f"✗ Phase 0 error: {e}", "idle", 0, {}, 0
@@ -1129,27 +1151,19 @@ def cb_run(n_phase0, n_full, loaded):
                 snaps = SnapshotList()
                 _app_state["snapshots"] = snaps
 
-        # CPI-Fill skips Round 1 entirely — run Phase 1 then pause for confirmation.
+        # CPI-Fill skips Round 1 — initialise empty assignments and wait for operator.
         if ALLOCATION_POLICY == "cpi_fill":
             assignments   = {s.id: None for s in students}
             faculty_loads = {f.id: 0    for f in faculty}
-            try:
-                assignments, faculty_loads, snaps, stats = cpi_fill_phase1(
-                    students, faculty, assignments, faculty_loads, snaps,
-                )
-            except Exception as e:
-                return f"✗ CPI-Fill Phase 1 error: {e}", "idle", 0, {}, 0
-            _app_state["snapshots"]             = snaps
-            _app_state["current_assignments"]   = assignments
-            _app_state["current_faculty_loads"] = faculty_loads
-            _app_state["cpi_phase1_stats"]      = stats
-            _app_state["phase"]                 = "cpi_phase1_done"
+            _app_state["r1_assignments"]        = dict(assignments)
+            _app_state["r1_faculty_loads"]      = dict(faculty_loads)
+            _app_state["current_assignments"]   = dict(assignments)
+            _app_state["current_faculty_loads"] = dict(faculty_loads)
+            _app_state["phase"]                 = "r1_done"
             n = len(snaps)
             marks = {i: str(snaps[i].step) for i in range(0, n, max(1, n // 10))}
-            assigned = stats["total_students"] - stats["unassigned_count"]
-            return (f"Phase 1 complete: {assigned} assigned, "
-                    f"{stats['unassigned_count']} unassigned."),  \
-                   "cpi_phase1_done", n - 1, marks, n - 1
+            return (f"Phase 0 complete — {len(students)} students ready for Phase 1."), \
+                   "r1_done", n - 1, marks, n - 1
 
         # For least_loaded / nonempty: populate Round-1 candidate lists;
         # pause for operator picks.
@@ -1173,9 +1187,9 @@ def cb_run(n_phase0, n_full, loaded):
 # ---------------------------------------------------------------------------
 
 @app.callback(
-    Output("r1-panel", "children"),
+    Output("r1-panel", "children", allow_duplicate=True),
     Input("store-phase", "data"),
-    prevent_initial_call=False,
+    prevent_initial_call="initial_duplicate",
 )
 def cb_r1_panel(phase):
     if phase == "r1":
@@ -1214,6 +1228,24 @@ def cb_r1_panel(phase):
         return rows
 
     if phase == "r1_done":
+        # CPI-Fill has no Round 1 — show Phase 1 launch buttons directly.
+        if ALLOCATION_POLICY == "cpi_fill":
+            students = _app_state.get("students", [])
+            return [
+                html.P(
+                    [html.Strong("Round 1 not applicable for CPI-Fill. "),
+                     f"All {len(students)} students will be processed in Phase 1 "
+                     "(descending CPI order)."],
+                    className="mb-3",
+                ),
+                html.Div([
+                    dbc.Button("Run Phase 1 (manual) →", id="btn-proceed-main",
+                               color="success"),
+                    dbc.Button("Auto-run CPI-Fill →", id="btn-autorun-main",
+                               color="primary", className="ms-2"),
+                ], className="d-flex"),
+            ]
+
         assignments = _app_state.get("r1_assignments", {})
         student_map = {s.id: s for s in _app_state["students"]}
         faculty_map = {f.id: f for f in _app_state["faculty"]}
@@ -1254,23 +1286,12 @@ def cb_r1_panel(phase):
                 dbc.Button("Finalize →", id="btn-r1-finalize", color="success"),
             ]
 
-        proceed_label = (
-            "Proceed to Main Allocation (auto-run) →"
-            if ALLOCATION_POLICY == "cpi_fill"
-            else "Proceed to Main Allocation (manual) →"
-        )
         buttons = [
-            dbc.Button(proceed_label, id="btn-proceed-main", color="success"),
+            dbc.Button("Proceed to Main Allocation (manual) →",
+                       id="btn-proceed-main", color="success"),
+            dbc.Button("Auto-run allocation →",
+                       id="btn-autorun-main", color="primary", className="ms-2"),
         ]
-        if ALLOCATION_POLICY != "cpi_fill":
-            buttons.append(
-                dbc.Button(
-                    "Auto-run allocation →",
-                    id="btn-autorun-main",
-                    color="primary",
-                    className="ms-2",
-                )
-            )
 
         return [
             html.P(
@@ -1284,22 +1305,15 @@ def cb_r1_panel(phase):
 
     # ---- CPI-Fill specific phases ----
     if ALLOCATION_POLICY == "cpi_fill":
+        # Phase 1 / Phase 2 manual in progress — content is managed directly by
+        # pick callbacks; returning dash.no_update keeps whatever they last wrote.
+        if phase in ("cpi_phase1_alloc", "cpi_phase2_alloc", "complete"):
+            return dash.no_update
         if phase == "cpi_phase1_done":
             stats = _app_state.get("cpi_phase1_stats", {})
             if stats:
                 return _cpi_phase1_report(stats)
             return html.Span("Phase 1 complete.", className="text-muted")
-        if phase == "complete":
-            stats = _app_state.get("cpi_phase1_stats", {})
-            if stats:
-                assigned   = stats["total_students"] - stats["unassigned_count"]
-                unassigned = stats["unassigned_count"]
-                return dbc.Alert(
-                    [html.Strong("✓ Phase 1 complete. "),
-                     f"{assigned} assigned, {unassigned} proceeded to Phase 2."],
-                    color="success", className="mb-0",
-                )
-            return html.Span("✓ Phase 1 complete.", className="text-muted small")
         return html.Span("Load data and run Phase 0 to begin.", className="text-muted")
 
     if phase in ("main_alloc", "complete"):
@@ -1372,7 +1386,8 @@ def cb_reset_r1(n_clicks):
     if not n_clicks:
         return no_up6
 
-    allowed = ("r1", "r1_done", "main_alloc", "complete", "cpi_phase1_done")
+    allowed = ("r1", "r1_done", "main_alloc", "complete",
+               "cpi_phase1_alloc", "cpi_phase1_done", "cpi_phase2_alloc")
     if _app_state["phase"] not in allowed:
         return ("⚠ Run full allocation first before resetting.",
                 *([dash.no_update] * 5))
@@ -1389,6 +1404,12 @@ def cb_reset_r1(n_clicks):
     _app_state["main_queue"]            = []
     _app_state["main_queue_idx"]        = 0
     _app_state["cpi_phase1_stats"]      = {}
+    _app_state["cpi_p1_queue"]          = []
+    _app_state["cpi_p1_queue_idx"]      = 0
+    _app_state["cpi_p1_assigned"]       = 0
+    _app_state["cpi_p1_e_is_zero"]      = False
+    _app_state["cpi_p2_queue"]          = []
+    _app_state["cpi_p2_queue_idx"]      = 0
     _app_state["snapshots"]             = snaps
 
     if snaps:
@@ -1419,17 +1440,18 @@ def cb_reset_r1(n_clicks):
 # ---------------------------------------------------------------------------
 
 @app.callback(
+    Output("r1-panel",         "children",  allow_duplicate=True),
     Output("main-alloc-panel", "children"),
-    Output("store-phase",      "data",     allow_duplicate=True),
-    Output("step-slider",      "max",      allow_duplicate=True),
-    Output("step-slider",      "marks",    allow_duplicate=True),
-    Output("step-slider",      "value",    allow_duplicate=True),
+    Output("store-phase",      "data",      allow_duplicate=True),
+    Output("step-slider",      "max",       allow_duplicate=True),
+    Output("step-slider",      "marks",     allow_duplicate=True),
+    Output("step-slider",      "value",     allow_duplicate=True),
     Input("btn-proceed-main",  "n_clicks"),
     prevent_initial_call=True,
 )
 def cb_proceed_main(n_clicks):
     if not n_clicks:
-        return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
+        return (dash.no_update,) * 6
 
     students      = _app_state["students"]
     faculty       = _app_state["faculty"]
@@ -1438,27 +1460,72 @@ def cb_proceed_main(n_clicks):
     faculty_loads = dict(_app_state["r1_faculty_loads"])
     faculty_map   = {f.id: f for f in faculty}
 
-    # CPI-Fill: run Phase 1 then pause for confirmation before Phase 2.
+    # CPI-Fill: set up Phase 1 manual queue.
     if ALLOCATION_POLICY == "cpi_fill":
         snaps = _app_state["snapshots"]
-        try:
-            assignments, faculty_loads, snaps, stats = cpi_fill_phase1(
-                students, faculty, assignments, faculty_loads, snaps,
-            )
-        except Exception as e:
-            return (
-                html.Span(f"✗ CPI-Fill Phase 1 error: {e}", className="text-danger"),
-                "r1_done",
-                dash.no_update, dash.no_update, dash.no_update,
-            )
+        queue = sorted(
+            [s for s in students if assignments.get(s.id) is None],
+            key=lambda s: (-s.cpi, s.id),
+        )
+        U = len(queue)
+        E = sum(1 for f in faculty if faculty_loads.get(f.id, 0) == 0)
+        e_is_zero = (E == 0)
+
+        # Append the initial CPI-Fill begins snapshot
+        step = (snaps.last().step + 1) if snaps and snaps.last() else 1
+        snaps.append(AllocationSnapshot(
+            step=step,
+            phase="CPIFill",
+            event=f"CPI-Fill begins | U={U} E={E} U−E={U - E}",
+            assignments=dict(assignments),
+            faculty_loads=dict(faculty_loads),
+            unassigned={s.id for s in queue},
+        ))
+
+        # U == E: Phase 1 is a no-op — skip directly to Phase 1 done
+        if U == E:
+            step2 = step + 1
+            snaps.append(AllocationSnapshot(
+                step=step2,
+                phase="Phase1",
+                event=f"Phase 1 skipped (U == E == {U}): proceeding directly to Phase 2",
+                assignments=dict(assignments),
+                faculty_loads=dict(faculty_loads),
+                unassigned={s.id for s in queue},
+            ))
+            stats = {
+                "phase1_assigned":  0,
+                "unassigned_count": U,
+                "empty_labs_count": E,
+                "total_students":   len(students),
+            }
+            _app_state["snapshots"]             = snaps
+            _app_state["current_assignments"]   = assignments
+            _app_state["current_faculty_loads"] = faculty_loads
+            _app_state["cpi_phase1_stats"]      = stats
+            _app_state["phase"]                 = "cpi_phase1_done"
+            n = len(snaps)
+            marks = {i: str(snaps[i].step) for i in range(0, n, max(1, n // 10))}
+            return _cpi_phase1_report(stats), dash.no_update, "cpi_phase1_done", n - 1, marks, n - 1
+
         _app_state["snapshots"]             = snaps
         _app_state["current_assignments"]   = assignments
         _app_state["current_faculty_loads"] = faculty_loads
-        _app_state["cpi_phase1_stats"]      = stats
-        _app_state["phase"]                 = "cpi_phase1_done"
+        _app_state["cpi_p1_queue"]          = queue
+        _app_state["cpi_p1_queue_idx"]      = 0
+        _app_state["cpi_p1_run"]            = _app_state.get("cpi_p1_run", 0) + 1
+        _app_state["cpi_p1_assigned"]       = 0
+        _app_state["cpi_p1_e_is_zero"]      = e_is_zero
+        _app_state["phase"]                 = "cpi_phase1_alloc"
+
+        run     = _app_state["cpi_p1_run"]
+        content = _render_cpi_phase1_picker(
+            queue[0], faculty_map, faculty_loads, 0, len(queue), run=run,
+            unassigned_count=U, empty_labs_count=E, e_is_zero=e_is_zero,
+        )
         n = len(snaps)
         marks = {i: str(snaps[i].step) for i in range(0, n, max(1, n // 10))}
-        return dash.no_update, "cpi_phase1_done", n - 1, marks, n - 1
+        return content, dash.no_update, "cpi_phase1_alloc", n - 1, marks, n - 1
 
     # Manual allocation for least_loaded / nonempty
     # Build queue in tier priority order, each tier by CPI desc, unassigned only
@@ -1480,6 +1547,7 @@ def cb_proceed_main(n_clicks):
 
     if not queue:
         return (
+            dash.no_update,
             html.Span("All students already assigned in Round 1.", className="text-success"),
             "complete",
             dash.no_update, dash.no_update, dash.no_update,
@@ -1487,7 +1555,7 @@ def cb_proceed_main(n_clicks):
 
     run     = _app_state["main_run"]
     content = _render_student_picker(queue[0], faculty_map, faculty_loads, meta, 0, len(queue), run=run)
-    return content, "main_alloc", dash.no_update, dash.no_update, dash.no_update
+    return dash.no_update, content, "main_alloc", dash.no_update, dash.no_update, dash.no_update
 
 
 # ---------------------------------------------------------------------------
@@ -1513,6 +1581,79 @@ def cb_disable_cpi_proceed_btn(n_clicks):
     prevent_initial_call=True,
 )
 def cb_cpi_proceed_phase2(n_clicks):
+    """Set up CPI-Fill Phase 2 for manual step-through."""
+    if not n_clicks:
+        return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
+
+    students      = _app_state["students"]
+    faculty       = _app_state["faculty"]
+    assignments   = _app_state["current_assignments"]
+    faculty_loads = _app_state["current_faculty_loads"]
+    faculty_map   = {f.id: f for f in faculty}
+    snaps         = _app_state["snapshots"]
+
+    queue = sorted(
+        [s for s in students if assignments.get(s.id) is None],
+        key=lambda s: (-s.cpi, s.id),
+    )
+
+    # Append Phase 2 start snapshot
+    step = (snaps.last().step + 1) if snaps and snaps.last() else 1
+    empty_labs_count = sum(1 for load in faculty_loads.values() if load == 0)
+    snaps.append(AllocationSnapshot(
+        step=step,
+        phase="Phase2",
+        event=f"Phase 2 begins | {len(queue)} student(s) | {empty_labs_count} empty lab(s)",
+        assignments=dict(assignments),
+        faculty_loads=dict(faculty_loads),
+        unassigned={s.id for s in queue},
+    ))
+    _app_state["snapshots"] = snaps
+
+    _app_state["cpi_p2_queue"]     = queue
+    _app_state["cpi_p2_queue_idx"] = 0
+    _app_state["cpi_p2_run"]       = _app_state.get("cpi_p2_run", 0) + 1
+    _app_state["phase"]            = "cpi_phase2_alloc"
+
+    n = len(snaps)
+    marks = {i: str(snaps[i].step) for i in range(0, n, max(1, n // 10))}
+
+    if not queue:
+        # Nothing left to assign — finalise directly
+        metrics = compute_metrics(
+            students, assignments, len(faculty),
+            faculty_ids=[f.id for f in faculty],
+        )
+        _app_state["metrics"] = metrics
+        _app_state["phase"]   = "complete"
+        content = _finalize_prompt(assignments, faculty_loads, faculty, phase2_skipped=True)
+        return content, "complete", n - 1, marks, n - 1
+
+    run     = _app_state["cpi_p2_run"]
+    content = _render_cpi_phase2_picker(queue[0], faculty_map, faculty_loads, 0, len(queue), run=run)
+    return content, "cpi_phase2_alloc", n - 1, marks, n - 1
+
+
+@app.callback(
+    Output("btn-cpi-autorun-phase2", "disabled"),
+    Input("btn-cpi-autorun-phase2",  "n_clicks"),
+    prevent_initial_call=True,
+)
+def cb_disable_cpi_autorun_phase2_btn(n_clicks):
+    return bool(n_clicks)
+
+
+@app.callback(
+    Output("main-alloc-panel", "children",  allow_duplicate=True),
+    Output("store-phase",      "data",      allow_duplicate=True),
+    Output("step-slider",      "max",       allow_duplicate=True),
+    Output("step-slider",      "marks",     allow_duplicate=True),
+    Output("step-slider",      "value",     allow_duplicate=True),
+    Input("btn-cpi-autorun-phase2", "n_clicks"),
+    prevent_initial_call=True,
+)
+def cb_cpi_autorun_phase2(n_clicks):
+    """Auto-run CPI-Fill Phase 2."""
     if not n_clicks:
         return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
 
@@ -1550,10 +1691,11 @@ def cb_cpi_proceed_phase2(n_clicks):
 
 
 # ---------------------------------------------------------------------------
-# Callback — auto-run main allocation (least_loaded / nonempty)
+# Callback — auto-run main allocation (least_loaded / nonempty / cpi_fill)
 # ---------------------------------------------------------------------------
 
 @app.callback(
+    Output("r1-panel",         "children",  allow_duplicate=True),
     Output("main-alloc-panel", "children",  allow_duplicate=True),
     Output("store-phase",      "data",      allow_duplicate=True),
     Output("step-slider",      "max",       allow_duplicate=True),
@@ -1564,7 +1706,7 @@ def cb_cpi_proceed_phase2(n_clicks):
 )
 def cb_autorun_main(n_clicks):
     if not n_clicks:
-        return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
+        return (dash.no_update,) * 6
 
     students      = _app_state["students"]
     faculty       = _app_state["faculty"]
@@ -1572,8 +1714,48 @@ def cb_autorun_main(n_clicks):
     assignments   = dict(_app_state["r1_assignments"])
     faculty_loads = dict(_app_state["r1_faculty_loads"])
     snaps         = _app_state["snapshots"]
-    N_A           = meta["N_A"]
-    N_B           = meta["N_B"]
+
+    # CPI-Fill: run Phase 1 then Phase 2 automatically.
+    if ALLOCATION_POLICY == "cpi_fill":
+        try:
+            assignments, faculty_loads, snaps, stats = cpi_fill_phase1(
+                students, faculty, assignments, faculty_loads, snaps,
+            )
+            assignments, snaps, phase2_skipped = cpi_fill_phase2(
+                students, faculty, assignments, faculty_loads, snaps,
+            )
+        except Exception as e:
+            return (
+                dash.no_update,
+                html.Span(f"✗ Auto-run error: {e}", className="text-danger"),
+                "r1_done",
+                dash.no_update, dash.no_update, dash.no_update,
+            )
+        _app_state["snapshots"]             = snaps
+        _app_state["current_assignments"]   = assignments
+        _app_state["current_faculty_loads"] = faculty_loads
+        _app_state["cpi_phase1_stats"]      = stats
+        _app_state["phase"]                 = "complete"
+        metrics = compute_metrics(
+            students, assignments, len(faculty),
+            faculty_ids=[f.id for f in faculty],
+        )
+        _app_state["metrics"] = metrics
+        n = len(snaps)
+        marks = {i: str(snaps[i].step) for i in range(0, n, max(1, n // 10))}
+        assigned_p1 = stats["total_students"] - stats["unassigned_count"]
+        r1_content = dbc.Alert(
+            [html.Strong("✓ Phase 1 complete (auto-run). "),
+             f"{assigned_p1} assigned, {stats['unassigned_count']} unassigned, "
+             f"{stats['empty_labs_count']} empty lab{'s' if stats['empty_labs_count'] != 1 else ''}."],
+            color="success", className="mb-0",
+        )
+        main_content = _finalize_prompt(assignments, faculty_loads, faculty,
+                                        phase2_skipped=phase2_skipped)
+        return r1_content, main_content, "complete", n - 1, marks, n - 1
+
+    N_A = meta["N_A"]
+    N_B = meta["N_B"]
 
     try:
         assignments, snaps = main_allocation(
@@ -1582,6 +1764,7 @@ def cb_autorun_main(n_clicks):
         )
     except Exception as e:
         return (
+            dash.no_update,
             html.Span(f"✗ Auto-run error: {e}", className="text-danger"),
             "r1_done",
             dash.no_update, dash.no_update, dash.no_update,
@@ -1597,7 +1780,7 @@ def cb_autorun_main(n_clicks):
     n = len(snaps)
     marks = {i: str(snaps[i].step) for i in range(0, n, max(1, n // 10))}
     content = _finalize_prompt(assignments, faculty_loads, faculty)
-    return content, "complete", n - 1, marks, n - 1
+    return dash.no_update, content, "complete", n - 1, marks, n - 1
 
 
 # ---------------------------------------------------------------------------
@@ -1715,10 +1898,384 @@ def _build_completion_panel(
     ])
 
 
+def _render_cpi_phase1_picker(
+    student, faculty_map, faculty_loads, queue_idx, total_queue,
+    run=0, unassigned_count=0, empty_labs_count=0, e_is_zero=False,
+):
+    """Render the Phase 1 advisor-selection UI for CPI-Fill manual mode."""
+    tier_color = {"A": "success", "B": "warning", "B1": "warning", "B2": "info", "C": "danger"}
+
+    # Protocol choice: first preferred faculty with capacity (no tier cap)
+    protocol_fid = None
+    for fid in student.preferences:
+        if fid in faculty_map and faculty_loads.get(fid, 0) < faculty_map[fid].max_load:
+            protocol_fid = fid
+            break
+
+    advisor_cols = []
+    all_at_cap = True
+    for rank, fid in enumerate(student.preferences, start=1):
+        if fid not in faculty_map:
+            continue
+        fac = faculty_map[fid]
+        load = faculty_loads.get(fid, 0)
+        at_capacity = load >= fac.max_load
+        is_protocol = (fid == protocol_fid)
+        if not at_capacity:
+            all_at_cap = False
+
+        if at_capacity:
+            btn_color, outline, extra_style = "secondary", True, {"opacity": "0.4"}
+        elif is_protocol:
+            btn_color, outline = "light", True
+            extra_style = {"border": "2px solid #fd7e14", "borderRadius": "6px"}
+        else:
+            btn_color, outline, extra_style = "primary", True, {}
+
+        advisor_cols.append(dbc.Col(
+            dbc.Button(
+                [
+                    html.Div(html.Strong(fac.name), className="mb-1"),
+                    html.Div(f"#{rank} choice  ·  {load}/{fac.max_load} students",
+                             className="small"),
+                    html.Div(
+                        "Full" if at_capacity
+                        else f"{fac.max_load - load} slot{'s' if fac.max_load - load != 1 else ''} free",
+                        className=f"small mt-1 {'text-danger fw-bold' if at_capacity else 'text-success'}",
+                    ),
+                    *([html.Div("★ Highest preferred with capacity",
+                                className="small fw-bold mt-1",
+                                style={"color": "#fd7e14"})] if is_protocol else []),
+                ],
+                id={"type": "cpi-p1-pick", "index": fid, "step": queue_idx, "run": run},
+                color=btn_color, outline=outline, disabled=at_capacity,
+                className="w-100 text-start",
+                style={"opacity": "0.4" if at_capacity else "1.0", **extra_style},
+            ),
+            md=3, className="mb-3",
+        ))
+
+    if e_is_zero:
+        stop_badge = dbc.Badge(
+            "No empty labs (E=0) — Phase 1 runs all students",
+            color="secondary", className="mb-3 d-block",
+        )
+    else:
+        badge_color = "warning" if unassigned_count == empty_labs_count else "info"
+        stop_badge = dbc.Badge(
+            f"Unassigned: {unassigned_count}  |  Empty labs: {empty_labs_count}"
+            "  |  Phase 1 stops when equal",
+            color=badge_color, className="mb-3 d-block",
+        )
+
+    skip_rows = []
+    if all_at_cap and advisor_cols:
+        skip_rows = [
+            dbc.Alert(
+                "All preferred advisors are at capacity — this student will be handled in Phase 2.",
+                color="warning", className="mb-2",
+            ),
+            dbc.Button(
+                "Skip to Phase 2 →",
+                id={"type": "cpi-p1-pick", "index": "__skip__",
+                    "step": queue_idx, "run": run},
+                color="warning", outline=True, className="mb-3",
+            ),
+        ]
+
+    return html.Div([
+        dbc.Progress(
+            value=int((queue_idx / max(total_queue, 1)) * 100),
+            className="mb-2",
+            label=f"{queue_idx} of {total_queue} processed",
+            striped=True,
+        ),
+        stop_badge,
+        *skip_rows,
+        dbc.Card(dbc.CardBody(dbc.Row(dbc.Col([
+            html.H5(student.name, className="mb-1"),
+            html.Div([
+                dbc.Badge(f"Tier {student.tier}",
+                          color=tier_color.get(student.tier, "secondary"),
+                          className="me-2"),
+                html.Span(f"CPI {student.cpi:.2f}  ·  {student.id}",
+                          className="text-muted"),
+            ]),
+            html.Small("Eligible: full preference list (Phase 1, no tier cap)",
+                       className="text-muted mt-1 d-block"),
+        ]))), className="mb-3 bg-light border-0"),
+        html.H6("Select advisor:", className="mb-2 text-muted"),
+        dbc.Row(advisor_cols) if advisor_cols
+        else html.P("No preferred advisors found.", className="text-muted"),
+    ])
+
+
+def _render_cpi_phase2_picker(student, faculty_map, faculty_loads, queue_idx, total_queue, run=0):
+    """Render the Phase 2 advisor-selection UI for CPI-Fill manual mode."""
+    tier_color = {"A": "success", "B": "warning", "B1": "warning", "B2": "info", "C": "danger"}
+
+    # Protocol choice: first preferred empty lab
+    protocol_fid = None
+    for fid in student.preferences:
+        if fid in faculty_map and faculty_loads.get(fid, 0) == 0:
+            protocol_fid = fid
+            break
+
+    advisor_cols = []
+    for rank, fid in enumerate(student.preferences, start=1):
+        if fid not in faculty_map:
+            continue
+        fac = faculty_map[fid]
+        load = faculty_loads.get(fid, 0)
+        is_empty = (load == 0)
+        is_protocol = (fid == protocol_fid)
+
+        if is_empty:
+            if is_protocol:
+                btn_color, outline = "light", True
+                extra_style = {"border": "2px solid #fd7e14", "borderRadius": "6px"}
+            else:
+                btn_color, outline, extra_style = "primary", True, {}
+        else:
+            btn_color, outline, extra_style = "secondary", True, {"opacity": "0.4"}
+
+        advisor_cols.append(dbc.Col(
+            dbc.Button(
+                [
+                    html.Div(html.Strong(fac.name), className="mb-1"),
+                    html.Div(f"#{rank} choice  ·  {load}/{fac.max_load} students",
+                             className="small"),
+                    html.Div(
+                        "Empty lab" if is_empty else "Occupied",
+                        className=f"small mt-1 {'text-success fw-bold' if is_empty else 'text-muted'}",
+                    ),
+                    *([html.Div("★ Highest preferred empty lab",
+                                className="small fw-bold mt-1",
+                                style={"color": "#fd7e14"})] if is_protocol else []),
+                ],
+                id={"type": "cpi-p2-pick", "index": fid, "step": queue_idx, "run": run},
+                color=btn_color, outline=outline, disabled=not is_empty,
+                className="w-100 text-start",
+                style={"opacity": "0.4" if not is_empty else "1.0", **extra_style},
+            ),
+            md=3, className="mb-3",
+        ))
+
+    return html.Div([
+        dbc.Progress(
+            value=int((queue_idx / max(total_queue, 1)) * 100),
+            className="mb-2",
+            label=f"{queue_idx} of {total_queue} assigned",
+            striped=True,
+        ),
+        dbc.Card(dbc.CardBody(dbc.Row(dbc.Col([
+            html.H5(student.name, className="mb-1"),
+            html.Div([
+                dbc.Badge(f"Tier {student.tier}",
+                          color=tier_color.get(student.tier, "secondary"),
+                          className="me-2"),
+                html.Span(f"CPI {student.cpi:.2f}  ·  {student.id}",
+                          className="text-muted"),
+            ]),
+            html.Small("Eligible: highest preferred empty lab (Phase 2)",
+                       className="text-muted mt-1 d-block"),
+        ]))), className="mb-3 bg-light border-0"),
+        html.H6("Select empty lab:", className="mb-2 text-muted"),
+        dbc.Row(advisor_cols) if advisor_cols
+        else html.P("No preferred advisors found.", className="text-muted"),
+    ])
+
+
+def _do_cpi_p1_pick(fid: str) -> tuple:
+    """
+    Record a CPI-Fill Phase 1 manual pick (or skip), advance the queue,
+    and check the Phase 1 stopping condition.
+
+    Returns 7-tuple: (r1_panel_content, phase, slider_max, marks, val,
+                      toast_children, toast_is_open)
+    """
+    queue         = _app_state["cpi_p1_queue"]
+    idx           = _app_state["cpi_p1_queue_idx"]
+    student       = queue[idx]
+    students      = _app_state["students"]
+    faculty       = _app_state["faculty"]
+    faculty_map   = {f.id: f for f in faculty}
+    assignments   = _app_state["current_assignments"]
+    faculty_loads = _app_state["current_faculty_loads"]
+    e_is_zero     = _app_state["cpi_p1_e_is_zero"]
+    current_run   = _app_state.get("cpi_p1_run", 0)
+    snaps         = _app_state["snapshots"]
+    is_skip       = (fid == "__skip__")
+
+    if not is_skip:
+        assignments[student.id] = fid
+        faculty_loads[fid]      = faculty_loads.get(fid, 0) + 1
+        _app_state["cpi_p1_assigned"] = _app_state.get("cpi_p1_assigned", 0) + 1
+
+        step = (snaps.last().step + 1) if snaps and snaps.last() else 1
+        try:
+            rank = student.preferences.index(fid) + 1
+        except ValueError:
+            rank = None
+        fac = faculty_map.get(fid)
+        snaps.append(AllocationSnapshot(
+            step=step,
+            phase="Phase1",
+            event=(
+                f"Phase 1 | {student.name} ({student.id}, CPI {student.cpi:.2f}) → "
+                f"{fac.name if fac else fid} ({fid}) "
+                f"| pref rank {rank} | load now {faculty_loads[fid]}"
+            ),
+            assignments=dict(assignments),
+            faculty_loads=dict(faculty_loads),
+            unassigned={s.id for s in students if assignments.get(s.id) is None},
+            preference_rank={student.id: rank} if rank else None,
+        ))
+        _app_state["snapshots"] = snaps
+        toast_msg = [html.Strong(student.name), f" → {fac.name if fac else fid}"]
+    else:
+        toast_msg = [html.Strong(student.name), " → skipped (Phase 2)"]
+
+    new_idx = idx + 1
+    _app_state["cpi_p1_queue_idx"] = new_idx
+
+    unassigned = {s.id for s in students if assignments.get(s.id) is None}
+    empty_labs  = {fid2 for fid2, load in faculty_loads.items() if load == 0}
+
+    stopping = (not e_is_zero) and (len(unassigned) == len(empty_labs))
+    exhausted = (new_idx >= len(queue))
+
+    if stopping or exhausted:
+        phase1_assigned = _app_state.get("cpi_p1_assigned", 0)
+        step = (snaps.last().step + 1) if snaps and snaps.last() else 1
+        reason = "stopping condition met" if stopping else "queue exhausted"
+        snaps.append(AllocationSnapshot(
+            step=step,
+            phase="Phase1",
+            event=(f"Phase 1 complete ({reason}) | assigned={phase1_assigned} "
+                   f"| U={len(unassigned)} E={len(empty_labs)}"),
+            assignments=dict(assignments),
+            faculty_loads=dict(faculty_loads),
+            unassigned=set(unassigned),
+        ))
+        _app_state["snapshots"] = snaps
+
+        stats = {
+            "phase1_assigned":  phase1_assigned,
+            "unassigned_count": len(unassigned),
+            "empty_labs_count": len(empty_labs),
+            "total_students":   len(students),
+        }
+        _app_state["cpi_phase1_stats"] = stats
+        _app_state["phase"]            = "cpi_phase1_done"
+
+        n = len(snaps)
+        marks = {i: str(snaps[i].step) for i in range(0, n, max(1, n // 10))}
+        return _cpi_phase1_report(stats), "cpi_phase1_done", n - 1, marks, n - 1, toast_msg, True
+
+    next_student       = queue[new_idx]
+    unassigned_count   = len(unassigned)
+    empty_labs_count   = len(empty_labs)
+    content = _render_cpi_phase1_picker(
+        next_student, faculty_map, faculty_loads, new_idx, len(queue), run=current_run,
+        unassigned_count=unassigned_count, empty_labs_count=empty_labs_count,
+        e_is_zero=e_is_zero,
+    )
+    n = len(snaps)
+    marks = {i: str(snaps[i].step) for i in range(0, n, max(1, n // 10))}
+    return content, "cpi_phase1_alloc", n - 1, marks, n - 1, toast_msg, True
+
+
+def _do_cpi_p2_pick(fid: str) -> tuple:
+    """
+    Record a CPI-Fill Phase 2 manual pick, advance the queue, and finalise
+    when the queue is exhausted.
+
+    Returns 7-tuple: (main_panel_content, phase, slider_max, marks, val,
+                      toast_children, toast_is_open)
+    """
+    queue         = _app_state["cpi_p2_queue"]
+    idx           = _app_state["cpi_p2_queue_idx"]
+    student       = queue[idx]
+    students      = _app_state["students"]
+    faculty       = _app_state["faculty"]
+    faculty_map   = {f.id: f for f in faculty}
+    assignments   = _app_state["current_assignments"]
+    faculty_loads = _app_state["current_faculty_loads"]
+    current_run   = _app_state.get("cpi_p2_run", 0)
+    snaps         = _app_state["snapshots"]
+
+    assignments[student.id] = fid
+    faculty_loads[fid]      = faculty_loads.get(fid, 0) + 1
+
+    step = (snaps.last().step + 1) if snaps and snaps.last() else 1
+    try:
+        rank = student.preferences.index(fid) + 1
+    except ValueError:
+        rank = None
+    fac = faculty_map.get(fid)
+    snaps.append(AllocationSnapshot(
+        step=step,
+        phase="Phase2",
+        event=(
+            f"Phase 2 | {student.name} ({student.id}, CPI {student.cpi:.2f}) → "
+            f"{fac.name if fac else fid} ({fid}) "
+            f"| pref rank {rank} | load now {faculty_loads[fid]}"
+        ),
+        assignments=dict(assignments),
+        faculty_loads=dict(faculty_loads),
+        unassigned={s.id for s in students if assignments.get(s.id) is None},
+        preference_rank={student.id: rank} if rank else None,
+    ))
+    _app_state["snapshots"] = snaps
+
+    new_idx = idx + 1
+    _app_state["cpi_p2_queue_idx"] = new_idx
+    toast_msg = [html.Strong(student.name), f" → {fac.name if fac else fid}"]
+
+    if new_idx >= len(queue):
+        still_unassigned = [s.id for s in students if assignments.get(s.id) is None]
+        step2 = step + 1
+        snaps.append(AllocationSnapshot(
+            step=step2, phase="Phase2",
+            event=f"Phase 2 complete | assigned={len(queue)} | empty labs remaining=0",
+            assignments=dict(assignments), faculty_loads=dict(faculty_loads),
+            unassigned=set(still_unassigned),
+        ))
+        snaps.append(AllocationSnapshot(
+            step=step2 + 1, phase="Final",
+            event=(f"Allocation complete | assigned={len(assignments) - len(still_unassigned)} "
+                   f"| unassigned={len(still_unassigned)}"),
+            assignments=dict(assignments), faculty_loads=dict(faculty_loads),
+            unassigned=set(still_unassigned),
+        ))
+        _app_state["snapshots"] = snaps
+        _app_state["phase"]     = "complete"
+
+        metrics = compute_metrics(
+            students, assignments, len(faculty),
+            faculty_ids=[f.id for f in faculty],
+        )
+        _app_state["metrics"] = metrics
+
+        n = len(snaps)
+        marks = {i: str(snaps[i].step) for i in range(0, n, max(1, n // 10))}
+        content = _finalize_prompt(assignments, faculty_loads, faculty)
+        return content, "complete", n - 1, marks, n - 1, toast_msg, True
+
+    next_student = queue[new_idx]
+    content = _render_cpi_phase2_picker(
+        next_student, faculty_map, faculty_loads, new_idx, len(queue), run=current_run,
+    )
+    n = len(snaps)
+    marks = {i: str(snaps[i].step) for i in range(0, n, max(1, n // 10))}
+    return content, "cpi_phase2_alloc", n - 1, marks, n - 1, toast_msg, True
+
+
 def _cpi_phase1_report(stats: dict) -> "html.Div":
     """
     Return the Phase 1 completion panel shown after CPI-Fill Phase 1 stops.
-    Displays assigned / unassigned / empty-labs counts and a proceed button.
+    Displays assigned / unassigned / empty-labs counts and Phase 2 buttons.
     """
     assigned   = stats["total_students"] - stats["unassigned_count"]
     unassigned = stats["unassigned_count"]
@@ -1730,8 +2287,12 @@ def _cpi_phase1_report(stats: dict) -> "html.Div":
              f"{empty_labs} empty lab{'s' if empty_labs != 1 else ''}."],
             color="info", className="mb-3",
         ),
-        dbc.Button("Proceed to Phase 2 →", id="btn-cpi-proceed-phase2",
-                   color="primary"),
+        html.Div([
+            dbc.Button("Proceed to Phase 2 (manual) →", id="btn-cpi-proceed-phase2",
+                       color="success"),
+            dbc.Button("Auto-run Phase 2 →", id="btn-cpi-autorun-phase2",
+                       color="primary", className="ms-2"),
+        ], className="d-flex"),
     ])
 
 
@@ -1937,6 +2498,72 @@ def _do_pick(fid: str) -> tuple:
     n     = len(snaps)
     marks = {i: str(snaps[i].step) for i in range(0, n, max(1, n // 10))}
     return content, "main_alloc", n - 1, marks, n - 1, toast_msg, True
+
+
+# ---------------------------------------------------------------------------
+# Callback — CPI-Fill Phase 1 manual pick
+# ---------------------------------------------------------------------------
+
+@app.callback(
+    Output("r1-panel",         "children",  allow_duplicate=True),
+    Output("store-phase",      "data",      allow_duplicate=True),
+    Output("step-slider",      "max",       allow_duplicate=True),
+    Output("step-slider",      "marks",     allow_duplicate=True),
+    Output("step-slider",      "value",     allow_duplicate=True),
+    Output("toast-picked",     "children",  allow_duplicate=True),
+    Output("toast-picked",     "is_open",   allow_duplicate=True),
+    Input({"type": "cpi-p1-pick", "index": dash.ALL, "step": dash.ALL, "run": dash.ALL}, "n_clicks"),
+    prevent_initial_call=True,
+)
+def cb_cpi_p1_pick(n_clicks_list):
+    _no_update = (dash.no_update,) * 7
+    triggered = ctx.triggered_id
+    if not triggered or not isinstance(triggered, dict):
+        return _no_update
+
+    triggered_value = ctx.triggered[0].get("value") if ctx.triggered else None
+    if not triggered_value:
+        return _no_update
+
+    current_idx = _app_state.get("cpi_p1_queue_idx", 0)
+    current_run = _app_state.get("cpi_p1_run", 0)
+    if triggered.get("step") != current_idx or triggered.get("run") != current_run:
+        return _no_update
+
+    return _do_cpi_p1_pick(triggered["index"])
+
+
+# ---------------------------------------------------------------------------
+# Callback — CPI-Fill Phase 2 manual pick
+# ---------------------------------------------------------------------------
+
+@app.callback(
+    Output("main-alloc-panel", "children",  allow_duplicate=True),
+    Output("store-phase",      "data",      allow_duplicate=True),
+    Output("step-slider",      "max",       allow_duplicate=True),
+    Output("step-slider",      "marks",     allow_duplicate=True),
+    Output("step-slider",      "value",     allow_duplicate=True),
+    Output("toast-picked",     "children",  allow_duplicate=True),
+    Output("toast-picked",     "is_open",   allow_duplicate=True),
+    Input({"type": "cpi-p2-pick", "index": dash.ALL, "step": dash.ALL, "run": dash.ALL}, "n_clicks"),
+    prevent_initial_call=True,
+)
+def cb_cpi_p2_pick(n_clicks_list):
+    _no_update = (dash.no_update,) * 7
+    triggered = ctx.triggered_id
+    if not triggered or not isinstance(triggered, dict):
+        return _no_update
+
+    triggered_value = ctx.triggered[0].get("value") if ctx.triggered else None
+    if not triggered_value:
+        return _no_update
+
+    current_idx = _app_state.get("cpi_p2_queue_idx", 0)
+    current_run = _app_state.get("cpi_p2_run", 0)
+    if triggered.get("step") != current_idx or triggered.get("run") != current_run:
+        return _no_update
+
+    return _do_cpi_p2_pick(triggered["index"])
 
 
 # ---------------------------------------------------------------------------
