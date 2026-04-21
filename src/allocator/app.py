@@ -867,11 +867,13 @@ def cb_landing_policy_desc(value):
                 "if no empty labs exist.")
     if value == "cpi_fill":
         return ("Two-phase procedure: Phase 1 processes students in descending CPI order "
-                "(N_tier cap) until the number of unassigned students equals the number "
-                "of empty labs; Phase 2 assigns each remaining student to their "
-                "highest-preferred empty lab (full preference list, no cap).")
-    return ("Assigns to the least-loaded eligible advisor, "
-            "with ties broken by preference rank.")
+                "(full preference list, no tier cap) until the number of unassigned students "
+                "equals the number of empty labs; Phase 2 assigns each remaining student "
+                "to their highest-preferred empty lab.")
+    return ("Three-phase pipeline: Phase 0 tiers students by CPI; Round 1 gives each "
+            "faculty their top first-choice student; main allocation processes students "
+            "class-by-class (A → B → C) within an N_tier preference window, assigning "
+            "each to the least-loaded eligible advisor, ties broken by preference rank.")
 
 
 @app.callback(
