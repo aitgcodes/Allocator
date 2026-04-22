@@ -3,8 +3,11 @@
 **Policies compared:** `least_loaded` vs `cpi_fill`
 **Abbreviations:** LL = `least_loaded`, CF = `cpi_fill` (used in table annotations and inline comparisons throughout this report)
 **Datasets:** 1 original + 4 synthetic (random, clustered, polarised, uniform_high_cpi)
-**Metrics:** NPSS (primary, CPI-weighted), PSI (secondary, equal-weighted),
-  advisor avg entropy, CPI skewness of advisor load
+**Metric hierarchy:**
+  1. NPSS — primary deciding metric (CPI-weighted preference satisfaction within protected window)
+  2. PSI — secondary student metric (equal-weighted, global rank)
+  3. Advisor CPI Entropy — preferred advisor-equity metric (tier diversity within each advisor's cohort)
+  4. CPI Skewness — diagnostic only (asymmetry in advisor mean-CPI distribution; cohort-sensitive, not a stand-alone basis for declaring a policy winner)
 **Diagnostic columns (not independent deciding metrics):** Overflow Count, % Assigned in Window
   — out-of-window assignments already score 0 in NPSS, so these columns explain *why* NPSS
   is low in stressed scenarios but carry no additional evidential weight for policy comparison.
@@ -87,7 +90,7 @@
 
 ## 2. Advisor Fairness Metrics
 
-| Dataset | Policy | Advisors Assigned | Avg CPI Entropy ↑ | CPI Skewness |
+| Dataset | Policy | Advisors Assigned | Avg CPI Entropy ↑ | CPI Skewness *(diag)* |
 |---------|--------|------------------|-------------------|--------------|
 | Original | least_loaded | 31 | 0.1613 | 0.4597 |
 | Original | cpi_fill | 31 | 0.1613 | 0.2033 |
@@ -241,14 +244,15 @@ in specific structural conditions, not as a general tendency.
    structural signal, cpi_fill's ordered pass avoids accidental contention, improving merit-weighted
    satisfaction for mid-tier students.
 
-2. **CPI skewness reduction (2 of 5 datasets, using |abs|):** When absolute skewness is compared
-   consistently, CF wins on Original (Δ=−0.256) and Clustered (Δ=−0.100). The Random dataset is
-   a draw — the signed values flip direction but the magnitudes are nearly identical (0.159 vs 0.162).
-   On the High-CPI dataset, LL actually wins (Δ=+0.129): CF's serial pass in a uniform-CPI cohort
-   increases CPI concentration rather than reducing it. The skewness signal is real but narrower
-   than the signed-delta analysis suggested; it applies to structured or stressed cohorts, not
-   uniformly across all scenarios. If advisor CPI diversity is an institutional goal, CF is still
-   the directional choice, but the evidence is not as uniform as previously reported.
+2. **CPI skewness (diagnostic, 2 of 5 datasets cross threshold using |abs|):** CPI skewness is
+   cohort-sensitive and should be interpreted diagnostically rather than as a deciding metric.
+   When absolute skewness is compared consistently, CF produces lower |skewness| on Original
+   (Δ=−0.256) and Clustered (Δ=−0.100). The Random dataset is a draw — signed values flip
+   direction but magnitudes are nearly identical (0.159 vs 0.162). On the High-CPI dataset, the
+   direction reverses and LL wins (Δ=+0.129): CF's serial pass in a uniform-CPI cohort increases
+   CPI concentration rather than reducing it. Across the five datasets, skewness does not show a
+   uniform policy winner. For advisor-equity conclusions, prefer the entropy metric (§2); use
+   skewness as a supplementary cross-check, not a stand-alone basis for policy selection.
 
 **`least_loaded` shows a directional advantage in one situation, but no threshold-crossing win:**
 
@@ -282,22 +286,25 @@ policy value judgement, not a metric win.
 
 ### 7d. Summary
 
-> **The honest conclusion is that neither policy is uniformly superior.** Across 5 datasets and
-> 4 independent deciding metrics (NPSS, PSI, Advisor Entropy, CPI |abs| Skewness), only 6 of a
-> possible 20 pairwise comparisons cross the significance threshold. Overflow Count and
-> % In Window, while useful diagnostics, are not independent criteria — both are already
-> absorbed into NPSS through the zero-weight penalty for out-of-window assignments. The two
-> policies converge on nearly identical outcomes in typical cohorts.
+> **The honest conclusion is that neither policy is uniformly superior.** Across 5 datasets,
+> NPSS is the primary comparison metric; advisor entropy is the preferred advisor-equity metric;
+> CPI skewness is reported as a diagnostic cross-check. Only 6 of a possible 20 pairwise metric
+> comparisons cross the significance threshold. Overflow Count and % In Window, while useful
+> diagnostics, are not independent criteria — both are already absorbed into NPSS through the
+> zero-weight penalty for out-of-window assignments. The two policies converge on nearly identical
+> outcomes in typical cohorts.
 >
 > The choice between them should be driven by **institutional values**, not by these metrics alone:
 >
-> - Choose `cpi_fill` if the institution explicitly rewards academic merit in advisor matching,
->   or if advisor CPI balance is a priority.
+> - Choose `cpi_fill` if the institution explicitly rewards academic merit in advisor matching.
+>   Verify with NPSS; check entropy to confirm advisor-equity is acceptable.
 > - Choose `least_loaded` if equitable treatment across CPI tiers, robustness to clustered
 >   demand, or predictability of outcomes is the priority.
+> - Do not use CPI skewness alone to justify either choice; its direction reverses across cohort
+>   types. Use it alongside entropy as a supplementary diagnostic.
 >
 > A more definitive empirical comparison would require either a larger sample of real datasets
-> (≥ 20–30 cohorts) or bootstrap resampling of the existing datasets to construct confidence
+> (20–30 cohorts) or bootstrap resampling of the existing datasets to construct confidence
 > intervals for each metric delta.
 
 ---

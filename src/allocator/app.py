@@ -83,6 +83,7 @@ import dash
 import dash_bootstrap_components as dbc
 from dash import dcc, html, dash_table, ctx
 from dash.dependencies import Input, Output, State
+from dash.exceptions import PreventUpdate
 import plotly.graph_objects as go
 
 from .allocation import (
@@ -114,6 +115,8 @@ from .data_loader import (
 )
 from .state import AllocationSnapshot, Faculty, SnapshotList, Student
 from .visualizer import (
+    advisor_cpi_histogram,
+    advisor_tier_heatmap,
     bipartite_graph,
     load_bar_chart,
     statistics_panel,
@@ -193,9 +196,10 @@ def run_html_export(
             load_bar_chart(snap, faculty, meta, new_fid)
         )
 
-    final_snap = snapshots.last()
-    fig_stats = statistics_panel(final_snap, students, faculty, meta)
-    fig_log   = step_log_table(snapshots, final_snap.step)
+    final_snap       = snapshots.last()
+    fig_stats        = statistics_panel(final_snap, students, faculty, meta)
+    fig_log          = step_log_table(snapshots, final_snap.step)
+    fig_tier_heatmap = advisor_tier_heatmap(final_snap, students, faculty, meta)
 
     # Build slider steps over the bipartite figure
     fig = frames_bipartite[0]
@@ -275,6 +279,15 @@ def run_html_export(
         fig_stats.to_html(full_html=False, include_plotlyjs=False),
         "<h3 style='font-family:sans-serif'>Step Log</h3>",
         fig_log.to_html(full_html=False, include_plotlyjs=False),
+        "<hr>",
+        "<h3 style='font-family:sans-serif'>Advisor Tier Distribution Heatmap</h3>",
+        "<p style='font-family:sans-serif;font-size:0.85em;color:#555'>",
+        "Diagnostic advisor-equity view. Each row is an advisor and each column is a CPI tier. "
+        "Darker cells indicate a larger share of that advisor's assigned students from that tier. "
+        "Rows sorted by entropy ascending (most segregated first). "
+        "Use together with Avg CPI Entropy.",
+        "</p>",
+        fig_tier_heatmap.to_html(full_html=False, include_plotlyjs=False),
         "</body></html>",
     ]
 
@@ -509,8 +522,8 @@ def _render_metrics_panel(metrics: dict) -> html.Div:
                 style={"fontSize": "1rem", "fontWeight": "600"},
                 className=f"text-{npss_color}",
             ),
-            html.Div("NPSS (primary)", className="fw-bold"),
-            html.Small("CPI-weighted · tier-aware", className="text-muted"),
+            html.Div("NPSS (Primary)", className="fw-bold"),
+            html.Small("Primary metric. CPI-weighted preference satisfaction within each student's protected rank window.", className="text-muted"),
         ]),
     ]), className="mb-2 border-0 bg-light")
 
@@ -522,8 +535,8 @@ def _render_metrics_panel(metrics: dict) -> html.Div:
                 style={"fontSize": "1.4rem"},
                 className="text-secondary",
             ),
-            html.Div("Mean PSI (secondary)", className="text-muted"),
-            html.Small("equal-weighted · global rank", className="text-muted"),
+            html.Div("Mean PSI (Secondary)", className="text-muted"),
+            html.Small("Secondary metric. Equal-weighted average closeness to assigned preference rank across all students.", className="text-muted"),
         ]),
     ]), className="mb-2 border-0 bg-light")
 
@@ -532,7 +545,7 @@ def _render_metrics_panel(metrics: dict) -> html.Div:
     if overflow_count > 0:
         overflow_badge = [
             dbc.Badge(
-                f"⚠ {overflow_count} overflow",
+                f"⚠ {overflow_count} overflow (diagnostic)",
                 color="danger",
                 className="mb-2 me-2",
                 style={"fontSize": "0.9rem"},
@@ -598,8 +611,8 @@ def _render_metrics_panel(metrics: dict) -> html.Div:
                 html.Span(f"{avg_entropy:.3f}",
                           style={"fontSize": "1.6rem", "fontWeight": "bold"},
                           className="text-primary"),
-                html.Div("Avg CPI entropy", className="fw-bold"),
-                html.Small(f"higher = more diverse tier mix · {adv_asgn} advisors w/ students",
+                html.Div("Avg CPI Entropy", className="fw-bold"),
+                html.Small(f"Advisor-equity metric. Higher = more mixed tier composition per advisor · {adv_asgn} advisors w/ students",
                            className="text-muted"),
             ]), className="mb-2 border-0 bg-light"), md=6),
 
@@ -607,8 +620,8 @@ def _render_metrics_panel(metrics: dict) -> html.Div:
                 html.Span(skew_text,
                           style={"fontSize": "1.6rem", "fontWeight": "bold"},
                           className=skew_color),
-                html.Div("CPI skewness", className="fw-bold"),
-                html.Small("≈0 = balanced · + = some advisors get much higher-CPI cohorts",
+                html.Div("CPI Skewness (diagnostic)", className="fw-bold"),
+                html.Small("Diagnostic only. Measures asymmetry in advisor-avg CPI distribution; cohort-sensitive — interpret alongside entropy, not in isolation.",
                            className="text-muted"),
             ]), className="mb-2 border-0 bg-light"), md=6),
         ])
@@ -617,6 +630,11 @@ def _render_metrics_panel(metrics: dict) -> html.Div:
             html.H6("Advisor Fairness", className="mt-3 mb-1 text-muted"),
             html.Small(f"Tiers: {tier_note}", className="text-muted d-block mb-2"),
             advisor_cards,
+            html.Small(
+                "See the 'Tier Heatmap' tab in the replay panel for a visual breakdown "
+                "of advisor tier composition. Use together with Avg CPI Entropy.",
+                className="text-muted d-block mt-1",
+            ),
         ]
 
     return html.Div([
@@ -791,10 +809,12 @@ def _viz_card() -> dbc.Card:
             ], className="mb-3"),
             dcc.Interval(id="play-interval", interval=700, n_intervals=0, disabled=True),
             dbc.Tabs([
-                dbc.Tab(dcc.Graph(id="graph-bipartite"), label="Assignment Graph"),
-                dbc.Tab(dcc.Graph(id="graph-load"),      label="Advisor Loads"),
-                dbc.Tab(dcc.Graph(id="graph-stats"),     label="Statistics"),
-                dbc.Tab(dcc.Graph(id="graph-log"),       label="Step Log"),
+                dbc.Tab(dcc.Graph(id="graph-bipartite"),    label="Assignment Graph"),
+                dbc.Tab(dcc.Graph(id="graph-load"),         label="Advisor Loads"),
+                dbc.Tab(dcc.Graph(id="graph-stats"),        label="Statistics"),
+                dbc.Tab(dcc.Graph(id="graph-log"),          label="Step Log"),
+                dbc.Tab(dcc.Graph(id="graph-cpi-hist"),     label="CPI Distribution"),
+                dbc.Tab(dcc.Graph(id="graph-tier-heatmap"), label="Tier Heatmap"),
             ]),
         ]),
     ], className="mb-3")
@@ -2750,10 +2770,12 @@ def cb_advance_slider(_, current, max_val, playing):
 # ---------------------------------------------------------------------------
 
 @app.callback(
-    Output("graph-bipartite", "figure"),
-    Output("graph-load",      "figure"),
-    Output("graph-stats",     "figure"),
-    Output("graph-log",       "figure"),
+    Output("graph-bipartite",    "figure"),
+    Output("graph-load",         "figure"),
+    Output("graph-stats",        "figure"),
+    Output("graph-log",          "figure"),
+    Output("graph-cpi-hist",     "figure"),
+    Output("graph-tier-heatmap", "figure"),
     Input("step-slider", "value"),
     prevent_initial_call=False,
 )
@@ -2769,18 +2791,20 @@ def cb_update_graphs(step_idx):
     )
 
     if not snaps or not students or not faculty:
-        return empty, empty, empty, empty
+        return empty, empty, empty, empty, empty, empty
 
     step_idx = max(0, min(step_idx or 0, len(snaps)-1))
     snap = snaps[step_idx]
     new_fid = _new_fid_from_snap(snap)
 
-    fig_bp    = bipartite_graph(snap, students, faculty)
-    fig_load  = load_bar_chart(snap, faculty, meta, new_fid)
-    fig_stats = statistics_panel(snap, students, faculty, meta)
-    fig_log   = step_log_table(snaps, snap.step)
+    fig_bp           = bipartite_graph(snap, students, faculty)
+    fig_load         = load_bar_chart(snap, faculty, meta, new_fid)
+    fig_stats        = statistics_panel(snap, students, faculty, meta)
+    fig_log          = step_log_table(snaps, snap.step)
+    fig_cpi_hist     = advisor_cpi_histogram(snap, students, faculty)
+    fig_tier_heatmap = advisor_tier_heatmap(snap, students, faculty, meta)
 
-    return fig_bp, fig_load, fig_stats, fig_log
+    return fig_bp, fig_load, fig_stats, fig_log, fig_cpi_hist, fig_tier_heatmap
 
 
 # ---------------------------------------------------------------------------
@@ -2793,6 +2817,8 @@ def cb_update_graphs(step_idx):
     prevent_initial_call=True,
 )
 def cb_export_html(n):
+    if not n:
+        raise PreventUpdate
     snaps    = _app_state.get("snapshots")
     students = _app_state.get("students", [])
     faculty  = _app_state.get("faculty",  [])
@@ -2904,6 +2930,8 @@ def cb_phase0_modal(open_clicks, close_clicks, is_open):
     prevent_initial_call=True,
 )
 def cb_save_report(n_clicks):
+    if not n_clicks:
+        raise PreventUpdate
     assignments = _app_state.get("current_assignments") or {}
     students    = _app_state.get("students", [])
     faculty_map = {f.id: f for f in _app_state.get("faculty", [])}
@@ -2931,6 +2959,8 @@ def cb_save_report(n_clicks):
     prevent_initial_call=True,
 )
 def cb_download_metrics(n_clicks):
+    if not n_clicks:
+        raise PreventUpdate
     metrics     = _app_state.get("metrics") or {}
     students    = _app_state.get("students", [])
     student_map = {s.id: s for s in students}

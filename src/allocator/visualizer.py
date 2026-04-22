@@ -1,5 +1,5 @@
 """
-visualizer.py — Plotly figure builders for all four dashboard panels.
+visualizer.py — Plotly figure builders for all dashboard panels.
 
 All functions accept a single AllocationSnapshot (or supporting data)
 and return a plotly.graph_objects.Figure.
@@ -8,15 +8,19 @@ Panel A : bipartite_graph(snap, students, faculty)
 Panel B : load_bar_chart(snap, faculty, meta)
 Panel C : step_log_table(snapshots, current_step)
 Panel D : statistics_panel(snap, students, meta)
+Panel E : advisor_cpi_histogram(snap, students, faculty)
+Panel F : advisor_tier_heatmap(snap, students, faculty)
 """
 
 from __future__ import annotations
 
+import math
 from typing import Dict, List, Optional
 
 import plotly.graph_objects as go
 import plotly.express as px
 import pandas as pd
+from plotly.subplots import make_subplots
 
 from .state import AllocationSnapshot, Faculty, Student
 
@@ -414,4 +418,180 @@ def statistics_panel(
         margin=dict(l=0, r=0, t=10, b=40),
         height=260,
     )
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# Panel E — Advisor-averaged CPI histogram
+# ---------------------------------------------------------------------------
+
+def advisor_cpi_histogram(
+    snap: AllocationSnapshot,
+    students: List[Student],
+    faculty: List[Faculty],
+) -> go.Figure:
+    student_cpi: Dict[str, float] = {s.id: s.cpi for s in students}
+
+    faculty_cpis: Dict[str, List[float]] = {f.id: [] for f in faculty}
+    for sid, fid in snap.assignments.items():
+        if fid is not None and fid in faculty_cpis:
+            faculty_cpis[fid].append(student_cpi.get(sid, 0.0))
+
+    avg_cpis = [
+        sum(cpis) / len(cpis) if cpis else 0.0
+        for cpis in faculty_cpis.values()
+    ]
+
+    fig = go.Figure(go.Histogram(
+        x=avg_cpis,
+        nbinsx=10,
+        xbins=dict(start=0, end=10, size=1),
+        marker_color=HIGHLIGHT_COLOUR,
+        marker_line=dict(color="white", width=1),
+    ))
+    fig.update_layout(
+        xaxis=dict(title="Advisor-Averaged CPI", range=[0, 10]),
+        yaxis=dict(title="Number of Advisors"),
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        margin=dict(l=40, r=20, t=30, b=40),
+        height=300,
+    )
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# Panel F — Advisor Tier Distribution Heatmap
+# ---------------------------------------------------------------------------
+
+def advisor_tier_heatmap(
+    snap: AllocationSnapshot,
+    students: List[Student],
+    faculty: List[Faculty],
+    meta: dict,
+) -> go.Figure:
+    """
+    Diagnostic advisor-equity view.
+
+    Rows = advisors with ≥1 assigned student, sorted by load descending.
+    Columns = CPI tier labels (percentile: A/B/C; quartile: A/B1/B2/C).
+    Cell value = count(advisor, tier) × 100 / max_load.
+    Row sum = advisor's total load as % of capacity.
+
+    Use together with Advisor CPI Entropy.
+    """
+    student_map:  Dict[str, Student] = {s.id: s for s in students}
+    faculty_name: Dict[str, str]     = {f.id: f.name for f in faculty}
+
+    max_load: int = int(
+        meta.get("common_max_load")
+        or math.floor(len(students) / max(len(faculty), 1)) + 1
+    )
+
+    # Detect tier mode
+    quartile_mode = any(
+        s.tier in ("B1", "B2") for s in students if s.tier is not None
+    )
+    tier_labels = ["A", "B1", "B2", "C"] if quartile_mode else ["A", "B", "C"]
+
+    # Build advisor → tier counts from current snapshot assignments
+    adv_counts: Dict[str, Dict[str, int]] = {}
+    for sid, fid in snap.assignments.items():
+        if fid is None:
+            continue
+        s = student_map.get(sid)
+        if s is None:
+            continue
+        tier = s.tier if s.tier in tier_labels else tier_labels[-1]
+        if fid not in adv_counts:
+            adv_counts[fid] = {t: 0 for t in tier_labels}
+        adv_counts[fid][tier] += 1
+
+    if not adv_counts:
+        fig = go.Figure()
+        fig.update_layout(
+            title="Advisor Tier Distribution — no assignments yet",
+            height=300,
+            margin=dict(l=160, r=20, t=50, b=60),
+        )
+        return fig
+
+    # Sort by total load descending (most loaded advisors at the top)
+    sorted_fids = sorted(
+        adv_counts.keys(),
+        key=lambda fid: sum(adv_counts[fid].values()),
+        reverse=True,
+    )
+
+    # Build heatmap matrices
+    z:          List[List[float]] = []
+    customdata: List[List[list]]  = []
+    y_labels:   List[str]         = []
+
+    for fid in sorted_fids:
+        counts = adv_counts[fid]
+        total  = sum(counts.values())
+        name        = faculty_name.get(fid, fid)
+        row_sum_pct = round(total * 100.0 / max_load)
+        y_labels.append(f"{name} ({row_sum_pct}%)")
+
+        row_z  = []
+        row_cd = []
+        for tier in tier_labels:
+            count    = counts.get(tier, 0)
+            cell_pct = count * 100.0 / max_load
+            row_z.append(cell_pct)
+            row_cd.append([count, total])
+
+        z.append(row_z)
+        customdata.append(row_cd)
+
+    n_advisors = len(sorted_fids)
+    height     = max(340, 28 * n_advisors + 120)
+
+    fig = go.Figure(go.Heatmap(
+        z=z,
+        x=tier_labels,
+        y=y_labels,
+        customdata=customdata,
+        colorscale="Blues",
+        zmin=0,
+        zmax=100,
+        hovertemplate=(
+            f"<b>%{{y}}</b><br>"
+            f"Tier: %{{x}}<br>"
+            f"Students in tier: %{{customdata[0]}}<br>"
+            f"Cell value: %{{z:.0f}}% of capacity ({max_load})<br>"
+            f"Advisor load: %{{customdata[1]}}/{max_load}"
+            "<extra></extra>"
+        ),
+        colorbar=dict(title="% of capacity", ticksuffix="%"),
+    ))
+
+    fig.update_layout(
+        title=dict(
+            text=f"Advisor Tier Distribution — Step {snap.step}",
+            font=dict(size=13),
+        ),
+        xaxis=dict(title="CPI Tier"),
+        yaxis=dict(title="Advisor", autorange="reversed"),
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        margin=dict(l=160, r=20, t=50, b=80),
+        height=height,
+    )
+
+    fig.add_annotation(
+        text=(
+            f"Cell = students in tier × 100 / capacity ({max_load}). "
+            "Row sum = % of capacity filled. "
+            "Rows sorted by load descending."
+        ),
+        xref="paper", yref="paper",
+        x=0.5, y=-0.08,
+        showarrow=False,
+        font=dict(size=9, color="#666"),
+        align="center",
+    )
+
     return fig

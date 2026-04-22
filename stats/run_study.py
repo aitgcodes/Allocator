@@ -173,9 +173,16 @@ def build_report(all_results: Dict[str, dict], scenario_labels: Dict[str, str]) 
         "# Allocation Policy Comparison Study",
         "",
         "**Policies compared:** `least_loaded` vs `cpi_fill`  ",
+        "**Abbreviations:** LL = `least_loaded`, CF = `cpi_fill` (used in table annotations and inline comparisons throughout this report)  ",
         "**Datasets:** 1 original + 4 synthetic (random, clustered, polarised, uniform_high_cpi)  ",
-        "**Metrics:** NPSS (primary, CPI-weighted), PSI (secondary, equal-weighted), ",
-        "  advisor avg entropy, CPI skewness of advisor load  ",
+        "**Metric hierarchy:**",
+        "  1. NPSS — primary deciding metric (CPI-weighted preference satisfaction within protected window)  ",
+        "  2. PSI — secondary student metric (equal-weighted, global rank)  ",
+        "  3. Advisor CPI Entropy — preferred advisor-equity metric (tier diversity within each advisor's cohort)  ",
+        "  4. CPI Skewness — diagnostic only (asymmetry in advisor mean-CPI distribution; cohort-sensitive, not a stand-alone basis for declaring a policy winner)  ",
+        "**Diagnostic columns (not independent deciding metrics):** Overflow Count, % Assigned in Window  ",
+        "  — out-of-window assignments already score 0 in NPSS, so these columns explain *why* NPSS  ",
+        "  is low in stressed scenarios but carry no additional evidential weight for policy comparison.  ",
         "",
         "---",
         "",
@@ -241,8 +248,8 @@ def build_report(all_results: Dict[str, dict], scenario_labels: Dict[str, str]) 
     lines += [
         "## 2. Advisor Fairness Metrics",
         "",
-        "| Dataset | Policy | Advisors Assigned | Avg CPI Entropy ↑ | CPI Skewness |",
-        "|---------|--------|------------------|-------------------|--------------|",
+        "| Dataset | Policy | Advisors Assigned | Avg CPI Entropy ↑ | CPI Skewness *(diag)* |",
+        "|---------|--------|------------------|-------------------|-----------------------|",
     ]
 
     for ds_key, policy_results in all_results.items():
@@ -266,9 +273,23 @@ def build_report(all_results: Dict[str, dict], scenario_labels: Dict[str, str]) 
         "",
         "Values are **mean ± std** across the 5 datasets.",
         "",
-        "| Metric | `least_loaded` | `cpi_fill` | Winner |",
-        "|--------|---------------|------------|--------|",
+        "> **Note on interpretation:** With only 5 datasets and no formal significance testing,",
+        "> these aggregate comparisons are descriptive, not inferential. The std devs overlap",
+        "> heavily for every metric. A win is called only when the mean difference clearly",
+        "> exceeds the per-metric significance threshold; otherwise the result is a **Draw**.",
+        "",
+        "| Metric | `least_loaded` | `cpi_fill` | Threshold | Verdict |",
+        "|--------|---------------|------------|-----------|---------|",
     ]
+
+    # Significance thresholds (based on observed delta distributions)
+    THRESHOLDS = {
+        "NPSS":                 0.04,
+        "PSI":                  0.025,
+        "Avg Advisor Entropy":  0.02,
+        "CPI Skewness (|abs|)": 0.10,
+    }
+    DIAGNOSTIC = {"Overflow Count", "% In Window", "Advisors Assigned"}
 
     metric_collectors: Dict[str, Dict[str, List[float]]] = {
         "NPSS":                 {p: [] for p in POLICIES},
@@ -297,7 +318,7 @@ def build_report(all_results: Dict[str, dict], scenario_labels: Dict[str, str]) 
             metric_collectors["Advisors Assigned"][policy].append(adv["advisors_assigned"])
 
     # Direction: higher is better for NPSS, PSI, % In Window, Entropy, Advisors;
-    #            lower is better for Overflow, Skewness
+    #            lower is better for Overflow, Skewness (|abs|)
     higher_better = {"NPSS", "PSI", "% In Window", "Avg Advisor Entropy", "Advisors Assigned"}
 
     for metric_name, by_policy in metric_collectors.items():
@@ -307,12 +328,24 @@ def build_report(all_results: Dict[str, dict], scenario_labels: Dict[str, str]) 
         ll_str = f"{means['least_loaded']:.4f} ± {stdevs['least_loaded']:.4f}"
         cf_str = f"{means['cpi_fill']:.4f} ± {stdevs['cpi_fill']:.4f}"
 
-        if metric_name in higher_better:
-            winner = "least_loaded" if means["least_loaded"] >= means["cpi_fill"] else "cpi_fill"
+        if metric_name in DIAGNOSTIC:
+            verdict = "*(diagnostic)*"
+            thresh_str = "*(diag)*"
         else:
-            winner = "least_loaded" if means["least_loaded"] <= means["cpi_fill"] else "cpi_fill"
+            threshold = THRESHOLDS.get(metric_name, 0.0)
+            thresh_str = f"≥ {threshold}"
+            delta = abs(means["least_loaded"] - means["cpi_fill"])
+            if delta < threshold:
+                verdict = "**Draw**"
+            else:
+                if metric_name in higher_better:
+                    winner = "least_loaded" if means["least_loaded"] > means["cpi_fill"] else "cpi_fill"
+                else:
+                    winner = "least_loaded" if means["least_loaded"] < means["cpi_fill"] else "cpi_fill"
+                role = "(diagnostic)" if metric_name == "CPI Skewness (|abs|)" else ""
+                verdict = f"**{winner}** {role}".strip()
 
-        lines.append(f"| {metric_name} | {ll_str} | {cf_str} | `{winner}` |")
+        lines.append(f"| {metric_name} | {ll_str} | {cf_str} | {thresh_str} | {verdict} |")
 
     lines += [""]
 
@@ -323,9 +356,11 @@ def build_report(all_results: Dict[str, dict], scenario_labels: Dict[str, str]) 
         "## 4. Per-Dataset Policy Deltas (cpi_fill − least_loaded)",
         "",
         "Positive ΔNPSS / ΔPSI means `cpi_fill` is better; negative means `least_loaded` is better.",
+        "ΔSkewness = Δ|abs| = |CF| − |LL|; negative means CF has lower absolute skewness.",
+        "Overflow and % In Window are shown for diagnostic context only (not used to declare wins).",
         "",
-        "| Dataset | ΔNPSS | ΔPSI | ΔOverflow | Δ% In Window | ΔAvg Entropy | ΔSkewness |",
-        "|---------|-------|------|-----------|--------------|--------------|-----------|",
+        "| Dataset | ΔNPSS | ΔPSI | ΔOverflow *(diag)* | Δ% In Window *(diag)* | ΔAvg Entropy | ΔSkewness *(diag)* |",
+        "|---------|-------|------|--------------------|-----------------------|--------------|-------------------|",
     ]
 
     for ds_key, policy_results in all_results.items():
@@ -397,105 +432,118 @@ def build_report(all_results: Dict[str, dict], scenario_labels: Dict[str, str]) 
         "",
     ]
 
+    NPSS_THRESH = THRESHOLDS["NPSS"]
+    PSI_THRESH  = THRESHOLDS["PSI"]
+    ENT_THRESH  = THRESHOLDS["Avg Advisor Entropy"]
+    SKEW_THRESH = THRESHOLDS["CPI Skewness (|abs|)"]
+
     for ds_key, policy_results in all_results.items():
         label = scenario_labels.get(ds_key, ds_key)
         ll = policy_results["least_loaded"]["metrics"]
         cf = policy_results["cpi_fill"]["metrics"]
 
-        npss_winner = "cpi_fill" if cf["npss"] > ll["npss"] else "least_loaded"
-        psi_winner  = "cpi_fill" if cf["mean_psi"] > ll["mean_psi"] else "least_loaded"
-        ent_winner  = (
-            "cpi_fill" if cf["advisor"]["avg_entropy"] > ll["advisor"]["avg_entropy"] else "least_loaded"
-        )
+        def _verdict(ll_val, cf_val, threshold, higher_is_better=True):
+            delta = cf_val - ll_val if higher_is_better else ll_val - cf_val
+            if abs(delta) < threshold:
+                return "draw"
+            return "win CF" if delta > 0 else "win LL"
+
+        npss_v = _verdict(ll["npss"],          cf["npss"],          NPSS_THRESH)
+        psi_v  = _verdict(ll["mean_psi"],       cf["mean_psi"],      PSI_THRESH)
+        ent_v  = _verdict(ll["advisor"]["avg_entropy"], cf["advisor"]["avg_entropy"], ENT_THRESH)
+        sk_ll  = ll["advisor"]["cpi_skewness"]
+        sk_cf  = cf["advisor"]["cpi_skewness"]
+        if sk_ll is not None and sk_cf is not None:
+            skew_v = _verdict(abs(sk_ll), abs(sk_cf), SKEW_THRESH, higher_is_better=False)
+            skew_str = f"|LL|={abs(sk_ll):.4f}, |CF|={abs(sk_cf):.4f} — **{skew_v}** (diagnostic)"
+        else:
+            skew_str = "N/A"
 
         lines += [
             f"### {label}",
-            f"- NPSS winner: **{npss_winner}** "
-            f"(LL={ll['npss']:.4f}, CF={cf['npss']:.4f})",
-            f"- PSI winner: **{psi_winner}** "
-            f"(LL={ll['mean_psi']:.4f}, CF={cf['mean_psi']:.4f})",
-            f"- Advisor entropy winner: **{ent_winner}** "
-            f"(LL={ll['advisor']['avg_entropy']:.4f}, CF={cf['advisor']['avg_entropy']:.4f})",
-            f"- Overflow → LL={ll['overflow_count']}, CF={cf['overflow_count']}",
+            f"- NPSS: LL={ll['npss']:.4f}, CF={cf['npss']:.4f} — **{npss_v}** (threshold {NPSS_THRESH})",
+            f"- PSI: LL={ll['mean_psi']:.4f}, CF={cf['mean_psi']:.4f} — **{psi_v}** (threshold {PSI_THRESH})",
+            f"- Advisor entropy: LL={ll['advisor']['avg_entropy']:.4f}, CF={cf['advisor']['avg_entropy']:.4f} — **{ent_v}** (threshold {ENT_THRESH})",
+            f"- CPI skewness (diagnostic): {skew_str}",
+            f"- Overflow (diagnostic): LL={ll['overflow_count']}, CF={cf['overflow_count']}",
             "",
         ]
 
     # ------------------------------------------------------------------ #
-    # Section 7 — Policy recommendation
+    # Section 7 — Policy recommendation (threshold-based win count)
     # ------------------------------------------------------------------ #
-    # Tally wins
-    npss_wins = {"least_loaded": 0, "cpi_fill": 0}
-    psi_wins  = {"least_loaded": 0, "cpi_fill": 0}
-    ent_wins  = {"least_loaded": 0, "cpi_fill": 0}
-    ov_wins   = {"least_loaded": 0, "cpi_fill": 0}
+    npss_wins = {"least_loaded": 0, "cpi_fill": 0, "draw": 0}
+    psi_wins  = {"least_loaded": 0, "cpi_fill": 0, "draw": 0}
+    ent_wins  = {"least_loaded": 0, "cpi_fill": 0, "draw": 0}
 
     for ds_key, policy_results in all_results.items():
         ll = policy_results["least_loaded"]["metrics"]
         cf = policy_results["cpi_fill"]["metrics"]
-        npss_wins["cpi_fill" if cf["npss"] > ll["npss"] else "least_loaded"] += 1
-        psi_wins["cpi_fill" if cf["mean_psi"] > ll["mean_psi"] else "least_loaded"] += 1
-        ent_wins[
-            "cpi_fill" if cf["advisor"]["avg_entropy"] > ll["advisor"]["avg_entropy"] else "least_loaded"
-        ] += 1
-        ov_wins[
-            "cpi_fill" if cf["overflow_count"] < ll["overflow_count"] else "least_loaded"
-        ] += 1
 
+        def _tally(ll_val, cf_val, threshold, higher_is_better=True):
+            delta = cf_val - ll_val if higher_is_better else ll_val - cf_val
+            if abs(delta) < threshold:
+                return "draw"
+            return "cpi_fill" if delta > 0 else "least_loaded"
+
+        npss_wins[_tally(ll["npss"],     cf["npss"],     NPSS_THRESH)] += 1
+        psi_wins[ _tally(ll["mean_psi"], cf["mean_psi"], PSI_THRESH)]  += 1
+        ent_wins[ _tally(ll["advisor"]["avg_entropy"], cf["advisor"]["avg_entropy"], ENT_THRESH)] += 1
+
+    n_ds = len(all_results)
     lines += [
         "---",
         "",
         "## 7. Policy Recommendation",
         "",
-        f"Across {len(all_results)} datasets:",
+        "### 7a. Threshold-based win count",
         "",
-        f"| Criterion | `least_loaded` wins | `cpi_fill` wins |",
-        f"|-----------|--------------------|--------------------|",
-        f"| NPSS (primary) | {npss_wins['least_loaded']} | {npss_wins['cpi_fill']} |",
-        f"| PSI (secondary) | {psi_wins['least_loaded']} | {psi_wins['cpi_fill']} |",
-        f"| Advisor Entropy | {ent_wins['least_loaded']} | {ent_wins['cpi_fill']} |",
-        f"| Lower Overflow  | {ov_wins['least_loaded']}  | {ov_wins['cpi_fill']}  |",
+        f"Only differences that cross the significance threshold count as wins.",
+        f"Overflow Count and % In Window are excluded — subsumed by NPSS.",
+        "",
+        f"| Metric | `least_loaded` wins | `cpi_fill` wins | Draws |",
+        f"|--------|--------------------|--------------------|-------|",
+        f"| NPSS (primary, threshold {NPSS_THRESH}) | {npss_wins['least_loaded']} | {npss_wins['cpi_fill']} | {npss_wins['draw']} |",
+        f"| PSI (secondary, threshold {PSI_THRESH}) | {psi_wins['least_loaded']} | {psi_wins['cpi_fill']} | {psi_wins['draw']} |",
+        f"| Advisor Entropy (threshold {ENT_THRESH}) | {ent_wins['least_loaded']} | {ent_wins['cpi_fill']} | {ent_wins['draw']} |",
+        f"| CPI Skewness | *(diagnostic — see per-dataset notes in §6)* | | |",
+        f"| Overflow Count | *(diagnostic — subsumed by NPSS)* | | |",
+        f"| % In Window | *(diagnostic — subsumed by NPSS)* | | |",
+        "",
+        "### 7b. When to use each policy",
         "",
         "### When to use `least_loaded`",
         "",
-        "- When **load balancing across advisors** is the primary concern. The policy",
-        "  distributes students to the least-loaded eligible advisor, naturally spreading",
-        "  the advising burden and resulting in higher advisor CPI diversity (entropy).",
-        "- When **equal treatment of students** regardless of CPI is important: every",
-        "  student in a given tier has an equal chance of landing near the top of their",
-        "  preference list, because placement depends only on faculty load, not student rank.",
-        "- In **uniform or random cohort** scenarios where there is no strong correlation",
-        "  between CPI and preference similarity.",
+        "- When **equitable treatment of students** across CPI tiers is important: placement",
+        "  depends on faculty load, not student CPI rank.",
+        "- When **robustness to clustered demand** is a priority: load-spreading is less likely",
+        "  to exhaust popular advisor capacity early.",
+        "- As the **safe default** when cohort structure is unknown.",
         "",
         "### When to use `cpi_fill`",
         "",
-        "- When **rewarding academic merit** is an explicit institutional goal. Because",
-        "  students are processed in descending CPI order, high-performing students get",
-        "  first access to their preferred advisors.",
-        "- In **clustered preference** scenarios (many students competing for the same",
-        "  few popular advisors), `cpi_fill` can give top students their #1 or #2 choice",
-        "  while `least_loaded` may arbitrarily split that cohort.",
-        "- When **minimizing empty-lab spots** matters: Phase 2 of `cpi_fill` explicitly",
-        "  fills remaining empty labs, so no advisor seat is left unused when students",
-        "  remain unassigned.",
-        "- In **polarised** cohorts (high-CPI students all prefer a different group of",
-        "  advisors from low-CPI students), `cpi_fill` can outperform on PSI because",
-        "  the CPI-ordered pass naturally separates the two groups.",
+        "- When **rewarding academic merit** is an explicit institutional goal: high-CPI students",
+        "  get first access to their preferred advisors.",
+        "- When **no empty labs** is a hard requirement: Phase 2 structurally guarantees this.",
+        "- In **random or weakly correlated preference** cohorts: the only threshold-crossing NPSS",
+        "  win in this study occurs here (Δ=+0.083).",
         "",
-        "### Summary recommendation",
+        "### 7c. Summary",
         "",
-        "Both policies generally perform well and produce near-identical NPSS/PSI in",
-        "random or balanced cohorts. The practical choice depends on institutional values:",
-        "",
-        "| Priority | Recommended Policy |",
-        "|----------|-------------------|",
-        "| Advisor load balance & equity | `least_loaded` |",
-        "| Student merit-based access | `cpi_fill` |",
-        "| Minimising unfilled advisor slots | `cpi_fill` |",
-        "| Robustness across cohort shapes | `least_loaded` |",
-        "",
-        "> **Practical default:** Use `least_loaded` for most cohorts. Switch to `cpi_fill`",
-        "> when the institution explicitly weights academic performance in advisor matching",
-        "> or when a large number of students compete for a small popular subset of advisors.",
+        "> **The honest conclusion is that neither policy is uniformly superior.**",
+        "> Across the datasets, NPSS is the primary comparison metric; advisor entropy is the",
+        "> preferred advisor-equity metric; CPI skewness is a diagnostic cross-check whose",
+        "> direction can reverse across cohort types and should not be used alone to declare",
+        "> a policy winner. The two policies converge on nearly identical outcomes in typical",
+        "> cohorts. The choice is a value judgement about institutional priorities, not a",
+        "> metric-determined optimum.",
+        ">",
+        "> - Choose `cpi_fill` if the institution explicitly rewards academic merit in advisor",
+        ">   matching. Verify with NPSS; check entropy to confirm advisor-equity is acceptable.",
+        "> - Choose `least_loaded` if equitable treatment across tiers, robustness to clustered",
+        ">   demand, or predictability of outcomes is the priority.",
+        "> - Do not use CPI skewness alone to justify either choice; use it alongside entropy",
+        ">   as a supplementary diagnostic.",
         "",
         "---",
         "",

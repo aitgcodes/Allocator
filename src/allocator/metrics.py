@@ -391,6 +391,7 @@ def compute_advisor_metrics(
             "entropy":       normalized_entropy,
             "mean_cpi":      mean_cpi,
             "student_count": n,
+            "tier_counts":   tier_counts,
         }
 
     advisors_assigned = len(per_faculty)
