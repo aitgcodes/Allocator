@@ -2077,7 +2077,7 @@ def _build_completion_panel(
     unassigned_count = sum(1 for v in assignments.values() if v is None)
     empty_labs       = sum(1 for f in faculty if faculty_loads.get(f.id, 0) == 0)
 
-    loads        = [v for v in faculty_loads.values() if v > 0]
+    loads        = list(faculty_loads.values())
     load_balance = max(loads) - min(loads) if len(loads) >= 2 else 0
 
     npss    = metrics.get("npss", 0.0)
@@ -3246,13 +3246,18 @@ def cb_save_run(n):
         raise PreventUpdate
     if _app_state.get("phase") != "complete":
         return "⚠ Run not complete yet."
-    data      = _state_to_json()
-    policy    = data["policy"]
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename  = f"{policy}_{timestamp}.json"
-    Path(RESULTS_DIR).mkdir(parents=True, exist_ok=True)
-    (Path(RESULTS_DIR) / filename).write_text(json.dumps(data, indent=2))
-    return f"✓ Saved as {filename}"
+    try:
+        data      = _state_to_json()
+        policy    = data["policy"]
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename  = f"{policy}_{timestamp}.json"
+        Path(RESULTS_DIR).mkdir(parents=True, exist_ok=True)
+        (Path(RESULTS_DIR) / filename).write_text(json.dumps(data, indent=2))
+        return f"✓ Saved as {filename}"
+    except OSError as e:
+        return f"✗ Save failed: {e}"
+    except Exception as e:
+        return f"✗ Unexpected error: {e}"
 
 
 @app.callback(
@@ -3289,10 +3294,11 @@ def cb_populate_run_dropdowns(pathname):
     if not results.exists():
         return [], [{"label": "None (single-run view)", "value": ""}]
     files = sorted(results.glob("*.json"), reverse=True)
-    options = []
+    options  = []
+    skipped  = []
     for f in files:
         try:
-            data  = json.loads(f.read_text())
+            data  = json.loads(f.read_text(encoding="utf-8"))
             meta  = data.get("meta", {})
             npss  = data.get("metrics", {}).get("npss", 0.0)
             label = (
@@ -3302,8 +3308,15 @@ def cb_populate_run_dropdowns(pathname):
                 f"{data.get('saved_at','')[:16]}"
             )
             options.append({"label": label, "value": str(f)})
-        except Exception:
-            continue
+        except (OSError, PermissionError) as e:
+            skipped.append(f"{f.name}: {e}")
+        except (json.JSONDecodeError, KeyError, TypeError) as e:
+            skipped.append(f"{f.name}: invalid format ({e})")
+
+    if skipped:
+        import warnings
+        warnings.warn(f"Skipped {len(skipped)} run file(s): {'; '.join(skipped)}")
+
     run_b_opts = [{"label": "None (single-run view)", "value": ""}] + options
     return options, run_b_opts
 
