@@ -590,7 +590,122 @@ def advisor_tier_heatmap(
         xref="paper", yref="paper",
         x=0.5, y=-0.08,
         showarrow=False,
-        font=dict(size=9, color="#666"),
+        font=dict(size=12, color="#666"),
+        align="center",
+    )
+
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# Panel G — Per-tier mean preference rank comparison chart
+# ---------------------------------------------------------------------------
+
+# Policy display colours (consistent across single and comparison views)
+_POLICY_COLOURS = {
+    "least_loaded": "#2196F3",   # blue
+    "cpi_fill":     "#FF9800",   # orange
+    "nonempty":     "#43A047",   # green
+}
+_FALLBACK_COLOURS = ["#9C27B0", "#E53935", "#00BCD4"]
+
+
+def per_tier_rank_chart(
+    runs: List[dict],
+    tier_labels: List[str],
+) -> go.Figure:
+    """
+    Grouped bar chart comparing mean assigned preference rank per tier.
+
+    Parameters
+    ----------
+    runs : list of {"label": str, "metrics": dict}
+        One entry per policy run to display. Metrics must contain "per_tier".
+    tier_labels : list of str
+        Ordered tier labels to include, e.g. ["A","B","C"] or ["A","B1","B2","C"].
+
+    Lower rank = better (assigned closer to 1st choice).
+    """
+    fig = go.Figure()
+
+    for i, run in enumerate(runs):
+        label   = run["label"]
+        metrics = run["metrics"]
+        colour  = _POLICY_COLOURS.get(label, _FALLBACK_COLOURS[i % len(_FALLBACK_COLOURS)])
+
+        per_tier = metrics.get("per_tier", {})
+        y_vals   = []
+        x_vals   = []
+        text_vals = []
+
+        for tier in tier_labels:
+            td = per_tier.get(tier, {})
+            if td.get("count", 0) == 0:
+                continue
+            mean_rank = td.get("mean_rank")
+            if mean_rank is None:
+                continue
+            win_pct = td.get("within_window_rate", 0.0) * 100
+            x_vals.append(f"Tier {tier}")
+            y_vals.append(round(mean_rank, 2))
+            text_vals.append(f"{win_pct:.0f}% in window")
+
+        fig.add_trace(go.Bar(
+            name=label,
+            x=x_vals,
+            y=y_vals,
+            text=text_vals,
+            textposition="outside",
+            textfont=dict(size=9),
+            marker_color=colour,
+            hovertemplate=(
+                f"<b>{label}</b><br>"
+                "Tier: %{x}<br>"
+                "Mean rank: %{y:.2f}<br>"
+                "%{text}"
+                "<extra></extra>"
+            ),
+        ))
+
+    # Subtitle annotation listing NPSS / PSI per run
+    subtitle_parts = []
+    for run in runs:
+        m = run["metrics"]
+        subtitle_parts.append(
+            f"{run['label']}: NPSS={m.get('npss', 0):.3f}  PSI={m.get('mean_psi', 0):.3f}"
+        )
+    subtitle = "    |    ".join(subtitle_parts)
+
+    fig.update_layout(
+        title=dict(text="Per-Tier Mean Preference Rank", font=dict(size=13)),
+        barmode="group",
+        xaxis=dict(title=""),
+        yaxis=dict(
+            title="Mean assigned preference rank  (lower = better)",
+            rangemode="tozero",
+        ),
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        margin=dict(l=60, r=20, t=70, b=90),
+        height=380,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
+
+    fig.add_annotation(
+        text=subtitle,
+        xref="paper", yref="paper",
+        x=0.5, y=-0.15,
+        showarrow=False,
+        font=dict(size=12, color="#444"),
+        align="center",
+    )
+
+    fig.add_annotation(
+        text="Bar label: % of tier assigned within protected preference window (N_tier)",
+        xref="paper", yref="paper",
+        x=0.5, y=-0.22,
+        showarrow=False,
+        font=dict(size=11, color="#888"),
         align="center",
     )
 
