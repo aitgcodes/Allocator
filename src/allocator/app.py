@@ -3320,19 +3320,32 @@ def cb_analysis_load(n, path_a, path_b):
     if not n or not path_a:
         raise PreventUpdate
 
-    try:
-        run_a = _json_to_run(json.loads(Path(path_a).read_text()))
-    except Exception as e:
-        return html.P(f"Error loading Run A: {e}", className="text-danger"), "Error."
+    def _safe_load(raw_path: str) -> tuple:
+        """Return (run_dict, error_str). Validates path is inside RESULTS_DIR."""
+        try:
+            p = Path(raw_path).resolve()
+        except Exception:
+            return None, "Invalid path."
+        results_root = Path(RESULTS_DIR).resolve()
+        if results_root not in p.parents:
+            return None, "Path is outside the results directory."
+        if p.suffix != ".json":
+            return None, "Only .json files are permitted."
+        if not p.exists():
+            return None, f"File not found: {p.name}"
+        return _json_to_run(json.loads(p.read_text())), None
+
+    run_a, err = _safe_load(path_a)
+    if err:
+        return html.P(f"Error loading Run A: {err}", className="text-danger"), "Error."
 
     runs = [run_a]
     run_b = None
     if path_b:
-        try:
-            run_b = _json_to_run(json.loads(Path(path_b).read_text()))
-            runs.append(run_b)
-        except Exception as e:
-            return html.P(f"Error loading Run B: {e}", className="text-danger"), "Error."
+        run_b, err = _safe_load(path_b)
+        if err:
+            return html.P(f"Error loading Run B: {err}", className="text-danger"), "Error."
+        runs.append(run_b)
 
     # Tier labels from Run A meta
     tier_labels = (
