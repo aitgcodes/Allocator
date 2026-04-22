@@ -70,7 +70,8 @@ DEFAULT_FACULTY_PATH  = str(Path(__file__).parent.parent.parent / "data" / "samp
 PHASE0_REPORT_DIR = str(Path(__file__).parent.parent.parent / "reports")
 
 # Where Phase-0 reports and HTML export are written
-OUTPUT_DIR = str(Path(__file__).parent.parent.parent / "reports")
+OUTPUT_DIR  = str(Path(__file__).parent.parent.parent / "reports")
+RESULTS_DIR = str(Path(__file__).parent.parent.parent / "results")
 
 # Dash server settings
 DASH_HOST = "127.0.0.1"
@@ -78,6 +79,9 @@ DASH_PORT = 8050
 DASH_DEBUG = True
 
 # ======================================================================
+
+import json
+from datetime import datetime
 
 import dash
 import dash_bootstrap_components as dbc
@@ -119,6 +123,7 @@ from .visualizer import (
     advisor_tier_heatmap,
     bipartite_graph,
     load_bar_chart,
+    per_tier_rank_chart,
     statistics_panel,
     step_log_table,
 )
@@ -293,6 +298,66 @@ def run_html_export(
 
     out_path.write_text("\n".join(html_parts), encoding="utf-8")
     print(f"HTML export written to: {out_path}")
+
+
+# ---------------------------------------------------------------------------
+# Analysis run serialization helpers
+# ---------------------------------------------------------------------------
+
+def _state_to_json() -> dict:
+    """Serialise the current finalised _app_state to a JSON-compatible dict."""
+    students = _app_state.get("students", [])
+    faculty  = _app_state.get("faculty",  [])
+    return {
+        "saved_at":    datetime.now().isoformat(),
+        "policy":      ALLOCATION_POLICY,
+        "students": [
+            {"id": s.id, "name": s.name, "cpi": s.cpi,
+             "tier": s.tier, "n_tier": s.n_tier, "preferences": s.preferences}
+            for s in students
+        ],
+        "faculty": [
+            {"id": f.id, "name": f.name, "max_load": f.max_load}
+            for f in faculty
+        ],
+        "assignments":   _app_state.get("current_assignments", {}),
+        "faculty_loads": _app_state.get("current_faculty_loads", {}),
+        "metrics":       _app_state.get("metrics", {}),
+        "meta":          _app_state.get("meta", {}),
+    }
+
+
+def _json_to_run(data: dict) -> dict:
+    """Reconstruct display-ready objects from a saved JSON run dict."""
+    students = [
+        Student(
+            id=s["id"], name=s["name"], cpi=s["cpi"],
+            tier=s.get("tier"), n_tier=s.get("n_tier"),
+            preferences=s.get("preferences", []),
+        )
+        for s in data.get("students", [])
+    ]
+    faculty = [
+        Faculty(id=f["id"], name=f["name"], max_load=f.get("max_load", 1))
+        for f in data.get("faculty", [])
+    ]
+    snap = AllocationSnapshot(
+        step=0,
+        phase="Final",
+        event="Loaded from saved run",
+        assignments=data.get("assignments", {}),
+        faculty_loads=data.get("faculty_loads", {}),
+        unassigned=set(),
+    )
+    return {
+        "students": students,
+        "faculty":  faculty,
+        "snap":     snap,
+        "metrics":  data.get("metrics", {}),
+        "meta":     data.get("meta", {}),
+        "policy":   data.get("policy", "unknown"),
+        "saved_at": data.get("saved_at", ""),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -774,10 +839,15 @@ def _landing_layout() -> dbc.Container:
                         ),
                         html.Div(id="landing-policy-desc",
                                  className="text-muted small mb-3"),
-                        dbc.Button("Continue →",
-                                   id="btn-landing-continue",
-                                   color="primary",
-                                   className="float-end"),
+                        html.Div([
+                            dbc.Button("Continue →",
+                                       id="btn-landing-continue",
+                                       color="primary",
+                                       className="me-2"),
+                            dbc.Button("📊 View Analysis",
+                                       id="btn-landing-analysis",
+                                       color="outline-primary"),
+                        ], className="float-end"),
                     ]),
                 ], className="border-0 shadow"),
             ], md=5),
@@ -786,6 +856,54 @@ def _landing_layout() -> dbc.Container:
             style={"minHeight": "80vh"},
         ),
     ], fluid=True)
+
+
+def _analysis_layout() -> html.Div:
+    return html.Div(id="analysis-page", style={"display": "none"}, children=[
+        dbc.Container([
+            dbc.Row([
+                dbc.Col(html.H3("Allocation Analysis"), width="auto"),
+                dbc.Col(
+                    dbc.Button("← Back to allocation", id="btn-back-to-app",
+                               color="outline-secondary", size="sm"),
+                    width="auto", className="ms-auto me-2",
+                ),
+                dbc.Col(
+                    dbc.Button("🏠 Home", id="btn-home-from-analysis",
+                               color="outline-secondary", size="sm"),
+                    width="auto",
+                ),
+            ], align="center", className="my-3"),
+
+            dbc.Card([
+                dbc.CardHeader("Load saved runs"),
+                dbc.CardBody([
+                    dbc.Row([
+                        dbc.Col([
+                            html.Label("Run A", className="fw-bold"),
+                            dcc.Dropdown(id="analysis-run-a",
+                                         placeholder="Select a saved run…"),
+                        ], md=5),
+                        dbc.Col([
+                            html.Label("Run B (optional — for comparison)",
+                                       className="fw-bold"),
+                            dcc.Dropdown(id="analysis-run-b",
+                                         placeholder="Select a saved run…"),
+                        ], md=5),
+                        dbc.Col(
+                            dbc.Button("Load", id="btn-analysis-load",
+                                       color="primary", className="mt-4"),
+                            md=2,
+                        ),
+                    ]),
+                    html.Small(id="analysis-load-status",
+                               className="text-muted mt-1 d-block"),
+                ]),
+            ], className="mb-3"),
+
+            html.Div(id="analysis-content"),
+        ], fluid=True),
+    ])
 
 
 def _viz_card() -> dbc.Card:
@@ -829,8 +947,13 @@ app.layout = dbc.Container([
 
     # Main app page — shown at "/app"
     html.Div(id="main-page", style={"display": "none"}, children=[
-        dbc.Row(dbc.Col(html.H2("MS Thesis Advisor Allocation",
-                                className="my-3 text-primary"))),
+        dbc.Row([
+            dbc.Col(html.H2("MS Thesis Advisor Allocation",
+                            className="my-3 text-primary")),
+            dbc.Col(dbc.Button("🏠 Home", id="btn-home-from-app",
+                               color="outline-secondary", size="sm"),
+                    width="auto", className="my-3 ms-auto"),
+        ]),
         dbc.Row(dbc.Col(html.Div(id="active-policy-badge", className="mb-2"))),
         dbc.Row(dbc.Col(_upload_card())),
         dbc.Row(dbc.Col(_control_card())),
@@ -838,6 +961,9 @@ app.layout = dbc.Container([
         dbc.Row(dbc.Col(_main_alloc_card())),
         dbc.Row(dbc.Col(_viz_card())),
     ]),
+
+    # Analysis page — shown at "/analysis"
+    _analysis_layout(),
 
     # Always-present hidden components (stores, downloads, modals, toast)
     dcc.Store(id="store-loaded",        data=False),
@@ -930,14 +1056,75 @@ def cb_update_section_headers(policy):
 
 
 @app.callback(
-    Output("landing-page", "style"),
-    Output("main-page",    "style"),
+    Output("landing-page",  "style"),
+    Output("main-page",     "style"),
+    Output("analysis-page", "style"),
     Input("url", "pathname"),
 )
 def cb_toggle_pages(pathname):
+    hide, show = {"display": "none"}, {"display": "block"}
     if pathname == "/app":
-        return {"display": "none"}, {"display": "block"}
-    return {"display": "block"}, {"display": "none"}
+        return hide, show, hide
+    if pathname == "/analysis":
+        return hide, hide, show
+    return show, hide, hide
+
+
+@app.callback(
+    Output("url", "pathname", allow_duplicate=True),
+    Input("btn-home-from-app", "n_clicks"),
+    prevent_initial_call=True,
+)
+def cb_home_from_app(n):
+    if not n:
+        raise PreventUpdate
+    return "/"
+
+
+@app.callback(
+    Output("url", "pathname", allow_duplicate=True),
+    Input("btn-home-from-analysis", "n_clicks"),
+    prevent_initial_call=True,
+)
+def cb_home_from_analysis(n):
+    if not n:
+        raise PreventUpdate
+    return "/"
+
+
+@app.callback(
+    Output("url", "pathname", allow_duplicate=True),
+    Input("btn-landing-analysis", "n_clicks"),
+    prevent_initial_call=True,
+)
+def cb_landing_analysis(n):
+    if not n:
+        raise PreventUpdate
+    return "/analysis"
+
+
+@app.callback(
+    Output("collapse-metrics",  "is_open"),
+    Input("btn-toggle-metrics", "n_clicks"),
+    State("collapse-metrics",   "is_open"),
+    prevent_initial_call=True,
+)
+def toggle_metrics(n, is_open):
+    if n:
+        return not is_open
+    return is_open
+
+
+@app.callback(
+    Output("collapse-popularity",  "is_open"),
+    Input("btn-toggle-popularity", "n_clicks"),
+    State("collapse-popularity",   "is_open"),
+    prevent_initial_call=True,
+)
+def toggle_popularity(n, is_open):
+    if n:
+        return not is_open
+    return is_open
 
 
 @app.callback(
@@ -1886,10 +2073,24 @@ def _build_completion_panel(
         html.Tbody(pop_rows),
     ], bordered=True, hover=True, striped=True, size="sm")
 
-    metrics_panel = _render_metrics_panel(metrics)
     assigned_count   = sum(1 for v in assignments.values() if v is not None)
     unassigned_count = sum(1 for v in assignments.values() if v is None)
     empty_labs       = sum(1 for f in faculty if faculty_loads.get(f.id, 0) == 0)
+
+    loads        = [v for v in faculty_loads.values() if v > 0]
+    load_balance = max(loads) - min(loads) if len(loads) >= 2 else 0
+
+    npss    = metrics.get("npss", 0.0)
+    psi     = metrics.get("mean_psi", 0.0)
+    entropy = metrics.get("advisor", {}).get("avg_entropy", 0.0)
+
+    summary_badges = html.Div([
+        dbc.Badge(f"NPSS: {npss:.3f}",             color="primary",   className="me-1"),
+        dbc.Badge(f"PSI: {psi:.3f}",               color="secondary", className="me-1"),
+        dbc.Badge(f"Entropy: {entropy:.3f}",        color="info",      className="me-1"),
+        dbc.Badge(f"Load balance: {load_balance}",  color="light",
+                  text_color="dark", className="me-1"),
+    ], className="mb-2")
 
     return html.Div([
         dbc.Alert(
@@ -1898,8 +2099,15 @@ def _build_completion_panel(
              f"{empty_labs} empty lab{'s' if empty_labs != 1 else ''}."],
             color="success", className="mb-3",
         ),
-        dbc.Button("⬇ Save report (CSV)", id="btn-save-report",
-                   color="outline-secondary", size="sm", className="mb-3"),
+        html.Div([
+            dbc.Button("⬇ Save report (CSV)", id="btn-save-report",
+                       color="outline-secondary", size="sm", className="me-2"),
+            dbc.Button("💾 Save run (JSON)", id="btn-save-run",
+                       color="outline-primary", size="sm", className="me-2"),
+            dbc.Button("📊 Open Analysis", id="btn-open-analysis",
+                       color="primary", size="sm"),
+            html.Small(id="save-run-status", className="text-success ms-2"),
+        ], className="mb-3"),
         dbc.Table([
             html.Thead(html.Tr([
                 html.Th("Student"), html.Th("CPI"),
@@ -1909,12 +2117,26 @@ def _build_completion_panel(
             html.Tbody(summary_rows),
         ], bordered=True, hover=True, striped=True, size="sm"),
         html.Hr(),
-        html.H5("Advisor popularity", className="mt-2 mb-0"),
-        html.P("Total students per advisor per choice (tier breakdown: A · B · C).",
-               className="text-muted small"),
-        pop_table,
+        dbc.Button("▶ Advisor Popularity", id="btn-toggle-popularity",
+                   color="link", size="sm", className="p-0 text-muted fw-bold mt-1"),
+        dbc.Collapse(
+            html.Div([
+                html.P("Total students per advisor per choice (tier breakdown: A · B · C).",
+                       className="text-muted small mt-1"),
+                pop_table,
+            ]),
+            id="collapse-popularity",
+            is_open=False,
+        ),
         html.Hr(),
-        metrics_panel,
+        dbc.Button("▶ Metrics", id="btn-toggle-metrics",
+                   color="link", size="sm", className="p-0 text-muted fw-bold"),
+        summary_badges,
+        dbc.Collapse(
+            _render_metrics_panel(metrics),
+            id="collapse-metrics",
+            is_open=False,
+        ),
     ])
 
 
@@ -3008,6 +3230,181 @@ def cb_download_metrics(n_clicks):
         ]))
     csv_text = "\n".join(lines)
     return dcc.send_string(csv_text, filename="metrics_report.csv")
+
+
+# ---------------------------------------------------------------------------
+# Callbacks — Analysis page
+# ---------------------------------------------------------------------------
+
+@app.callback(
+    Output("save-run-status", "children"),
+    Input("btn-save-run", "n_clicks"),
+    prevent_initial_call=True,
+)
+def cb_save_run(n):
+    if not n:
+        raise PreventUpdate
+    if _app_state.get("phase") != "complete":
+        return "⚠ Run not complete yet."
+    data      = _state_to_json()
+    policy    = data["policy"]
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename  = f"{policy}_{timestamp}.json"
+    Path(RESULTS_DIR).mkdir(parents=True, exist_ok=True)
+    (Path(RESULTS_DIR) / filename).write_text(json.dumps(data, indent=2))
+    return f"✓ Saved as {filename}"
+
+
+@app.callback(
+    Output("url", "pathname", allow_duplicate=True),
+    Input("btn-open-analysis", "n_clicks"),
+    prevent_initial_call=True,
+)
+def cb_open_analysis(n):
+    if not n:
+        raise PreventUpdate
+    return "/analysis"
+
+
+@app.callback(
+    Output("url", "pathname", allow_duplicate=True),
+    Input("btn-back-to-app", "n_clicks"),
+    prevent_initial_call=True,
+)
+def cb_back_to_app(n):
+    if not n:
+        raise PreventUpdate
+    return "/app"
+
+
+@app.callback(
+    Output("analysis-run-a", "options"),
+    Output("analysis-run-b", "options"),
+    Input("url", "pathname"),
+)
+def cb_populate_run_dropdowns(pathname):
+    if pathname != "/analysis":
+        raise PreventUpdate
+    results = Path(RESULTS_DIR)
+    if not results.exists():
+        return [], [{"label": "None (single-run view)", "value": ""}]
+    files = sorted(results.glob("*.json"), reverse=True)
+    options = []
+    for f in files:
+        try:
+            data  = json.loads(f.read_text())
+            meta  = data.get("meta", {})
+            npss  = data.get("metrics", {}).get("npss", 0.0)
+            label = (
+                f"{data.get('policy','?')}  |  "
+                f"{meta.get('cohort_size','?')}S / {meta.get('faculty_count','?')}F  |  "
+                f"NPSS={npss:.3f}  |  "
+                f"{data.get('saved_at','')[:16]}"
+            )
+            options.append({"label": label, "value": str(f)})
+        except Exception:
+            continue
+    run_b_opts = [{"label": "None (single-run view)", "value": ""}] + options
+    return options, run_b_opts
+
+
+@app.callback(
+    Output("analysis-content",     "children"),
+    Output("analysis-load-status", "children"),
+    Input("btn-analysis-load", "n_clicks"),
+    State("analysis-run-a", "value"),
+    State("analysis-run-b", "value"),
+    prevent_initial_call=True,
+)
+def cb_analysis_load(n, path_a, path_b):
+    if not n or not path_a:
+        raise PreventUpdate
+
+    def _safe_load(raw_path: str) -> tuple:
+        """Return (run_dict, error_str). Validates path is inside RESULTS_DIR."""
+        try:
+            p = Path(raw_path).resolve()
+        except Exception:
+            return None, "Invalid path."
+        results_root = Path(RESULTS_DIR).resolve()
+        if results_root not in p.parents:
+            return None, "Path is outside the results directory."
+        if p.suffix != ".json":
+            return None, "Only .json files are permitted."
+        if not p.exists():
+            return None, f"File not found: {p.name}"
+        return _json_to_run(json.loads(p.read_text())), None
+
+    run_a, err = _safe_load(path_a)
+    if err:
+        return html.P(f"Error loading Run A: {err}", className="text-danger"), "Error."
+
+    runs = [run_a]
+    run_b = None
+    if path_b:
+        run_b, err = _safe_load(path_b)
+        if err:
+            return html.P(f"Error loading Run B: {err}", className="text-danger"), "Error."
+        runs.append(run_b)
+
+    # Tier labels from Run A meta
+    tier_labels = (
+        ["A", "B1", "B2", "C"]
+        if run_a["meta"].get("mode") == "quartile"
+        else ["A", "B", "C"]
+    )
+
+    chart_runs = [{"label": r["policy"], "metrics": r["metrics"]} for r in runs]
+    fig_rank       = per_tier_rank_chart(chart_runs, tier_labels)
+    fig_heatmap_a  = advisor_tier_heatmap(
+        run_a["snap"], run_a["students"], run_a["faculty"], run_a["meta"]
+    )
+
+    two_runs = run_b is not None
+    col_width = 6 if two_runs else 12
+
+    content: list = [
+        html.Hr(),
+        dbc.Row([
+            dbc.Col([
+                html.H5(f"Run A — {run_a['policy']}",
+                        className="text-primary mb-1"),
+                html.Small(run_a["saved_at"][:16], className="text-muted d-block mb-2"),
+                _render_metrics_panel(run_a["metrics"]),
+            ], md=col_width),
+            *(
+                [dbc.Col([
+                    html.H5(f"Run B — {run_b['policy']}",
+                            className="text-warning mb-1"),
+                    html.Small(run_b["saved_at"][:16], className="text-muted d-block mb-2"),
+                    _render_metrics_panel(run_b["metrics"]),
+                ], md=col_width)]
+                if two_runs else []
+            ),
+        ]),
+        html.Hr(),
+        dbc.Row(dbc.Col(dcc.Graph(figure=fig_rank)), className="mb-3"),
+        html.Hr(),
+        dbc.Row(dbc.Col([
+            html.H6("Advisor Tier Heatmap — Run A", className="mb-1 text-muted"),
+            dcc.Graph(figure=fig_heatmap_a),
+        ])),
+    ]
+
+    if two_runs:
+        fig_heatmap_b = advisor_tier_heatmap(
+            run_b["snap"], run_b["students"], run_b["faculty"], run_b["meta"]
+        )
+        content += [
+            html.Hr(),
+            dbc.Row(dbc.Col([
+                html.H6("Advisor Tier Heatmap — Run B", className="mb-1 text-muted"),
+                dcc.Graph(figure=fig_heatmap_b),
+            ])),
+        ]
+
+    status = f"Loaded {len(runs)} run{'s' if len(runs) > 1 else ''}."
+    return content, status
 
 
 def _run_html_mode():
