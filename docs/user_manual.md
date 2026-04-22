@@ -174,7 +174,10 @@ Sample files are provided in `data/` (`sample_students.csv`, `sample_faculty.csv
 
 #### Step 1 — Open the app
 
-Navigate to **http://localhost:8050**. The landing page displays a brief overview and lets you select an allocation policy before proceeding.
+Navigate to **http://localhost:8050**. The landing page shows a policy selector and two buttons:
+
+- **Continue →** — proceed to the allocation workflow with the selected policy.
+- **View Analysis** — jump directly to the Analysis page to load and compare previously saved runs, without starting a new allocation.
 
 #### Step 2 — Select a policy
 
@@ -183,7 +186,7 @@ Choose one of the two main policies on the landing page:
 - **Least Loaded (`least_loaded`)** — the default; prioritises balanced advisor loads.
 - **CPI Fill (`cpi_fill`)** — merit-first; processes students in strict descending CPI order.
 
-A full discussion of both policies is in Section 3.
+A full discussion of both policies is in Section 3. To switch policy mid-session, click **Home** (top-right of the allocation page) to return to the landing page.
 
 #### Step 3 — Load input files
 
@@ -210,20 +213,68 @@ After the allocation runs, the replay panel at the bottom of the page shows five
 | **Statistics** | Per-tier assignment counts and percentages, plus faculty load statistics (min, max, mean). |
 | **Step Log** | Table of every allocation event up to the current step — step number, phase, and a one-line description of the assignment made. |
 | **CPI Distribution** | Histogram of advisor-averaged CPIs (mean CPI of each advisor's assigned students). Advisors with no students yet appear in the 0 bin. The distribution shifts and spreads as the allocation progresses. |
-| **Tier Heatmap** | Advisor × CPI-tier heatmap showing row-normalized proportions. Rows are sorted by entropy ascending (most segregated advisors first). Diagnostic view for advisor equity — use together with Avg CPI Entropy. Broad color across a row = mixed-tier cohort; concentration in one column = tier segregation. |
+| **Tier Heatmap** | Advisor × CPI-tier heatmap. Each cell = students in that tier × 100 / capacity (`max_load`), so the row sum equals the advisor's total load as a percentage of capacity. Rows sorted by load descending. Diagnostic view for advisor equity — use together with Avg CPI Entropy. |
 
 ---
 
-### 2.4 Exporting results
+### 2.4 Completion panel
 
-Once the allocation is complete:
+When the allocation finalises, a completion panel appears above the replay panel. It contains:
 
-- **CSV report** — click **Save report** to download a CSV containing every student's assignment, preference rank, tier, and advisor load.
-- **HTML snapshot** — click **Export HTML** to save a self-contained HTML file of the current visualisation state.
+**Summary alert** — total assigned, unassigned, and empty labs.
+
+**Action buttons:**
+
+| Button | Action |
+|--------|--------|
+| **Save report (CSV)** | Downloads a CSV with every student's assignment, preference rank, tier, and advisor load |
+| **Save run (JSON)** | Saves the full run (assignments, metrics, metadata) to the `results/` folder on the server for later analysis; shows a confirmation message inline |
+| **Export HTML** | Saves a self-contained HTML snapshot of the current visualisation to `reports/` |
+| **Open Analysis** | Navigates to the Analysis page |
+
+**Summary badge row** — always visible: `NPSS | PSI | Entropy | Load balance`. Load balance is the difference between the most-loaded and least-loaded advisor (including empty advisors), giving a quick measure of load spread.
+
+**Collapsible sections** — both panels below are closed by default and can be expanded by clicking their header button:
+
+- **[+] Advisor Popularity** — shows how many students listed each advisor as their 1st, 2nd, or 3rd choice, with tier breakdown.
+- **[+] Metrics** — full metrics panel: NPSS, PSI, per-tier breakdown, advisor CPI entropy, and CPI skewness.
 
 ---
 
-### 2.5 CLI usage (no GUI)
+### 2.5 Analysis page
+
+The Analysis page (`/analysis`) is a dedicated post-allocation environment for comparing saved runs. It can be reached three ways:
+
+- **Landing page** → **View Analysis** button
+- **Completion panel** → **Open Analysis** button
+- **Analysis page** → **Home** → re-select policy → **View Analysis**
+
+#### Saving a run
+
+After finalising an allocation, click **Save run (JSON)** in the completion panel. The run is written to the `results/` folder as `{policy}_{timestamp}.json` and a confirmation message appears inline. No file dialog opens.
+
+#### Loading runs on the Analysis page
+
+1. **Run A** (required) — select a saved run from the dropdown.
+2. **Run B** (optional) — select a second run for side-by-side comparison; leave as "None" for single-run view.
+3. Click **Load**.
+
+The page renders:
+
+| Section | What it shows |
+|---------|---------------|
+| **Metric scorecards** | NPSS, PSI, per-tier breakdown, and advisor fairness metrics for each loaded run (side by side when two runs are loaded) |
+| **Per-Tier Mean Preference Rank chart** | Grouped bar chart — one group per tier, one bar per policy. Y-axis is mean assigned preference rank (lower = better). Bar labels show % of tier assigned within their protected window. |
+| **Advisor Tier Heatmap** | Capacity-normalised heatmap for each loaded run, showing how each advisor's load is distributed across CPI tiers |
+
+#### Navigation
+
+- **← Back to allocation** — returns to the allocation page with all state intact.
+- **Home** — returns to the landing page for policy switching.
+
+---
+
+### 2.6 CLI usage (no GUI)
 
 For scripted or batch runs, the allocation engine can be driven entirely from the command line.
 
@@ -419,7 +470,7 @@ Each Phase 1 assignment reduces `|unassigned|` by exactly 1 and reduces `|empty 
 
 ### 3.5 Metrics
 
-The app reports four metrics after the allocation completes. They are visible in the **Statistics** tab of the replay panel.
+The app reports metrics in two places: the **Statistics** tab of the replay panel (updated at each step) and the **completion panel summary badge row** (final state only).
 
 #### NPSS — Normalized Preference Satisfaction Score
 
@@ -522,6 +573,14 @@ $$
 
 An absolute skewness below 0.5 is generally acceptable. Values above 1.0 warrant investigation into whether the allocation is systematically concentrating high- (or low-) CPI students at particular advisors.
 
+#### Load Balance
+
+Load Balance = `max(advisor loads) − min(advisor loads)` across all advisors in the final allocation (including any with zero students). It appears only in the **completion panel summary badge row** and is not shown on the Analysis page.
+
+A value of 0 means all advisors have identical load. A value of 1 is the minimum non-zero spread and is typical when loads differ by at most one student. Larger values indicate uneven distribution and warrant inspection of the Tier Heatmap and advisor load bar chart.
+
+---
+
 **CPI skewness is a diagnostic metric only.** It is highly sensitive to cohort structure — the direction and magnitude of the difference between policies can reverse across different datasets. In the five-dataset comparative study, neither policy shows a consistent skewness advantage: wins are split across cohort types, and on the uniform high-CPI cohort the direction reverses relative to the structured cohorts. Do not use skewness alone to declare a policy winner; always interpret it alongside entropy and the primary NPSS result.
 
 ---
@@ -538,9 +597,11 @@ When interpreting a single run or comparing the two policies, use this hierarchy
 
 4. **Advisor Tier Distribution Heatmap** *(visual diagnostic for advisor equity)* — shows which tiers each advisor's cohort contains, row-normalized so advisors with different loads are comparable. Rows sorted by entropy ascending so the most segregated advisors appear first. Broad color across a row = high tier diversity (high entropy). Concentration in one column = tier segregation (low entropy). Use it to understand *why* entropy is high or low — it reveals whether concentration is top-heavy, bottom-heavy, or scattered across individual advisors. It is explanatory only; do not use it to declare a policy winner.
 
-5. **CPI Skewness** *(diagnostic only)* — use as a cross-check for CPI concentration in the advisor mean-CPI distribution. Do not declare a policy winner from skewness alone; results are cohort-sensitive and the direction of the difference can reverse depending on cohort structure.
+5. **Load Balance** *(completion panel only)* — max minus min of final advisor loads, including empty advisors. A quick sanity check on load spread; expand the Metrics or Advisor Loads panels for detail. Not available on the Analysis page.
 
-6. **Overflow Count and % Assigned in Window** *(diagnostic columns)* — these explain *why* NPSS changes in stressed cohorts. Out-of-window assignments already score 0 in NPSS, so these columns add no independent evidential weight beyond what NPSS already captures.
+6. **CPI Skewness** *(diagnostic only)* — use as a cross-check for CPI concentration in the advisor mean-CPI distribution. Do not declare a policy winner from skewness alone; results are cohort-sensitive and the direction of the difference can reverse depending on cohort structure.
+
+7. **Overflow Count and % Assigned in Window** *(diagnostic columns)* — these explain *why* NPSS changes in stressed cohorts. Out-of-window assignments already score 0 in NPSS, so these columns add no independent evidential weight beyond what NPSS already captures.
 
 **If metrics disagree:** this is normal. The two policies trade off across dimensions rather than one uniformly dominating the other. The choice between them is a value judgement about institutional priorities — merit-weighted access (`cpi_fill`) versus equitable treatment across tiers (`least_loaded`) — not a metric-determined optimum.
 
