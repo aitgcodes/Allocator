@@ -42,6 +42,24 @@ import pandas as pd
 
 from .state import Faculty, Student
 
+
+# ---------------------------------------------------------------------------
+# Preference-cleaning helpers (also used by preprocess_students)
+# ---------------------------------------------------------------------------
+
+def _dedup_pref_row(row: pd.Series) -> pd.Series:
+    """Remove duplicate (non-empty) preferences, shifting remaining ones up."""
+    seen: set[str] = set()
+    result: list[str] = []
+    for val in row:
+        if pd.isna(val) or val == "":
+            continue
+        if val not in seen:
+            seen.add(val)
+            result.append(val)
+    result += [""] * (len(row) - len(result))
+    return pd.Series(result, index=row.index)
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
@@ -197,6 +215,119 @@ def load_faculty(path: str | Path) -> List[Faculty]:
         raise ValueError("faculty file contains no valid rows")
 
     return faculty
+
+
+# ---------------------------------------------------------------------------
+# Preprocess raw form exports
+# ---------------------------------------------------------------------------
+
+def preprocess_students(
+    path: str | Path,
+    faculty: List[Faculty],
+) -> Tuple[pd.DataFrame, List[str]]:
+    """
+    Load a raw student file (CSV or Excel), apply three cleaning steps, and
+    return a cleaned DataFrame ready for load_students() plus a list of
+    human-readable warning strings describing what changed.
+
+    Cleaning steps (in order):
+    1. Map faculty names → IDs using the faculty list.  Any value already
+       matching a faculty ID is passed through unchanged, so the function
+       works on files that already use IDs.
+    2. Remove duplicate preferences per student (shift remaining entries up).
+    3. Backfill trailing empty slots with faculty the student did not mention,
+       in alphabetical order by name, so every student has a complete ranking
+       across all faculty.
+
+    Parameters
+    ----------
+    path    : path to the raw students CSV or Excel file
+    faculty : authoritative faculty list — defines the full set for backfill
+
+    Returns
+    -------
+    (cleaned_df, warnings)
+        cleaned_df columns: student_id, name, cpi, pref_1, ..., pref_N
+            where N = len(faculty)
+        warnings: list of message strings; empty if no changes were needed
+    """
+    path = Path(path)
+    if path.suffix.lower() in (".xlsx", ".xls"):
+        df = pd.read_excel(path, dtype=str)
+    else:
+        df = pd.read_csv(path, dtype=str)
+
+    df.columns = [c.strip().lower() for c in df.columns]
+
+    required = {"student_id", "name", "cpi"}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"students file missing columns: {missing}")
+
+    pref_cols = _pref_columns(df)
+    if not pref_cols:
+        raise ValueError("students file must have at least one pref_1 column")
+
+    # Build name→ID and ID→name maps from the faculty list
+    name_to_id: Dict[str, str] = {f.name: f.id for f in faculty}
+    all_fids: set[str] = {f.id for f in faculty}
+    # Alphabetical faculty names for backfill ordering
+    all_faculty_names_sorted = sorted(f.name for f in faculty)
+    fid_by_sorted_name: List[str] = [name_to_id[n] for n in all_faculty_names_sorted]
+
+    n_faculty = len(faculty)
+
+    # Ensure we have enough pref columns (pad with empty ones as needed)
+    out = df[["student_id", "name", "cpi"]].copy()
+    for i, col in enumerate(pref_cols, start=1):
+        out[f"pref_{i}"] = df[col].str.strip().fillna("")
+    for i in range(len(pref_cols) + 1, n_faculty + 1):
+        out[f"pref_{i}"] = ""
+
+    pref_out_cols = [f"pref_{i}" for i in range(1, n_faculty + 1)]
+
+    # Step 1 — name → ID mapping
+    def _map_name_to_id(val: str) -> str:
+        if not val or pd.isna(val):
+            return ""
+        if val in all_fids:
+            return val          # already an ID
+        return name_to_id.get(val, val)  # map name; unknown values pass through
+
+    for col in pref_out_cols:
+        out[col] = out[col].apply(_map_name_to_id)
+
+    # Step 2 — deduplication
+    before_dedup = out[pref_out_cols].copy()
+    out[pref_out_cols] = out[pref_out_cols].apply(_dedup_pref_row, axis=1)
+    dedup_changed = (out[pref_out_cols].fillna("") != before_dedup.fillna("")).any(axis=1).sum()
+
+    # Step 3 — backfill missing faculty
+    def _fill_trailing(row: pd.Series) -> pd.Series:
+        listed = {p for p in row if p and not pd.isna(p)}
+        missed = iter(fid for fid in fid_by_sorted_name if fid not in listed)
+        result = []
+        for p in row:
+            if not p or pd.isna(p):
+                result.append(next(missed, ""))
+            else:
+                result.append(p)
+        return pd.Series(result, index=row.index)
+
+    before_fill = out[pref_out_cols].copy()
+    out[pref_out_cols] = out[pref_out_cols].apply(_fill_trailing, axis=1)
+    fill_changed = (out[pref_out_cols].fillna("") != before_fill.fillna("")).any(axis=1).sum()
+
+    warnings: List[str] = []
+    if dedup_changed:
+        warnings.append(f"Removed duplicate preferences in {dedup_changed} student row(s).")
+    if fill_changed:
+        warnings.append(f"Backfilled missing preferences in {fill_changed} student row(s).")
+
+    # Drop fully-blank rows
+    out = out[~((out["student_id"].fillna("") == "") & (out["name"].fillna("") == ""))]
+
+    return out[["student_id", "name", "cpi"] + pref_out_cols], warnings
 
 
 # ---------------------------------------------------------------------------

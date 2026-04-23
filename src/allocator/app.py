@@ -85,7 +85,7 @@ from datetime import datetime
 
 import dash
 import dash_bootstrap_components as dbc
-from dash import dcc, html, dash_table, ctx
+from dash import dcc, html, dash_table, ctx, no_update
 from dash.dependencies import Input, Output, State
 from dash.exceptions import PreventUpdate
 import plotly.graph_objects as go
@@ -110,10 +110,13 @@ def _protocol_choice(student, cap_fids, faculty_map, faculty_loads):
         return _nonempty_choice(student, cap_fids, faculty_map, faculty_loads)
     return _least_loaded_choice(student, cap_fids, faculty_map, faculty_loads)
 
+import pandas as pd
+
 from .data_loader import (
     load_faculty,
     load_phase0_report,
     load_students,
+    preprocess_students,
     save_phase0_report,
     validate_preferences,
 )
@@ -750,6 +753,30 @@ def _upload_card() -> dbc.Card:
                     html.Div(id="upload-faculty-status", className="text-muted small mt-1"),
                 ], md=6),
             ]),
+            dbc.Row([
+                dbc.Col([
+                    dbc.ButtonGroup([
+                        dbc.Button(
+                            "Clean & Load",
+                            id="btn-preprocess",
+                            color="warning",
+                            outline=True,
+                            disabled=True,
+                            className="me-1",
+                        ),
+                        dbc.Button(
+                            "Load directly",
+                            id="btn-load-direct",
+                            color="primary",
+                            disabled=True,
+                        ),
+                    ], className="mt-2"),
+                    html.Div(
+                        id="preprocess-status",
+                        className="mt-2 small",
+                    ),
+                ]),
+            ]),
             html.Hr(),
             dbc.Row([
                 dbc.Col([
@@ -966,8 +993,9 @@ app.layout = dbc.Container([
     _analysis_layout(),
 
     # Always-present hidden components (stores, downloads, modals, toast)
-    dcc.Store(id="store-loaded",        data=False),
-    dcc.Store(id="store-phase",         data="idle"),
+    dcc.Store(id="store-loaded",           data=False),
+    dcc.Store(id="store-cleaned-students", data=None),
+    dcc.Store(id="store-phase",            data="idle"),
     dcc.Store(id="store-r1-picks",      data={}),
     dcc.Store(id="store-playing",       data=False),
     dcc.Store(id="store-pending-pick",  data=None),
@@ -1146,8 +1174,8 @@ def cb_policy_badge(policy):
 # ---------------------------------------------------------------------------
 
 @app.callback(
-    Output("upload-students-status", "children"),
-    Output("upload-faculty-status",  "children"),
+    Output("upload-students-status", "children", allow_duplicate=True),
+    Output("upload-faculty-status",  "children", allow_duplicate=True),
     Output("store-loaded", "data"),
     Input("upload-students", "contents"),
     Input("upload-faculty",  "contents"),
@@ -1155,28 +1183,78 @@ def cb_policy_badge(policy):
     State("upload-faculty",  "filename"),
     prevent_initial_call=True,
 )
-def cb_load_files(s_contents, f_contents, s_fname, f_fname):
+def cb_stage_files(s_contents, f_contents, s_fname, f_fname):
+    """Show a staging confirmation when files are dropped — no loading yet."""
+    s_msg = f"📎 {s_fname} staged" if (s_contents and s_fname) else no_update
+    f_msg = f"📎 {f_fname} staged" if (f_contents and f_fname) else no_update
+    return s_msg, f_msg, False
+
+
+@app.callback(
+    Output("upload-students-status", "children"),
+    Output("upload-faculty-status",  "children"),
+    Output("store-loaded", "data", allow_duplicate=True),
+    Input("btn-load-direct",        "n_clicks"),
+    Input("store-cleaned-students", "data"),
+    State("upload-students", "contents"),
+    State("upload-faculty",  "contents"),
+    State("upload-students", "filename"),
+    State("upload-faculty",  "filename"),
+    prevent_initial_call=True,
+)
+def cb_load_files(n_direct, cleaned_json, s_contents, f_contents, s_fname, f_fname):
     _app_state["students"] = []
     _app_state["faculty"]  = []
 
     s_msg = f_msg = ""
     loaded = False
 
-    if s_contents and s_fname:
-        try:
-            data = _parse_upload(s_contents, s_fname)
-            _app_state["students"] = _load_from_bytes(data, s_fname, load_students)
-            s_msg = f"✓ {len(_app_state['students'])} students loaded from {s_fname}"
-        except Exception as e:
-            s_msg = f"✗ Error: {e}"
+    # Determine whether we're loading from the cleaned store or raw upload
+    using_cleaned = (ctx.triggered_id == "store-cleaned-students"
+                     and cleaned_json is not None)
 
-    if f_contents and f_fname:
+    if using_cleaned:
+        # Load faculty from raw upload (needed for validation)
+        if f_contents and f_fname:
+            try:
+                data = _parse_upload(f_contents, f_fname)
+                _app_state["faculty"] = _load_from_bytes(data, f_fname, load_faculty)
+                f_msg = f"✓ {len(_app_state['faculty'])} faculty loaded from {f_fname}"
+            except Exception as e:
+                f_msg = f"✗ Error loading faculty: {e}"
+                return no_update, f_msg, False
+
+        # Load students from the preprocessed DataFrame
         try:
-            data = _parse_upload(f_contents, f_fname)
-            _app_state["faculty"] = _load_from_bytes(data, f_fname, load_faculty)
-            f_msg = f"✓ {len(_app_state['faculty'])} faculty loaded from {f_fname}"
+            import tempfile
+            cleaned_df = pd.read_json(cleaned_json, orient="split")
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
+                cleaned_df.to_csv(tmp.name, index=False)
+                tmp_path = tmp.name
+            try:
+                _app_state["students"] = load_students(tmp_path)
+            finally:
+                os.unlink(tmp_path)
+            s_msg = f"✓ {len(_app_state['students'])} students loaded (preprocessed)"
         except Exception as e:
-            f_msg = f"✗ Error: {e}"
+            s_msg = f"✗ Error loading preprocessed students: {e}"
+    else:
+        # Direct load from raw upload
+        if s_contents and s_fname:
+            try:
+                data = _parse_upload(s_contents, s_fname)
+                _app_state["students"] = _load_from_bytes(data, s_fname, load_students)
+                s_msg = f"✓ {len(_app_state['students'])} students loaded from {s_fname}"
+            except Exception as e:
+                s_msg = f"✗ Error: {e}"
+
+        if f_contents and f_fname:
+            try:
+                data = _parse_upload(f_contents, f_fname)
+                _app_state["faculty"] = _load_from_bytes(data, f_fname, load_faculty)
+                f_msg = f"✓ {len(_app_state['faculty'])} faculty loaded from {f_fname}"
+            except Exception as e:
+                f_msg = f"✗ Error: {e}"
 
     if _app_state["students"] and _app_state["faculty"]:
         try:
@@ -1240,6 +1318,64 @@ def cb_load_report(rep_contents, meta_contents, rep_fname, meta_fname,
         loaded = True
 
     return s_msg, f_msg, loaded
+
+
+@app.callback(
+    Output("preprocess-status",       "children"),
+    Output("store-cleaned-students",  "data"),
+    Input("btn-preprocess",           "n_clicks"),
+    State("upload-students",          "contents"),
+    State("upload-students",          "filename"),
+    State("upload-faculty",           "contents"),
+    State("upload-faculty",           "filename"),
+    prevent_initial_call=True,
+)
+def cb_preprocess(n, s_contents, s_fname, f_contents, f_fname):
+    if not n or not s_contents or not f_contents:
+        raise PreventUpdate
+
+    try:
+        import tempfile
+        # Load faculty first (needed for name→ID mapping and backfill)
+        f_data = _parse_upload(f_contents, f_fname)
+        faculty = _load_from_bytes(f_data, f_fname, load_faculty)
+
+        # Preprocess students
+        s_data = _parse_upload(s_contents, s_fname)
+        suffix = Path(s_fname).suffix or ".csv"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp.write(s_data)
+            tmp_path = tmp.name
+        try:
+            cleaned_df, warnings = preprocess_students(tmp_path, faculty)
+        finally:
+            os.unlink(tmp_path)
+
+        cleaned_json = cleaned_df.to_json(orient="split")
+
+        if warnings:
+            status = [dbc.Alert(w, color="warning", className="py-1 mb-1 small")
+                      for w in warnings]
+        else:
+            status = [dbc.Alert("No issues found — data is clean.",
+                                color="success", className="py-1 mb-1 small")]
+
+        return status, cleaned_json
+
+    except Exception as e:
+        return [dbc.Alert(f"Preprocessing error: {e}", color="danger",
+                          className="py-1 mb-1 small")], None
+
+
+@app.callback(
+    Output("btn-preprocess",   "disabled"),
+    Output("btn-load-direct",  "disabled"),
+    Input("upload-students",   "contents"),
+    Input("upload-faculty",    "contents"),
+)
+def cb_toggle_load_buttons(s, f):
+    both_present = bool(s) and bool(f)
+    return not both_present, not both_present
 
 
 # ---------------------------------------------------------------------------
