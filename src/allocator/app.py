@@ -73,10 +73,11 @@ PHASE0_REPORT_DIR = str(Path(__file__).parent.parent.parent / "reports")
 OUTPUT_DIR  = str(Path(__file__).parent.parent.parent / "reports")
 RESULTS_DIR = str(Path(__file__).parent.parent.parent / "results")
 
-# Dash server settings
-DASH_HOST = "127.0.0.1"
-DASH_PORT = 8050
-DASH_DEBUG = True
+# Dash server settings — override via env vars for Docker
+import os as _os
+DASH_HOST  = _os.environ.get("DASH_HOST",  "127.0.0.1")
+DASH_PORT  = int(_os.environ.get("DASH_PORT",  "8050"))
+DASH_DEBUG = _os.environ.get("DASH_DEBUG", "true").lower() == "true"
 
 # ======================================================================
 
