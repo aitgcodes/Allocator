@@ -772,6 +772,10 @@ def _upload_card() -> dbc.Card:
                             disabled=True,
                         ),
                     ], className="mt-2"),
+                    dbc.FormText([
+                        html.B("Clean & Load"), " — raw form export with faculty names in preferences  |  ",
+                        html.B("Load directly"), " — pre-processed file with faculty IDs (F01, F02 …) already in preferences",
+                    ], className="mt-1"),
                     html.Div(
                         id="preprocess-status",
                         className="mt-2 small",
@@ -1348,20 +1352,26 @@ def cb_preprocess(n, s_contents, s_fname, f_contents, f_fname):
             tmp.write(s_data)
             tmp_path = tmp.name
         try:
-            cleaned_df, warnings = preprocess_students(tmp_path, faculty)
+            cleaned_df, warnings, map_changed = preprocess_students(tmp_path, faculty)
         finally:
             os.unlink(tmp_path)
 
         cleaned_json = cleaned_df.to_json(orient="split")
 
+        alerts = []
+        if map_changed == 0:
+            alerts.append(dbc.Alert(
+                "All preferences already use faculty IDs — 'Load directly' also works for pre-processed files.",
+                color="info", className="py-1 mb-1 small",
+            ))
         if warnings:
-            status = [dbc.Alert(w, color="warning", className="py-1 mb-1 small")
-                      for w in warnings]
-        else:
-            status = [dbc.Alert("No issues found — data is clean.",
+            alerts += [dbc.Alert(w, color="warning", className="py-1 mb-1 small")
+                       for w in warnings]
+        if not alerts:
+            alerts = [dbc.Alert("No issues found — data is clean.",
                                 color="success", className="py-1 mb-1 small")]
 
-        return status, cleaned_json
+        return alerts, cleaned_json
 
     except Exception as e:
         return [dbc.Alert(f"Preprocessing error: {e}", color="danger",

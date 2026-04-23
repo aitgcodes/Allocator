@@ -294,8 +294,10 @@ def preprocess_students(
             return val          # already an ID
         return name_to_id.get(val, val)  # map name; unknown values pass through
 
+    before_map = out[pref_out_cols].copy()
     for col in pref_out_cols:
         out[col] = out[col].apply(_map_name_to_id)
+    map_changed = int((out[pref_out_cols].fillna("") != before_map.fillna("")).any(axis=1).sum())
 
     # Step 2 — deduplication
     before_dedup = out[pref_out_cols].copy()
@@ -319,6 +321,8 @@ def preprocess_students(
     fill_changed = (out[pref_out_cols].fillna("") != before_fill.fillna("")).any(axis=1).sum()
 
     warnings: List[str] = []
+    if map_changed:
+        warnings.append(f"Converted faculty names → IDs in {map_changed} student row(s).")
     if dedup_changed:
         warnings.append(f"Removed duplicate preferences in {dedup_changed} student row(s).")
     if fill_changed:
@@ -327,7 +331,7 @@ def preprocess_students(
     # Drop fully-blank rows
     out = out[~((out["student_id"].fillna("") == "") & (out["name"].fillna("") == ""))]
 
-    return out[["student_id", "name", "cpi"] + pref_out_cols], warnings
+    return out[["student_id", "name", "cpi"] + pref_out_cols], warnings, map_changed
 
 
 # ---------------------------------------------------------------------------
@@ -340,13 +344,23 @@ def validate_preferences(students: List[Student], faculty: List[Faculty]) -> Non
     Call after loading both files.
     """
     known_fids = {f.id for f in faculty}
+    known_names = {f.name for f in faculty}
     errors: List[str] = []
+    name_confusion = False
     for s in students:
         bad = [p for p in s.preferences if p not in known_fids]
         if bad:
             errors.append(f"  Student {s.id} ({s.name}): unknown faculty IDs {bad}")
+            if not name_confusion and any(p in known_names for p in bad):
+                name_confusion = True
     if errors:
-        raise ValueError("Preference validation failed:\n" + "\n".join(errors))
+        msg = "Preference validation failed:\n" + "\n".join(errors)
+        if name_confusion:
+            msg += (
+                "\nHint: preferences appear to use faculty names instead of IDs. "
+                "Use 'Clean & Load' to convert them automatically."
+            )
+        raise ValueError(msg)
 
 
 # ---------------------------------------------------------------------------
