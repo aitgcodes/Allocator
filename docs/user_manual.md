@@ -181,24 +181,35 @@ Navigate to **http://localhost:8050**. The landing page shows a policy selector 
 
 #### Step 2 — Select a policy
 
-Choose one of the two main policies on the landing page:
+Choose one of the four allocation policies on the landing page:
 
-- **Least Loaded (`least_loaded`)** — the default; prioritises balanced advisor loads.
-- **CPI Fill (`cpi_fill`)** — merit-first; processes students in strict descending CPI order.
+- **Least Loaded (`least_loaded`)** — the default; assigns each student to the least-loaded eligible advisor within their tier preference window.
+- **Highest Preferred with Vacancy (`nonempty`)** — like `least_loaded` but steers students toward empty labs first.
+- **CPI Fill (`cpi_fill`)** — merit-first; processes students in strict descending CPI order; no tier window applied.
+- **CPI-Tiered Preference Rounds (`tiered_rounds`)** — round-based; in round *n* each student offers their *n*-th preference; CPI breaks ties; manual pick required when top CPI is tied.
 
-A full discussion of both policies is in Section 3. To switch policy mid-session, click **Home** (top-right of the allocation page) to return to the landing page.
+A full discussion of all policies is in Section 3. To switch policy mid-session, click **Home** (top-right of the allocation page) to return to the landing page.
 
 #### Step 3 — Load input files
 
 Use the file upload controls on the main page to upload your `students.csv` and `faculty.csv`. The app validates both files and reports any errors (missing columns, mismatched faculty IDs, etc.) before proceeding.
 
+Two loading modes are available:
+
+| Button | When to use |
+|--------|-------------|
+| **Clean & Load** | Raw Google Form export with faculty names in the preference columns — the app converts names to IDs automatically |
+| **Load directly** | Pre-processed file with faculty IDs (`F01`, `F02`, …) already in the preference columns |
+
 #### Step 4 — Run Phase 0
 
-Click **Run Phase 0**. The app tiers all students by CPI percentile and computes faculty `max_load` values. A Phase-0 report is shown summarising tier assignments and load parameters.
+Click **Run Phase 0 only** to tier students and compute faculty capacities without running the allocation, or click **Run full allocation** to do both in one step.
 
-#### Step 5 — Run the full allocation
+#### Step 5 — Complete the allocation
 
-Click **Run Allocation**. The app executes the selected policy and populates the replay panel with all allocation steps.
+- **`least_loaded` / `nonempty`:** Confirm Round-1 picks (default: highest-CPI student per advisor), then proceed to main allocation, making or confirming each assignment.
+- **`cpi_fill`:** Run Phase 1 (manual or auto), then Phase 2.
+- **`tiered_rounds`:** The engine runs rounds automatically until a CPI tie is detected. Resolve each tie using the dropdown; the engine resumes automatically.
 
 ---
 
@@ -239,6 +250,8 @@ When the allocation finalises, a completion panel appears above the replay panel
 - **[+] Advisor Popularity** — shows how many students listed each advisor as their 1st, 2nd, or 3rd choice, with tier breakdown.
 - **[+] Metrics** — full metrics panel: NPSS, PSI, per-tier breakdown, advisor CPI entropy, and CPI skewness.
 
+For `tiered_rounds`, the completion panel also includes a collapsible **Round-by-Round Trace** showing assignments, ties, and manual decisions per round.
+
 ---
 
 ### 2.5 Analysis page
@@ -276,7 +289,7 @@ The page renders:
 
 ### 2.6 CLI usage (no GUI)
 
-For scripted or batch runs, the allocation engine can be driven entirely from the command line.
+For scripted or batch runs, the allocation engine can be driven entirely from the command line. Note that `tiered_rounds` requires the Dash UI for manual tie-breaking and is not available via CLI.
 
 **Phase 0 only:**
 ```bash
@@ -295,7 +308,7 @@ PYTHONPATH=src python -m allocator.allocation \
   --out      reports/
 ```
 
-The `--policy` flag accepts `least_loaded` or `cpi_fill`.
+The `--policy` flag accepts `least_loaded`, `nonempty`, or `cpi_fill`.
 
 ---
 
@@ -303,19 +316,21 @@ The `--policy` flag accepts `least_loaded` or `cpi_fill`.
 
 ### 3.1 Shared foundation — Phase 0
 
-Both policies begin with **Phase 0**, which classifies students into tiers and sets advisor capacities. The output of Phase 0 is identical regardless of which policy follows.
+All policies begin with **Phase 0**, which classifies students into tiers and sets advisor capacities. The output of Phase 0 is identical regardless of which policy follows.
 
 #### Tiering
 
 Students are divided into tiers based on cohort CPI percentiles:
 
-| Tier | Percentile threshold | Preference window `N_tier` (S/F <= 4) | `N_tier` (S/F > 4) |
+| Tier | Percentile threshold | Preference window `N_tier` (S/F ≤ 4) | `N_tier` (S/F > 4) |
 |------|---------------------|---------------------------------------|---------------------|
-| A | >= 90th (±0.1 grace) | 3 | 4 |
+| A | ≥ 90th (±0.1 grace) | 3 | 4 |
 | B | 70th – 90th | 5 | 6 |
 | C | < 70th | Full list | Full list |
 
 If more than 40% of students cluster in one band, tiering switches to **quartile mode** (A / B1 / B2 / C). If the cohort has fewer than 10 students, all are placed in Class A with `N_tier = 2`.
+
+`N_tier` is used as the **assignment window** in `least_loaded` and `nonempty`. For `cpi_fill` and `tiered_rounds` it is computed but not applied during assignment — it appears in the per-tier diagnostics only.
 
 #### Faculty capacity
 
@@ -368,20 +383,33 @@ Load balance is the **primary criterion**; preference rank is the **tiebreaker**
 | Advisor CPI diversity (entropy) | High — load-spreading tends to distribute different CPI tiers across advisors |
 | Robustness | High — performs consistently across random, clustered, and polarised cohorts |
 
-#### When to prefer `least_loaded`
+---
 
-- When **advisor equity** is a departmental priority and no advisor should be significantly more or less loaded than peers.
-- In cohorts with **diverse preferences**, where load-balancing and preference satisfaction naturally align.
-- As the **safe default** when cohort structure is unknown.
+### 3.3 Policy: Highest Preferred with Vacancy (`nonempty`)
 
-#### Known limitations
+#### Overview
 
-- In **clustered cohorts** (many students competing for the same few advisors), load-balancing may route a student to their 2nd or 3rd choice even when their 1st choice still has capacity, if that advisor's load is already higher than an alternative.
-- Does **not explicitly reward academic merit** beyond the tier window — two students with very different CPIs within the same tier are treated identically.
+`nonempty` is a **load-distribution variant** of `least_loaded`. It runs the same Phase 0 → Round 1 → Main Allocation pipeline but changes the advisor selection rule: instead of always choosing the advisor with the minimum current load, it **actively seeks out empty labs** first. Only if no empty lab exists within the student's preference window does it fall back to the least-loaded advisor.
+
+#### Assignment rule
+
+Given a student and their eligible candidate advisors (those within `N_tier` with remaining capacity):
+
+1. **If any empty lab exists** within the eligible set: assign to the **highest-preferred empty lab** (earliest in the student's preference list).
+2. **Otherwise:** assign to the **highest-preferred advisor** with remaining capacity (earliest in list, regardless of current load).
+
+#### Properties
+
+| Property | Behaviour |
+|----------|-----------|
+| Empty-lab guarantee | Strong — aggressively fills empty labs before considering non-empty ones |
+| Preference satisfaction (PSI) | Similar to `least_loaded`; can be slightly better or worse depending on preference alignment |
+| Load balance | Moderate — once all labs have students, degenerates to a pure highest-preference-within-window rule |
+| Merit sensitivity (NPSS) | Similar to `least_loaded` — no explicit CPI ordering beyond the tier window |
 
 ---
 
-### 3.3 Policy: CPI Fill (`cpi_fill`)
+### 3.4 Policy: CPI Fill (`cpi_fill`)
 
 #### Overview
 
@@ -411,20 +439,14 @@ Steps:
 3. If all labs are already non-empty at the start, Phase 1 runs to completion with no stopping condition.
 4. If `|unassigned| == |empty labs|` at the start, Phase 1 is skipped entirely.
 
-The assignment criterion in Phase 1 is **earliest in the student's preference list with capacity** — not least-loaded.
-
 #### Phase 2 — Empty-lab fill
 
-**Goal:** assign each remaining student to their most preferred advisor who currently has zero students (an empty lab).
+**Goal:** assign each remaining student to their most preferred advisor who currently has zero students.
 
 Steps:
 
 1. Sort remaining unassigned students by CPI, descending.
-2. For each student, scan their preference list and assign them to the **first advisor with `load == 0`**.
-
-#### Why the stopping condition works
-
-Each Phase 1 assignment reduces `|unassigned|` by exactly 1 and reduces `|empty labs|` by at most 1. Phase 1 stops when `|unassigned| == |empty labs|`, leaving exactly as many students as there are empty labs. Phase 2 consumes one student and one empty lab per step, so both reach zero simultaneously — guaranteeing full assignment with no empty labs.
+2. For each student, scan their preference list and assign to the **first advisor with `load == 0`**.
 
 #### Properties
 
@@ -432,61 +454,79 @@ Each Phase 1 assignment reduces `|unassigned|` by exactly 1 and reduces `|empty 
 |----------|-----------|
 | Merit sensitivity (NPSS) | High — high-CPI students claim top choices before any lower-CPI student is considered |
 | Preference satisfaction (PSI) | Mixed — top students get excellent matches; lower-CPI students may land further down their list |
-| Load balance | Weaker — popular advisors can fill up quickly in Phase 1; less popular ones wait for Phase 2 |
-| Empty-lab guarantee | Very strong — structurally impossible to leave an advisor empty (when S >= F) |
-| Advisor CPI diversity (entropy) | Cohort-dependent — CPI-ordered processing can concentrate high-CPI students at popular advisors, but the effect varies by cohort structure |
-
-#### When to prefer `cpi_fill`
-
-- When **academic merit should explicitly determine priority** and the institution wants high-CPI students to have unambiguous first access to preferred advisors.
-- When **no empty labs is a hard requirement** — the Phase 2 design makes this structurally guaranteed.
-- In cohorts with **random or weakly correlated preferences**, where Phase 1's greedy rule gives most students their top pick with little competition.
-
-#### Known limitations
-
-- In **clustered preference cohorts**, high-CPI students rapidly fill popular advisors, pushing lower-CPI students far down their lists. This increases overflow and reduces PSI.
-- **No tier window** — unlike `least_loaded`, a Class A student whose top advisors are full is not redirected to a broader pool; they continue down their full preference list.
-- **Load imbalance** — because Phase 1 uses highest-preference-with-capacity (not least-loaded), popular advisors can absorb many students while unpopular ones wait for Phase 2.
+| Load balance | Weaker — popular advisors can fill up quickly in Phase 1 |
+| Empty-lab guarantee | Very strong — structurally impossible to leave an advisor empty (when S ≥ F) |
+| Advisor CPI diversity (entropy) | Cohort-dependent |
 
 ---
 
-### 3.4 Policy comparison
+### 3.5 Policy: CPI-Tiered Preference Rounds (`tiered_rounds`)
 
-| Aspect | `least_loaded` | `cpi_fill` |
-|--------|----------------|------------|
-| Round 1 | Yes | No |
-| Processing order | Tier-by-tier, arbitrary within tier | Strict descending CPI across all tiers |
-| Preference window | `N_tier` per tier (3 / 5 / full) | Full list (no window) |
-| Primary assignment criterion | Minimum current load | Earliest preference with capacity |
-| Empty-lab guarantee | Indirect (Class C fallback) | Explicit (Phase 2 design) |
-| Merit sensitivity (NPSS) | Moderate | High |
-| Equal-weighted satisfaction (PSI) | Cohort-dependent | Cohort-dependent |
-| Load balance | Strong | Variable |
-| Advisor CPI entropy | Cohort-dependent | Cohort-dependent |
+#### Overview
 
-> **Note:** Metric outcomes for PSI and advisor entropy are cohort-sensitive. In a five-dataset comparative study, the two policies produce draws on these metrics in most scenarios; neither dominates consistently. See Section 3.6 for guidance on interpretation.
+`tiered_rounds` is a **round-based, interactive policy**. In round *n*, every unassigned student simultaneously offers their *n*-th preference. Each participating advisor selects at most one student (the highest-CPI candidate). If two or more students share the top CPI at the same advisor, the operator resolves the tie manually. The process repeats until all students are assigned.
+
+#### Pipeline
+
+```
+Phase 0  →  Preference Rounds (n = 1, 2, 3, …)
+```
+
+No separate Round 1 or class-wise main allocation. Phase 0 tier classification is computed but does not constrain round participation.
+
+#### Selection rule
+
+- **Unique highest CPI** → immediate assignment.
+- **CPI tie at the top** → operator picks one; remaining candidates advance to round *n+1*.
+- Advisors that became full in a previous round are skipped entirely.
+- Each advisor allocates **at most one student per round**, even if it still has capacity > 1.
+
+#### Properties
+
+| Property | Behaviour |
+|----------|-----------|
+| Merit sensitivity (NPSS) | High — CPI determines priority within each round |
+| Preference satisfaction (PSI) | High in balanced cohorts; students advance down their list only when earlier choices are taken |
+| Transparency | Highest — every assignment and every tie-break decision is logged in the round trace |
+| Operator involvement | Required for CPI ties; cannot run unattended if ties exist |
+| Load balance | Implicit (one per advisor per round); not explicitly optimised |
 
 ---
 
-### 3.5 Metrics
+### 3.6 Policy comparison
+
+| Aspect | `least_loaded` | `nonempty` | `cpi_fill` | `tiered_rounds` |
+|--------|----------------|------------|------------|-----------------|
+| Round 1 | Yes | Yes | No | No |
+| Processing order | Tier-by-tier | Tier-by-tier | Strict descending CPI | Round-by-preference-rank |
+| Preference window | `N_tier` per tier | `N_tier` per tier | Full list | Full list (diagnostic only) |
+| Primary assignment criterion | Min load | Emptiness → preference | First pref with capacity | Highest CPI in round |
+| Tie-breaking | Preference rank | Preference rank | Student ID | Manual operator pick |
+| Empty-lab guarantee | Indirect | Strong | Explicit (Phase 2) | Implicit |
+| Merit sensitivity (NPSS) | Moderate | Moderate | High | High |
+| Equal-weighted satisfaction (PSI) | Cohort-dependent | Cohort-dependent | Cohort-dependent | High in balanced cohorts |
+| Load balance | Strong | Moderate | Variable | Implicit |
+| CLI available | Yes | Yes | Yes | No (GUI only) |
+
+> **Note:** PSI and advisor entropy outcomes are cohort-sensitive. Neither policy dominates consistently across all cohort types. See Section 3.8 for guidance on interpretation.
+
+---
+
+### 3.7 Metrics
 
 The app reports metrics in two places: the **Statistics** tab of the replay panel (updated at each step) and the **completion panel summary badge row** (final state only).
 
 #### NPSS — Normalized Preference Satisfaction Score
 
-NPSS is the **primary metric**. It measures how well student preferences were honoured, weighted by CPI and bounded by each student's protection window.
+NPSS is the **primary metric**. It measures how well student preferences were honoured, weighted by CPI.
 
 **Per-student score:**
 
 $$
-\text{score}_i =
-\begin{cases}
-\dfrac{N_{\text{tier},i} - p_i + 1}{N_{\text{tier},i}} & \text{if assigned within the } 1 \to N_{\text{tier}} \text{ window} \\[8pt]
-0 & \text{if assigned outside the window}
-\end{cases}
+\text{score}_i = \frac{F - p_i + 1}{F}
 $$
 
-where $p_i$ is the rank of the advisor the student was assigned to (1 = 1st choice) and $N_{\text{tier},i}$ is their protection window size.
+where $p_i$ is the preference rank of the advisor assigned to student *i* (1 = 1st choice) and $F$ is the total number of faculty (= the full preference list length, the same for all students).
 
 **Aggregate:**
 
@@ -494,18 +534,20 @@ $$
 \text{NPSS} = \sum_{i=1}^{S} \frac{\text{CPI}_i}{\sum_j \text{CPI}_j} \cdot \text{score}_i
 $$
 
-NPSS lies in [0, 1]. Normalising by $N_{\text{tier}}$ makes scores comparable across tiers — a Class A student at their last protected rank (3rd) scores the same as a Class B student at their last protected rank (5th). The CPI weighting reflects the protocol's philosophy that failures to honour top-tier preferences should penalise the score more.
+NPSS lies in (0, 1]. Using $F$ as the denominator — rather than the tier-specific `N_tier` — means all four policies are evaluated on the same scale, enabling fair cross-protocol comparison. A student assigned at rank 1 always scores 1.0; a student at rank $F$ scores $1/F \approx 0$.
 
 | NPSS range | Interpretation |
 |------------|----------------|
-| 0.90 – 1.00 | Excellent — most students are at or near their 1st choice |
-| 0.75 – 0.89 | Good — some preference compromise, likely due to popular advisors filling up |
-| 0.60 – 0.74 | Moderate — meaningful preference loss; check per-tier breakdown |
-| < 0.60 | Poor — systematic mismatch; review capacity parameters or preference diversity |
+| 0.95 – 1.00 | Excellent — cohort is landing predominantly at ranks 1–2 |
+| 0.85 – 0.94 | Good — most students in top 5; some further |
+| 0.70 – 0.84 | Moderate — noticeable preference compromise; check per-tier breakdown |
+| < 0.70 | Poor — systematic mismatch; review capacity parameters or preference diversity |
+
+The CPI weighting reflects the protocol's philosophy that failures to honour high-CPI students' preferences should penalise the score more than equivalent failures for lower-CPI students.
 
 #### PSI — Preference Satisfaction Index
 
-PSI is a **complementary, equal-weighted metric**. It treats every student identically and asks simply: on average, how close to the top of their list did each student land?
+PSI is a **complementary, equal-weighted metric**. It treats every student identically and asks: on average, how close to the top of their list did each student land?
 
 **Per-student score:**
 
@@ -513,7 +555,7 @@ $$
 \text{PSI}_i = 1 - \frac{p_i - 1}{F - 1}
 $$
 
-where $F$ is the total number of faculty. This maps 1st choice → 1.0 and last choice → 0.0, with comparisons valid across cohorts of different sizes because the rank is normalised by $F - 1$.
+This maps 1st choice → 1.0 and last choice → 0.0, normalised by $F - 1$ so comparisons are valid across cohorts of different sizes.
 
 **Aggregate:**
 
@@ -521,27 +563,33 @@ $$
 \text{mean PSI} = \frac{1}{S} \sum_{i=1}^{S} \text{PSI}_i
 $$
 
-PSI is particularly useful when comparing `least_loaded` and `cpi_fill`: because `cpi_fill` processes students in CPI order, it can boost NPSS for high-CPI students while simultaneously lowering mean PSI for lower-CPI students. Whether this trade-off actually materialises depends on cohort structure — it is most pronounced in clustered or high-CPI cohorts. PSI makes this redistribution visible.
+PSI is particularly useful when comparing policies: because `cpi_fill` processes students in CPI order, it can boost NPSS for high-CPI students while simultaneously lowering mean PSI for lower-CPI students. PSI makes this redistribution visible.
 
 | Mean PSI range | Interpretation |
 |----------------|----------------|
-| 0.90 – 1.00 | Excellent — students are landing very near their 1st or 2nd choice on average |
-| 0.75 – 0.89 | Good — most students are in their top quarter of preferences |
+| 0.90 – 1.00 | Excellent — students landing very near their 1st or 2nd choice on average |
+| 0.75 – 0.89 | Good — most students in their top quarter of preferences |
 | 0.60 – 0.74 | Moderate — noticeable preference compromise across the cohort |
-| < 0.60 | Poor — students are on average landing in the lower half of their list |
+| < 0.60 | Poor — students landing in the lower half of their list on average |
 
 **Reading NPSS and PSI together:**
 
 | Pattern | Meaning |
 |---------|---------|
 | NPSS high, PSI lower than expected | Top-CPI students well served; lower-CPI students landing further down their lists |
-| PSI high, NPSS lower | Cohort lands near top preferences on average, but some high-CPI students fell outside their window |
+| PSI high, NPSS lower | Cohort lands near top preferences on average, but CPI-weighted satisfaction is lower |
 | Both high | Allocation working well across all dimensions |
 | Both low | Systematic preference mismatch; investigate capacity and preference diversity |
 
+#### Overflow Count (diagnostic)
+
+The overflow count reports the number of students assigned **beyond their tier `N_tier` window** (rank > `N_tier`). This is a protocol-compliance diagnostic, tracked separately from NPSS. Because NPSS now uses $F$ as its denominator, out-of-window placements still receive a positive NPSS contribution — the overflow count is the only place where tier-cap compliance is flagged numerically.
+
+For `cpi_fill` and `tiered_rounds`, overflow is expected (these protocols do not enforce the tier cap), so the overflow count should be read as an informational statistic rather than an error signal.
+
 #### Advisor CPI Entropy
 
-This metric measures **CPI diversity within each advisor's cohort** — whether each advisor received a mix of students from different academic tiers, rather than one advisor attracting all top-CPI students and another receiving only low-CPI students.
+This metric measures **CPI diversity within each advisor's cohort** — whether each advisor received a mix of students from different academic tiers.
 
 For each advisor $a$, bucket assigned students by tier label and compute the Shannon entropy of the tier distribution, normalised to [0, 1]:
 
@@ -553,11 +601,9 @@ where $K$ is the number of tier labels and $p_k(a)$ is the fraction of advisor $
 
 The **system-level score** is the mean of $H_{\text{norm}}(a)$ across all advisors with at least one student. A value near 1.0 indicates most advisors received a mixed-tier cohort; a value near 0 indicates widespread tier segregation.
 
-Entropy is the **preferred advisor-equity metric** because it directly captures tier diversity within each advisor's cohort and is easy to interpret. In the five-dataset comparative study, the two policies produce draws on entropy in most scenarios. The one threshold-crossing difference favours `least_loaded` on the polarised cohort; all other datasets are draws. Use entropy as the primary basis for advisor-equity conclusions rather than CPI skewness.
-
 #### CPI Skewness of Advisor Mean CPIs
 
-This metric measures whether the **distribution of advisor-averaged CPIs** is symmetric or whether a few advisors are receiving a disproportionately high- or low-CPI cohort.
+This metric measures whether the **distribution of advisor-averaged CPIs** is symmetric or skewed — whether a few advisors are receiving a disproportionately high- or low-CPI cohort.
 
 For each advisor $a$, compute the mean CPI of their assigned students. Collect these mean CPIs across all advisors and compute Fisher's adjusted sample skewness:
 
@@ -568,43 +614,37 @@ $$
 | Skewness | Meaning |
 |----------|---------|
 | ~ 0 | Symmetric — no systematic CPI concentration at any advisor |
-| > 0 (positive) | A few advisors have notably higher mean CPIs than the bulk |
-| < 0 (negative) | A few advisors have notably lower mean CPIs than the bulk |
+| > 0 | A few advisors have notably higher mean CPIs than the bulk |
+| < 0 | A few advisors have notably lower mean CPIs than the bulk |
 
-An absolute skewness below 0.5 is generally acceptable. Values above 1.0 warrant investigation into whether the allocation is systematically concentrating high- (or low-) CPI students at particular advisors.
+An absolute skewness below 0.5 is generally acceptable. Values above 1.0 warrant investigation.
 
 #### Load Balance
 
-Load Balance = `max(advisor loads) − min(advisor loads)` across all advisors in the final allocation (including any with zero students). It appears only in the **completion panel summary badge row** and is not shown on the Analysis page.
-
-A value of 0 means all advisors have identical load. A value of 1 is the minimum non-zero spread and is typical when loads differ by at most one student. Larger values indicate uneven distribution and warrant inspection of the Tier Heatmap and advisor load bar chart.
+Load Balance = `max(advisor loads) − min(advisor loads)` across all advisors in the final allocation (including any with zero students). It appears only in the **completion panel summary badge row**. A value of 0 means identical loads. A value of 1 is the minimum non-zero spread and is typical in well-balanced runs.
 
 ---
 
-**CPI skewness is a diagnostic metric only.** It is highly sensitive to cohort structure — the direction and magnitude of the difference between policies can reverse across different datasets. In the five-dataset comparative study, neither policy shows a consistent skewness advantage: wins are split across cohort types, and on the uniform high-CPI cohort the direction reverses relative to the structured cohorts. Do not use skewness alone to declare a policy winner; always interpret it alongside entropy and the primary NPSS result.
+### 3.8 How to read the metrics together
 
----
+When interpreting a single run or comparing policies, use this hierarchy:
 
-### 3.6 How to read the metrics together
-
-When interpreting a single run or comparing the two policies, use this hierarchy:
-
-1. **NPSS** *(primary deciding metric)* — start here. It directly measures whether the allocation honours the protocol's protected student preferences and is CPI-weighted to reflect the protocol's intent. It is the most stable basis for policy comparison.
+1. **NPSS** *(primary)* — start here. It directly measures whether the allocation honours student preferences and is CPI-weighted to reflect the protocol's intent. All four policies use the same full-list denominator, so NPSS values are directly comparable across policies.
 
 2. **PSI** *(secondary student metric)* — check for redistribution effects. If NPSS and PSI move in opposite directions across policies, the allocation is trading higher CPI-weighted satisfaction for lower equal-weighted satisfaction (or vice versa). This is a value judgement, not a failure.
 
-3. **Advisor CPI Entropy** *(preferred advisor-equity metric)* — check whether advisors are receiving a mixed or homogeneous tier composition. Prefer entropy over skewness for advisor-equity conclusions because it is easier to interpret and less vulnerable to sign-flip ambiguity.
+3. **Advisor CPI Entropy** *(preferred advisor-equity metric)* — check whether advisors are receiving a mixed or homogeneous tier composition.
 
-4. **Advisor Tier Distribution Heatmap** *(visual diagnostic for advisor equity)* — shows which tiers each advisor's cohort contains, row-normalized so advisors with different loads are comparable. Rows sorted by entropy ascending so the most segregated advisors appear first. Broad color across a row = high tier diversity (high entropy). Concentration in one column = tier segregation (low entropy). Use it to understand *why* entropy is high or low — it reveals whether concentration is top-heavy, bottom-heavy, or scattered across individual advisors. It is explanatory only; do not use it to declare a policy winner.
+4. **Advisor Tier Distribution Heatmap** *(visual diagnostic)* — shows which tiers each advisor's cohort contains, row-normalized by capacity. Use it to understand *why* entropy is high or low.
 
-5. **Load Balance** *(completion panel only)* — max minus min of final advisor loads, including empty advisors. A quick sanity check on load spread; expand the Metrics or Advisor Loads panels for detail. Not available on the Analysis page.
+5. **Load Balance** *(sanity check)* — max minus min of final advisor loads. A quick scan; expand the Metrics or Advisor Loads panels for detail.
 
-6. **CPI Skewness** *(diagnostic only)* — use as a cross-check for CPI concentration in the advisor mean-CPI distribution. Do not declare a policy winner from skewness alone; results are cohort-sensitive and the direction of the difference can reverse depending on cohort structure.
+6. **CPI Skewness** *(diagnostic only)* — use as a cross-check for CPI concentration in the advisor mean-CPI distribution. Results are cohort-sensitive; do not declare a policy winner from skewness alone.
 
-7. **Overflow Count and % Assigned in Window** *(diagnostic columns)* — these explain *why* NPSS changes in stressed cohorts. Out-of-window assignments already score 0 in NPSS, so these columns add no independent evidential weight beyond what NPSS already captures.
+7. **Overflow Count** *(protocol-compliance diagnostic)* — reports placements beyond the tier `N_tier` window. For cap-enforcing policies (`least_loaded`, `nonempty`) this signals near-overflow stress; for non-cap policies (`cpi_fill`, `tiered_rounds`) it is informational. It does not affect NPSS.
 
-**If metrics disagree:** this is normal. The two policies trade off across dimensions rather than one uniformly dominating the other. The choice between them is a value judgement about institutional priorities — merit-weighted access (`cpi_fill`) versus equitable treatment across tiers (`least_loaded`) — not a metric-determined optimum.
+**If metrics disagree:** this is normal. The four policies trade off across dimensions rather than one uniformly dominating. The choice is a value judgement about institutional priorities — merit-weighted access, equitable treatment, load balance, or operator transparency — not a metric-determined optimum.
 
 ---
 
-*For further details see `MSThesisAllocationProtocol.md` (full protocol specification) and `stats/policy_report.md` (empirical comparison across five synthetic datasets).*
+*For further details see `MSThesisAllocationProtocol.md` (full protocol specification), `NPSS_Metric.md` (NPSS/PSI definitions), `docs/policy_*.md` (per-policy deep-dives), and `stats/policy_report.md` (empirical comparison across five synthetic datasets).*

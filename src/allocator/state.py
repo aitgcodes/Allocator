@@ -9,7 +9,7 @@ replay the allocation step by step.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Any
 
 
 # ---------------------------------------------------------------------------
@@ -105,3 +105,40 @@ class SnapshotList:
 
     def last(self) -> Optional[AllocationSnapshot]:
         return self._snaps[-1] if self._snaps else None
+
+
+# ---------------------------------------------------------------------------
+# Tiered-rounds engine state  (for "tiered_rounds" allocation protocol)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class PendingTie:
+    """One manual tie-break decision pausing the tiered-rounds engine."""
+
+    round_no: int
+    advisor_id: str
+    advisor_name: str
+    candidate_ids: List[str]            # all students who named this advisor this round
+    candidate_names: Dict[str, str]     # student_id -> name
+    candidate_cpis: Dict[str, float]    # student_id -> CPI
+    tied_ids: List[str]                 # subset sharing the top CPI
+    tied_cpi: float
+    reason: str                         # human-readable pause reason
+
+
+@dataclass
+class TieredRoundsState:
+    """Resumable engine state for the 'tiered_rounds' allocation protocol."""
+
+    round_no: int
+    students: List[Student]
+    faculty: List[Faculty]
+    assignments: Dict[str, Optional[str]]
+    faculty_loads: Dict[str, int]
+    snapshots: SnapshotList
+    saturated_advisors: Set[str]        # advisors full at end of a previous round
+    pending_tie: Optional[PendingTie]   # current tie awaiting resolution
+    pending_tie_queue: List[PendingTie] # remaining ties in the current round
+    trace_log: List[Dict[str, Any]]     # round-by-round audit records
+    status: str                         # "running"|"awaiting_tie"|"complete"|"stalled"
+    stall_unassigned: List[str]         # IDs of students that could not be assigned

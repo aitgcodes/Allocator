@@ -59,29 +59,20 @@ def npss_per_student_score(
     """
     Compute NPSS score for a single student.
 
-    Score is (n - rank + 1) / n if assigned within their protection window,
-    0.0 otherwise.
+    Score is (F - rank + 1) / F where F = len(student.preferences).
+    The full preference list is used as the denominator for all protocols
+    so that NPSS is comparable across protocols regardless of tier caps.
 
     Parameters
     ----------
-    student : Student with .n_tier and .preferences set
+    student : Student with .preferences set
     rank    : 1-based preference rank, or None if unassigned
     """
     if rank is None:
         return 0.0
 
-    # Determine effective window size n
-    if student.n_tier is not None:
-        n = student.n_tier
-    else:
-        # Class C: use full preference list length
-        n = len(student.preferences)
-
+    n = len(student.preferences)
     if n == 0:
-        return 0.0
-
-    if rank > n:
-        # Outside protection window
         return 0.0
 
     return (n - rank + 1) / n

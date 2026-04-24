@@ -102,6 +102,8 @@ from .allocation import (
     phase0,
     round1,
     run_full_allocation,
+    tiered_rounds_resume,
+    tiered_rounds_start,
 )
 from .metrics import compute_metrics
 
@@ -121,7 +123,7 @@ from .data_loader import (
     save_phase0_report,
     validate_preferences,
 )
-from .state import AllocationSnapshot, Faculty, SnapshotList, Student
+from .state import AllocationSnapshot, Faculty, PendingTie, SnapshotList, Student, TieredRoundsState
 from .visualizer import (
     advisor_cpi_histogram,
     advisor_tier_heatmap,
@@ -312,6 +314,14 @@ def _state_to_json() -> dict:
     """Serialise the current finalised _app_state to a JSON-compatible dict."""
     students = _app_state.get("students", [])
     faculty  = _app_state.get("faculty",  [])
+    # For tiered_rounds, the live assignments live in tr_state, not current_assignments
+    tr_state = _app_state.get("tr_state")
+    if ALLOCATION_POLICY == "tiered_rounds" and tr_state is not None:
+        assignments   = dict(tr_state.assignments)
+        faculty_loads = dict(tr_state.faculty_loads)
+    else:
+        assignments   = _app_state.get("current_assignments", {})
+        faculty_loads = _app_state.get("current_faculty_loads", {})
     return {
         "saved_at":    datetime.now().isoformat(),
         "policy":      ALLOCATION_POLICY,
@@ -324,8 +334,8 @@ def _state_to_json() -> dict:
             {"id": f.id, "name": f.name, "max_load": f.max_load}
             for f in faculty
         ],
-        "assignments":   _app_state.get("current_assignments", {}),
-        "faculty_loads": _app_state.get("current_faculty_loads", {}),
+        "assignments":   assignments,
+        "faculty_loads": faculty_loads,
         "metrics":       _app_state.get("metrics", {}),
         "meta":          _app_state.get("meta", {}),
     }
@@ -391,7 +401,7 @@ _app_state: dict = {
     "main_run":              0,      # incremented each time main allocation starts (for unique button IDs)
     "current_assignments":   {},     # live assignments during main alloc
     "current_faculty_loads": {},     # live faculty loads during main alloc
-    "phase":                 "idle", # "idle"|"phase0_done"|"r1"|"r1_done"|"main_alloc"|"cpi_phase1_alloc"|"cpi_phase1_done"|"cpi_phase2_alloc"|"complete"
+    "phase":                 "idle", # "idle"|"phase0_done"|"r1"|"r1_done"|"main_alloc"|"cpi_phase1_alloc"|"cpi_phase1_done"|"cpi_phase2_alloc"|"tr_tie_pending"|"complete"
     "metrics":               {},     # satisfaction metrics from compute_metrics
     "cpi_phase1_stats":      {},     # stats dict from cpi_fill_phase1 (for r1-panel rendering)
     "cpi_p1_queue":          [],     # ordered Student list for CPI-Fill Phase 1 manual
@@ -402,6 +412,7 @@ _app_state: dict = {
     "cpi_p2_queue":          [],     # ordered Student list for CPI-Fill Phase 2 manual
     "cpi_p2_queue_idx":      0,      # current position in cpi_p2_queue
     "cpi_p2_run":            0,      # run counter
+    "tr_state":              None,   # TieredRoundsState | None
 }
 
 # ---------------------------------------------------------------------------
@@ -864,6 +875,8 @@ def _landing_layout() -> dbc.Container:
                                  "value": "nonempty"},
                                 {"label": "CPI-Fill (two-phase)",
                                  "value": "cpi_fill"},
+                                {"label": "CPI-tiered preference rounds (manual tie-pick)",
+                                 "value": "tiered_rounds"},
                             ],
                             value="least_loaded",
                             clearable=False,
@@ -1057,6 +1070,12 @@ def cb_landing_policy_desc(value):
                 "(full preference list, no tier cap) until the number of unassigned students "
                 "equals the number of empty labs; Phase 2 assigns each remaining student "
                 "to their highest-preferred empty lab.")
+    if value == "tiered_rounds":
+        return ("Preference-round procedure: Phase 0 classifies tiers (diagnostic only); "
+                "then runs rounds 1, 2, 3 … where in round n every unassigned student "
+                "offers their n-th preference. Each advisor allocates at most one student "
+                "per round (highest CPI wins); CPI ties require a manual pick before the "
+                "round advances.")
     return ("Three-phase pipeline: Phase 0 tiers students by CPI; Round 1 gives each "
             "faculty their top first-choice student; main allocation processes students "
             "class-by-class (A → B → C) within an N_tier preference window, assigning "
@@ -1085,6 +1104,8 @@ def cb_landing_continue(n_clicks, policy):
 def cb_update_section_headers(policy):
     if policy == "cpi_fill":
         return "3 — Phase 1", "4 — Phase 2"
+    if policy == "tiered_rounds":
+        return "3 — Preference Rounds", "4 — (not used)"
     return "3 — Round 1: faculty picks", "4 — Main Allocation"
 
 
@@ -1169,6 +1190,8 @@ def cb_policy_badge(policy):
         label, color = "Highest preferred with vacancy", "info"
     elif policy == "cpi_fill":
         label, color = "CPI-Fill (two-phase)", "warning"
+    elif policy == "tiered_rounds":
+        label, color = "CPI-tiered preference rounds (manual tie-pick)", "primary"
     else:
         label, color = "Least-loaded · highest preferred", "secondary"
     return dbc.Badge(f"Policy: {label}", color=color, className="mb-2")
@@ -1505,6 +1528,54 @@ def cb_run(n_phase0, n_full, loaded):
                 snaps = SnapshotList()
                 _app_state["snapshots"] = snaps
 
+        # tiered_rounds: Phase 0 → start engine immediately (no Round 1)
+        if ALLOCATION_POLICY == "tiered_rounds":
+            try:
+                tr_state = tiered_rounds_start(students, faculty, snaps)
+            except Exception as e:
+                return f"✗ Tiered-rounds error: {e}", "idle", 0, {}, 0
+            _app_state["tr_state"]  = tr_state
+            _app_state["snapshots"] = tr_state.snapshots
+            snaps = tr_state.snapshots
+            n = len(snaps)
+            marks = {i: str(snaps[i].step) for i in range(0, n, max(1, n // 10))}
+            if tr_state.status == "awaiting_tie":
+                tie = tr_state.pending_tie
+                remaining = len(tr_state.pending_tie_queue)
+                msg = (
+                    f"Phase 0 complete. Round {tie.round_no}: manual tie-break required "
+                    f"for {tie.advisor_name}"
+                    + (f" ({remaining} more tie(s) in this round)" if remaining else "")
+                    + "."
+                )
+                _app_state["phase"] = "tr_tie_pending"
+                return msg, "tr_tie_pending", n - 1, marks, n - 1
+            if tr_state.status == "complete":
+                _app_state["phase"] = "complete"
+                _app_state["current_assignments"]   = dict(tr_state.assignments)
+                _app_state["current_faculty_loads"] = dict(tr_state.faculty_loads)
+                _app_state["metrics"] = compute_metrics(
+                    tr_state.students, tr_state.assignments,
+                    F=len(tr_state.faculty),
+                    faculty_ids=[f.id for f in tr_state.faculty],
+                )
+                assigned = sum(1 for fid in tr_state.assignments.values() if fid is not None)
+                return (
+                    f"Preference rounds complete — all {assigned} students assigned.",
+                    "complete", n - 1, marks, n - 1,
+                )
+            if tr_state.status == "stalled":
+                _app_state["phase"] = "complete"
+                stall_names = [
+                    next((s.name for s in tr_state.students if s.id == sid), sid)
+                    for sid in tr_state.stall_unassigned
+                ]
+                return (
+                    f"⚠ Allocation stalled — could not assign: {', '.join(stall_names)}.",
+                    "complete", n - 1, marks, n - 1,
+                )
+            return "⚠ Unexpected engine state.", "idle", 0, {}, 0
+
         # CPI-Fill skips Round 1 — initialise empty assignments and wait for operator.
         if ALLOCATION_POLICY == "cpi_fill":
             assignments   = {s.id: None for s in students}
@@ -1657,6 +1728,20 @@ def cb_r1_panel(phase):
             html.Div(buttons, className="d-flex"),
         ]
 
+    # ---- tiered_rounds phases ----
+    if ALLOCATION_POLICY == "tiered_rounds":
+        if phase == "tr_tie_pending":
+            tr_state = _app_state.get("tr_state")
+            if tr_state and tr_state.status == "awaiting_tie":
+                return _render_tiered_rounds_panel(tr_state)
+            return html.Span("Awaiting tie decision…", className="text-muted")
+        if phase == "complete":
+            tr_state = _app_state.get("tr_state")
+            if tr_state:
+                return _render_tiered_rounds_panel(tr_state)
+            return html.Span("✓ Preference rounds complete.", className="text-success")
+        return html.Span("Load data and run Phase 0 to begin.", className="text-muted")
+
     # ---- CPI-Fill specific phases ----
     if ALLOCATION_POLICY == "cpi_fill":
         # Phase 1 / Phase 2 manual in progress — content is managed directly by
@@ -1722,6 +1807,93 @@ def cb_confirm_r1(n_clicks, pick_values, pick_ids):
 
 
 # ---------------------------------------------------------------------------
+# Callback — tiered_rounds tie resolution
+# ---------------------------------------------------------------------------
+
+@app.callback(
+    Output("r1-panel",    "children",  allow_duplicate=True),
+    Output("run-status",  "children",  allow_duplicate=True),
+    Output("store-phase", "data",      allow_duplicate=True),
+    Output("step-slider", "max",       allow_duplicate=True),
+    Output("step-slider", "marks",     allow_duplicate=True),
+    Output("step-slider", "value",     allow_duplicate=True),
+    Input("btn-tr-resolve", "n_clicks"),
+    State("tr-tie-dropdown", "value"),
+    prevent_initial_call=True,
+)
+def cb_tr_resolve(n_clicks, chosen_sid):
+    no_up6 = (dash.no_update,) * 6
+    if not n_clicks:
+        return no_up6
+
+    tr_state = _app_state.get("tr_state")
+    if tr_state is None or tr_state.status != "awaiting_tie":
+        return no_up6
+
+    if not chosen_sid:
+        return (
+            dash.no_update,
+            "⚠ Please select a student before confirming.",
+            dash.no_update, dash.no_update, dash.no_update, dash.no_update,
+        )
+
+    try:
+        tr_state = tiered_rounds_resume(tr_state, chosen_sid)
+    except Exception as e:
+        return (
+            dash.no_update,
+            f"✗ Error resolving tie: {e}",
+            dash.no_update, dash.no_update, dash.no_update, dash.no_update,
+        )
+
+    _app_state["tr_state"]  = tr_state
+    _app_state["snapshots"] = tr_state.snapshots
+    snaps = tr_state.snapshots
+    n = len(snaps)
+    marks = {i: str(snaps[i].step) for i in range(0, n, max(1, n // 10))}
+
+    panel = _render_tiered_rounds_panel(tr_state)
+
+    if tr_state.status == "complete":
+        _app_state["phase"] = "complete"
+        _app_state["current_assignments"]   = dict(tr_state.assignments)
+        _app_state["current_faculty_loads"] = dict(tr_state.faculty_loads)
+        _app_state["metrics"] = _tr_compute_metrics(tr_state)
+        assigned = sum(1 for fid in tr_state.assignments.values() if fid is not None)
+        return (
+            panel,
+            f"Preference rounds complete — all {assigned} students assigned.",
+            "complete", n - 1, marks, n - 1,
+        )
+
+    if tr_state.status == "stalled":
+        _app_state["phase"] = "complete"
+        stall_names = [
+            next((s.name for s in tr_state.students if s.id == sid), sid)
+            for sid in tr_state.stall_unassigned
+        ]
+        return (
+            panel,
+            f"⚠ Allocation stalled — could not assign: {', '.join(stall_names)}.",
+            "complete", n - 1, marks, n - 1,
+        )
+
+    if tr_state.status == "awaiting_tie":
+        _app_state["phase"] = "tr_tie_pending"
+        tie = tr_state.pending_tie
+        remaining = len(tr_state.pending_tie_queue)
+        msg = (
+            f"Round {tie.round_no}: manual tie-break required "
+            f"for {tie.advisor_name}"
+            + (f" ({remaining} more tie(s) in this round)" if remaining else "")
+            + "."
+        )
+        return panel, msg, "tr_tie_pending", n - 1, marks, n - 1
+
+    return no_up6
+
+
+# ---------------------------------------------------------------------------
 # Callback — reset to Round 1
 # ---------------------------------------------------------------------------
 
@@ -1741,7 +1913,8 @@ def cb_reset_r1(n_clicks):
         return no_up6
 
     allowed = ("r1", "r1_done", "main_alloc", "complete",
-               "cpi_phase1_alloc", "cpi_phase1_done", "cpi_phase2_alloc")
+               "cpi_phase1_alloc", "cpi_phase1_done", "cpi_phase2_alloc",
+               "tr_tie_pending")
     if _app_state["phase"] not in allowed:
         return ("⚠ Run full allocation first before resetting.",
                 *([dash.no_update] * 5))
@@ -1764,6 +1937,7 @@ def cb_reset_r1(n_clicks):
     _app_state["cpi_p1_e_is_zero"]      = False
     _app_state["cpi_p2_queue"]          = []
     _app_state["cpi_p2_queue_idx"]      = 0
+    _app_state["tr_state"]              = None
     _app_state["snapshots"]             = snaps
 
     if snaps:
@@ -1772,6 +1946,12 @@ def cb_reset_r1(n_clicks):
         slider_max, slider_val = n - 1, n - 1
     else:
         marks, slider_max, slider_val = {}, 0, 0
+
+    if ALLOCATION_POLICY == "tiered_rounds":
+        _app_state["phase"] = "phase0_done"
+        msg = "Reset — Phase 0 complete. Click 'Run full allocation' to restart preference rounds."
+        panel = html.Span("Allocation reset. Ready to run preference rounds.", className="text-muted")
+        return msg, "phase0_done", slider_max, marks, slider_val, panel
 
     if ALLOCATION_POLICY == "cpi_fill":
         _app_state["phase"] = "phase0_done"
@@ -2682,6 +2862,151 @@ def _cpi_phase1_report(stats: dict) -> "html.Div":
             dbc.Button("Auto-run Phase 2 →", id="btn-cpi-autorun-phase2",
                        color="primary", className="ms-2"),
         ], className="d-flex"),
+    ])
+
+
+def _render_tiered_rounds_panel(tr_state: "TieredRoundsState") -> "html.Div":
+    """
+    Render the Preference Rounds card body for the tiered_rounds protocol.
+    Returns a single html.Div (Dash requires a single component for allow_duplicate
+    single-output callbacks without a primary sibling).
+    Handles three states: awaiting_tie, complete, and stalled.
+    """
+    student_map = {s.id: s for s in tr_state.students}
+    faculty_map = {f.id: f for f in tr_state.faculty}
+    rounds_done = tr_state.round_no - 1 if tr_state.status != "complete" else tr_state.round_no
+
+    # --- round trace (shared across states) ---
+    trace_rows = []
+    for entry in tr_state.trace_log:
+        rn = entry["round_no"]
+        assigned_n = len(entry["assigned_this_round"])
+        manual_n = len(entry["manual_decisions"])
+        forwarded_n = len(entry["forwarded_to_next_round"])
+        tie_n = len(entry["ties"])
+        trace_rows.append(html.Tr([
+            html.Td(rn),
+            html.Td(assigned_n + manual_n),
+            html.Td(tie_n),
+            html.Td(forwarded_n),
+        ]))
+    trace_table = dbc.Table(
+        [html.Thead(html.Tr([
+            html.Th("Round"), html.Th("Assigned"), html.Th("Ties"), html.Th("Forwarded"),
+        ])),
+         html.Tbody(trace_rows)],
+        bordered=True, size="sm", className="mb-2",
+    ) if trace_rows else None
+
+    if tr_state.status == "stalled":
+        unassigned_names = [
+            student_map[sid].name if sid in student_map else sid
+            for sid in tr_state.stall_unassigned
+        ]
+        partial_assigned = sum(1 for fid in tr_state.assignments.values() if fid is not None)
+        return html.Div([
+            dbc.Alert(
+                [html.Strong("Allocation stalled. "),
+                 f"{partial_assigned} students assigned, "
+                 f"{len(tr_state.stall_unassigned)} could not be assigned. "
+                 "Likely cause: incomplete preference list or insufficient faculty capacity. "
+                 f"Unassigned: {', '.join(unassigned_names)}."],
+                color="danger", className="mb-3",
+            ),
+            *([html.Details([
+                html.Summary("Round trace", className="fw-bold mb-1"),
+                trace_table,
+            ])] if trace_table else []),
+        ])
+
+    if tr_state.status == "complete":
+        metrics = _app_state.get("metrics") or {}
+        panel = _build_completion_panel(
+            tr_state.assignments,
+            tr_state.faculty_loads,
+            tr_state.students,
+            tr_state.faculty,
+            metrics,
+            f"Preference rounds complete ({rounds_done} round(s))",
+        )
+        if trace_table:
+            panel.children.append(html.Hr())
+            panel.children.append(html.Details([
+                html.Summary("Round-by-round trace", className="fw-bold mb-1"),
+                trace_table,
+            ], open=False))
+        return panel
+
+    # --- awaiting_tie ---
+    tie = tr_state.pending_tie
+    if tie is None:
+        return [html.Span("Unexpected state — no pending tie.", className="text-danger")]
+
+    fac = faculty_map.get(tie.advisor_id)
+    remaining_ties = len(tr_state.pending_tie_queue)
+
+    # Candidate table
+    tier_color = {"A": "success", "B": "warning", "B1": "warning", "B2": "warning", "C": "danger"}
+    cand_rows = []
+    for sid in tie.candidate_ids:
+        s = student_map.get(sid)
+        is_tied = sid in tie.tied_ids
+        cand_rows.append(html.Tr(
+            [
+                html.Td(tie.candidate_names.get(sid, sid)),
+                html.Td(f"{tie.candidate_cpis.get(sid, 0):.2f}"),
+                html.Td(s.tier if s else "—"),
+                html.Td(dbc.Badge("TIED", color="danger", className="ms-1") if is_tied else ""),
+            ],
+            className="table-warning fw-bold" if is_tied else "",
+        ))
+
+    tie_options = [
+        {
+            "label": (
+                f"{tie.candidate_names.get(sid, sid)}  "
+                f"(CPI {tie.candidate_cpis.get(sid, 0):.2f})"
+            ),
+            "value": sid,
+        }
+        for sid in tie.tied_ids
+    ]
+
+    progress_note = ""
+    if remaining_ties:
+        progress_note = f" ({remaining_ties} more tie(s) in this round after this)"
+
+    return html.Div([
+        dbc.Alert(tie.reason, color="warning", className="mb-3"),
+        html.P([
+            html.Strong(f"Round {tie.round_no} — Manual tie-break required "),
+            f"for advisor {tie.advisor_name}" + progress_note + ".",
+        ], className="mb-2"),
+        dbc.Table(
+            [html.Thead(html.Tr([
+                html.Th("Student"), html.Th("CPI"), html.Th("Tier"), html.Th(""),
+            ])),
+             html.Tbody(cand_rows)],
+            bordered=True, size="sm", className="mb-3",
+        ),
+        html.Label("Select student to allocate:", className="fw-bold"),
+        dcc.Dropdown(
+            id="tr-tie-dropdown",
+            options=tie_options,
+            value=None,
+            clearable=False,
+            placeholder="Choose one student…",
+            className="mb-3",
+        ),
+        dbc.Button(
+            "Confirm selection and continue →",
+            id="btn-tr-resolve",
+            color="success",
+        ),
+        *([html.Details([
+            html.Summary("Round trace so far", className="fw-bold mb-1"),
+            trace_table,
+        ], open=False)] if trace_table else []),
     ])
 
 
@@ -3607,7 +3932,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--policy",
         default=None,
-        choices=["least_loaded", "nonempty", "cpi_fill"],
+        choices=["least_loaded", "nonempty", "cpi_fill", "tiered_rounds"],
         help=(
             "Override the allocation policy set in ALLOCATION_POLICY.\n"
             "  least_loaded : least-loaded eligible faculty, tie-broken by preference rank.\n"

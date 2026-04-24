@@ -40,8 +40,10 @@ from .metrics import compute_metrics
 from .state import (
     AllocationSnapshot,
     Faculty,
+    PendingTie,
     SnapshotList,
     Student,
+    TieredRoundsState,
 )
 
 # ---------------------------------------------------------------------------
@@ -864,6 +866,448 @@ def cpi_fill_allocation(
 
 
 # ---------------------------------------------------------------------------
+# CPI-tiered preference rounds — resumable engine
+# ---------------------------------------------------------------------------
+
+def _tr_append_complete_snapshot(
+    snapshots: SnapshotList,
+    assignments: Dict[str, Optional[str]],
+    faculty_loads: Dict[str, int],
+) -> None:
+    assigned = sum(1 for v in assignments.values() if v is not None)
+    unassigned = sum(1 for v in assignments.values() if v is None)
+    step = snapshots.last().step if snapshots.last() else 0
+    snapshots.append(AllocationSnapshot(
+        step=step + 1,
+        phase="Final",
+        event=(
+            f"Allocation complete | assigned={assigned} | unassigned={unassigned}"
+        ),
+        assignments=copy.copy(assignments),
+        faculty_loads=copy.copy(faculty_loads),
+        unassigned={sid for sid, fid in assignments.items() if fid is None},
+    ))
+
+
+def _tr_append_stall_snapshot(
+    snapshots: SnapshotList,
+    assignments: Dict[str, Optional[str]],
+    faculty_loads: Dict[str, int],
+    reason: str,
+) -> None:
+    unassigned = {sid for sid, fid in assignments.items() if fid is None}
+    step = snapshots.last().step if snapshots.last() else 0
+    snapshots.append(AllocationSnapshot(
+        step=step + 1,
+        phase="Stall",
+        event=f"STALL — {reason} | {len(unassigned)} student(s) unassigned",
+        assignments=copy.copy(assignments),
+        faculty_loads=copy.copy(faculty_loads),
+        unassigned=unassigned,
+    ))
+
+
+def _tr_execute_round(state: TieredRoundsState) -> TieredRoundsState:
+    """Execute one preference round. Returns an updated TieredRoundsState."""
+    from collections import defaultdict
+
+    round_no = state.round_no
+    n = round_no - 1          # 0-indexed position in each preference list
+
+    student_map = {s.id: s for s in state.students}
+    faculty_map = {f.id: f for f in state.faculty}
+    assignments = state.assignments      # mutated in-place
+    faculty_loads = state.faculty_loads  # mutated in-place
+    saturated = state.saturated_advisors
+
+    unassigned: List[str] = [sid for sid, fid in assignments.items() if fid is None]
+
+    # --- Group unassigned students by their n-th preference ---
+    groups: Dict[str, List[Student]] = defaultdict(list)
+    students_no_pref: List[str] = []
+    targeted_saturated: Set[str] = set()
+
+    for sid in unassigned:
+        s = student_map[sid]
+        if n >= len(s.preferences):
+            students_no_pref.append(sid)
+        else:
+            fid = s.preferences[n]
+            if fid in saturated:
+                targeted_saturated.add(fid)
+            else:
+                groups[fid].append(s)
+
+    # --- Classify each advisor group as an immediate pick or a tie ---
+    immediate_picks: Dict[str, str] = {}   # advisor_id -> chosen student_id
+    ties: List[PendingTie] = []
+
+    for fid, candidates in groups.items():
+        if not candidates:
+            continue
+        candidates_sorted = sorted(candidates, key=lambda s: (-s.cpi, s.id))
+        top_cpi = candidates_sorted[0].cpi
+        tied_students = [s for s in candidates_sorted if s.cpi == top_cpi]
+        fac = faculty_map[fid]
+
+        if len(tied_students) == 1:
+            immediate_picks[fid] = candidates_sorted[0].id
+        else:
+            reason = (
+                f"Round {round_no}: CPI tie at {top_cpi:.2f} for advisor "
+                f"{fac.name} — tied candidates: "
+                f"{', '.join(s.name for s in tied_students)}"
+            )
+            ties.append(PendingTie(
+                round_no=round_no,
+                advisor_id=fid,
+                advisor_name=fac.name,
+                candidate_ids=[s.id for s in candidates_sorted],
+                candidate_names={s.id: s.name for s in candidates_sorted},
+                candidate_cpis={s.id: s.cpi for s in candidates_sorted},
+                tied_ids=[s.id for s in tied_students],
+                tied_cpi=top_cpi,
+                reason=reason,
+            ))
+
+    # Ties serialised by decreasing tied CPI (decision A2)
+    ties.sort(key=lambda t: -t.tied_cpi)
+
+    # --- Apply immediate picks ---
+    newly_saturated: Set[str] = set()
+    assigned_this_round: Dict[str, str] = {}
+    step = state.snapshots.last().step if state.snapshots.last() else 0
+
+    for fid, sid in immediate_picks.items():
+        s = student_map[sid]
+        f = faculty_map[fid]
+        rank = s.preferences.index(fid) + 1
+        assignments[sid] = fid
+        faculty_loads[fid] += 1
+        assigned_this_round[sid] = fid
+        if faculty_loads[fid] >= f.max_load:
+            newly_saturated.add(fid)
+        step += 1
+        state.snapshots.append(AllocationSnapshot(
+            step=step,
+            phase=f"PrefRound{round_no}",
+            event=(
+                f"Round {round_no} | {s.name} ({sid}, CPI {s.cpi:.2f}) → "
+                f"{f.name} ({fid}) | pref rank {rank} | "
+                f"load now {faculty_loads[fid]}"
+            ),
+            assignments=copy.copy(assignments),
+            faculty_loads=copy.copy(faculty_loads),
+            unassigned={sid for sid, fid in assignments.items() if fid is None},
+            preference_rank={sid: rank},
+        ))
+
+    # --- Round summary snapshot ---
+    unassigned_now: Set[str] = {sid for sid, fid in assignments.items() if fid is None}
+    step += 1
+    state.snapshots.append(AllocationSnapshot(
+        step=step,
+        phase=f"PrefRound{round_no}",
+        event=(
+            f"Round {round_no} summary | assigned={len(assigned_this_round)}"
+            + (f" | {len(ties)} tie(s) pending" if ties else "")
+            + f" | {len(unassigned_now)} remaining"
+        ),
+        assignments=copy.copy(assignments),
+        faculty_loads=copy.copy(faculty_loads),
+        unassigned=copy.copy(unassigned_now),
+    ))
+
+    # --- Trace record ---
+    trace_entry: Dict[str, Any] = {
+        "round_no": round_no,
+        "active_student_ids": [
+            sid for sid in unassigned if sid not in students_no_pref
+        ],
+        "student_active_preferences": {
+            sid: student_map[sid].preferences[n]
+            for sid in unassigned
+            if n < len(student_map[sid].preferences)
+        },
+        "skipped_advisor_ids": list(targeted_saturated),
+        "candidate_pools": {
+            fid: [s.id for s in cands]
+            for fid, cands in groups.items()
+        },
+        "unambiguous_picks": dict(immediate_picks),
+        "ties": [
+            {
+                "advisor_id": t.advisor_id,
+                "advisor_name": t.advisor_name,
+                "tied_ids": list(t.tied_ids),
+                "tied_cpi": t.tied_cpi,
+            }
+            for t in ties
+        ],
+        "manual_decisions": [],
+        "assigned_this_round": dict(assigned_this_round),
+        "forwarded_to_next_round": list(unassigned_now),
+        "advisor_loads_after": dict(faculty_loads),
+        "newly_saturated": list(newly_saturated),
+    }
+    new_trace = state.trace_log + [trace_entry]
+    new_saturated = saturated | newly_saturated
+
+    # --- Determine outcome ---
+    if not unassigned_now:
+        _tr_append_complete_snapshot(state.snapshots, assignments, faculty_loads)
+        return TieredRoundsState(
+            round_no=round_no, students=state.students, faculty=state.faculty,
+            assignments=assignments, faculty_loads=faculty_loads,
+            snapshots=state.snapshots, saturated_advisors=new_saturated,
+            pending_tie=None, pending_tie_queue=[],
+            trace_log=new_trace, status="complete", stall_unassigned=[],
+        )
+
+    if ties:
+        return TieredRoundsState(
+            round_no=round_no, students=state.students, faculty=state.faculty,
+            assignments=assignments, faculty_loads=faculty_loads,
+            snapshots=state.snapshots, saturated_advisors=new_saturated,
+            pending_tie=ties[0], pending_tie_queue=ties[1:],
+            trace_log=new_trace, status="awaiting_tie", stall_unassigned=[],
+        )
+
+    if not groups and students_no_pref:
+        # Some students exhausted their preference list — defensive stall
+        reason = (
+            f"students with exhausted preference lists: "
+            f"{', '.join(students_no_pref)}"
+        )
+        _tr_append_stall_snapshot(state.snapshots, assignments, faculty_loads, reason)
+        return TieredRoundsState(
+            round_no=round_no, students=state.students, faculty=state.faculty,
+            assignments=assignments, faculty_loads=faculty_loads,
+            snapshots=state.snapshots, saturated_advisors=new_saturated,
+            pending_tie=None, pending_tie_queue=[],
+            trace_log=new_trace, status="stalled",
+            stall_unassigned=list(unassigned_now),
+        )
+
+    # Normal case: some picks made (or all n-th prefs were saturated);
+    # advance to the next round.
+    return TieredRoundsState(
+        round_no=round_no + 1, students=state.students, faculty=state.faculty,
+        assignments=assignments, faculty_loads=faculty_loads,
+        snapshots=state.snapshots, saturated_advisors=new_saturated,
+        pending_tie=None, pending_tie_queue=[],
+        trace_log=new_trace, status="running", stall_unassigned=[],
+    )
+
+
+def _tr_run_to_pause(state: TieredRoundsState) -> TieredRoundsState:
+    """Loop _tr_execute_round until a tie, completion, or stall."""
+    F = len(state.faculty)
+    while state.status == "running":
+        if state.round_no > F:
+            # All preference positions exhausted — genuine stall
+            stall_ids = [sid for sid, fid in state.assignments.items() if fid is None]
+            _tr_append_stall_snapshot(
+                state.snapshots, state.assignments, state.faculty_loads,
+                f"all {F} preference positions exhausted with "
+                f"{len(stall_ids)} student(s) still unassigned",
+            )
+            from dataclasses import replace as _dc_replace
+            return _dc_replace(state, status="stalled", stall_unassigned=stall_ids)
+        state = _tr_execute_round(state)
+    return state
+
+
+def tiered_rounds_start(
+    students: List[Student],
+    faculty: List[Faculty],
+    snapshots: SnapshotList,
+) -> TieredRoundsState:
+    """
+    Initialise and start the CPI-tiered preference rounds engine after Phase 0.
+
+    Phase 0 must have already been run (student.tier and student.n_tier set).
+    The engine runs autonomously until it needs a manual tie-break or finishes.
+
+    Parameters
+    ----------
+    students  : students list with .tier set by phase0()
+    faculty   : faculty list with .max_load set by phase0()
+    snapshots : SnapshotList already containing the Phase-0 snapshot
+
+    Returns
+    -------
+    TieredRoundsState with status in {"awaiting_tie", "complete", "stalled"}
+    """
+    faculty_ids = {f.id for f in faculty}
+    faculty_map = {f.id: f for f in faculty}
+
+    # Defensive validation
+    for s in students:
+        if not s.preferences:
+            raise ValueError(
+                f"Student {s.id} ({s.name!r}) has an empty preference list. "
+                "All students must list every available faculty member."
+            )
+        unknown = [fid for fid in s.preferences if fid not in faculty_ids]
+        if unknown:
+            raise ValueError(
+                f"Student {s.id} ({s.name!r}) references unknown faculty IDs: "
+                f"{unknown}. Preference sheet may be malformed."
+            )
+
+    total_cap = sum(f.max_load for f in faculty)
+    if total_cap < len(students):
+        raise ValueError(
+            f"Total faculty capacity ({total_cap}) is less than the number "
+            f"of students ({len(students)}). Cannot assign all students."
+        )
+
+    assignments: Dict[str, Optional[str]] = {s.id: None for s in students}
+    faculty_loads: Dict[str, int] = {f.id: 0 for f in faculty}
+
+    step = snapshots.last().step if snapshots.last() else 0
+    snapshots.append(AllocationSnapshot(
+        step=step + 1,
+        phase="PrefRounds",
+        event=(
+            f"CPI-tiered preference rounds begin | "
+            f"{len(students)} students | {len(faculty)} advisors"
+        ),
+        assignments=copy.copy(assignments),
+        faculty_loads=copy.copy(faculty_loads),
+        unassigned=set(assignments.keys()),
+    ))
+
+    initial = TieredRoundsState(
+        round_no=1,
+        students=_sorted_by_cpi(students),
+        faculty=faculty,
+        assignments=assignments,
+        faculty_loads=faculty_loads,
+        snapshots=snapshots,
+        saturated_advisors=set(),
+        pending_tie=None,
+        pending_tie_queue=[],
+        trace_log=[],
+        status="running",
+        stall_unassigned=[],
+    )
+    return _tr_run_to_pause(initial)
+
+
+def tiered_rounds_resume(
+    state: TieredRoundsState,
+    chosen_student_id: str,
+) -> TieredRoundsState:
+    """
+    Resolve the current pending tie by allocating chosen_student_id to the
+    pending advisor, then continue running until the next tie or completion.
+
+    Parameters
+    ----------
+    state              : TieredRoundsState with status == "awaiting_tie"
+    chosen_student_id  : must be in state.pending_tie.tied_ids
+
+    Returns
+    -------
+    Updated TieredRoundsState with status in {"awaiting_tie", "complete", "stalled"}
+    """
+    if state.status != "awaiting_tie":
+        raise ValueError(
+            f"Cannot resume: engine is not awaiting a tie decision "
+            f"(status={state.status!r})."
+        )
+    tie = state.pending_tie
+    if tie is None:
+        raise ValueError("pending_tie is None despite status='awaiting_tie'.")
+    if chosen_student_id not in tie.tied_ids:
+        raise ValueError(
+            f"Chosen student {chosen_student_id!r} is not in the tied set "
+            f"{tie.tied_ids!r} for advisor {tie.advisor_id!r}."
+        )
+
+    student_map = {s.id: s for s in state.students}
+    faculty_map = {f.id: f for f in state.faculty}
+    s = student_map[chosen_student_id]
+    f = faculty_map[tie.advisor_id]
+    rank = s.preferences.index(tie.advisor_id) + 1
+
+    assignments = state.assignments
+    faculty_loads = state.faculty_loads
+    assignments[chosen_student_id] = tie.advisor_id
+    faculty_loads[tie.advisor_id] += 1
+
+    newly_saturated: Set[str] = set()
+    if faculty_loads[tie.advisor_id] >= f.max_load:
+        newly_saturated.add(tie.advisor_id)
+    new_saturated = state.saturated_advisors | newly_saturated
+
+    step = state.snapshots.last().step if state.snapshots.last() else 0
+    state.snapshots.append(AllocationSnapshot(
+        step=step + 1,
+        phase=f"PrefRound{tie.round_no}",
+        event=(
+            f"Round {tie.round_no} | TIE RESOLVED | "
+            f"{s.name} ({s.id}, CPI {s.cpi:.2f}) → "
+            f"{f.name} ({tie.advisor_id}) | pref rank {rank} | "
+            f"load now {faculty_loads[tie.advisor_id]}"
+        ),
+        assignments=copy.copy(assignments),
+        faculty_loads=copy.copy(faculty_loads),
+        unassigned={sid for sid, fid in assignments.items() if fid is None},
+        preference_rank={chosen_student_id: rank},
+    ))
+
+    # Update trace: append decision to the current round's record
+    new_trace = [dict(e) for e in state.trace_log]
+    if new_trace and new_trace[-1]["round_no"] == tie.round_no:
+        new_trace[-1] = dict(new_trace[-1])
+        new_trace[-1]["manual_decisions"] = list(
+            new_trace[-1]["manual_decisions"]
+        ) + [{
+            "advisor_id": tie.advisor_id,
+            "advisor_name": tie.advisor_name,
+            "chosen_student_id": chosen_student_id,
+            "tied_ids": list(tie.tied_ids),
+            "tied_cpi": tie.tied_cpi,
+        }]
+
+    unassigned_now = {sid for sid, fid in assignments.items() if fid is None}
+
+    if not unassigned_now:
+        _tr_append_complete_snapshot(state.snapshots, assignments, faculty_loads)
+        return TieredRoundsState(
+            round_no=tie.round_no, students=state.students, faculty=state.faculty,
+            assignments=assignments, faculty_loads=faculty_loads,
+            snapshots=state.snapshots, saturated_advisors=new_saturated,
+            pending_tie=None, pending_tie_queue=[],
+            trace_log=new_trace, status="complete", stall_unassigned=[],
+        )
+
+    # More ties in the same round — serve the next one
+    if state.pending_tie_queue:
+        next_tie = state.pending_tie_queue[0]
+        return TieredRoundsState(
+            round_no=tie.round_no, students=state.students, faculty=state.faculty,
+            assignments=assignments, faculty_loads=faculty_loads,
+            snapshots=state.snapshots, saturated_advisors=new_saturated,
+            pending_tie=next_tie, pending_tie_queue=state.pending_tie_queue[1:],
+            trace_log=new_trace, status="awaiting_tie", stall_unassigned=[],
+        )
+
+    # All ties in this round resolved — advance to the next round
+    next_state = TieredRoundsState(
+        round_no=tie.round_no + 1, students=state.students, faculty=state.faculty,
+        assignments=assignments, faculty_loads=faculty_loads,
+        snapshots=state.snapshots, saturated_advisors=new_saturated,
+        pending_tie=None, pending_tie_queue=[],
+        trace_log=new_trace, status="running", stall_unassigned=[],
+    )
+    return _tr_run_to_pause(next_state)
+
+
+# ---------------------------------------------------------------------------
 # Convenience: run full allocation in one call
 # ---------------------------------------------------------------------------
 
@@ -904,9 +1348,15 @@ def run_full_allocation(
                       (keys: "npss", "overflow_count", "mean_psi",
                        "per_tier", "per_student")
     """
-    _POLICIES = {"least_loaded", "nonempty", "cpi_fill"}
+    _POLICIES = {"least_loaded", "nonempty", "cpi_fill", "tiered_rounds"}
     if policy not in _POLICIES:
         raise ValueError(f"Unknown policy {policy!r}. Choose from {_POLICIES}.")
+    if policy == "tiered_rounds":
+        raise NotImplementedError(
+            "The 'tiered_rounds' policy requires interactive tie-breaking and "
+            "cannot be run via run_full_allocation(). Use the Dash UI or call "
+            "tiered_rounds_start() / tiered_rounds_resume() directly."
+        )
 
     students, faculty, meta, snaps = phase0(students, faculty, out_dir=out_dir)
     N_A = meta["N_A"]
