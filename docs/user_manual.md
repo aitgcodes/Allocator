@@ -124,7 +124,9 @@ The app requires two CSV files: one for students and one for faculty.
 
 #### Option A — Convert a Google Form export
 
-If students submitted preferences via Google Forms (or a compatible export), the bundled script produces both files automatically:
+**Option A1 — In-app (recommended):** Upload the raw form export directly to the app and click **Clean & Load**. The app normalises column names (`Roll No.` → `student_id`, `CPI (as on date)` → `cpi`, `Preference  N` → `pref_N`), maps faculty names to IDs, deduplicates repeated preferences, and backfills any missing faculty alphabetically — all in one step. A faculty CSV with IDs and names must still be uploaded alongside.
+
+**Option A2 — Offline script:** Use the bundled script to produce both files before opening the app:
 
 ```bash
 python scripts/make_preference_sheet.py form_responses.csv
@@ -134,12 +136,12 @@ This generates:
 
 | Output file | Contents |
 |-------------|----------|
-| `preference_sheet.csv` | One row per student — `student_id`, `name`, `cpi`, `pref_1 … pref_N` |
+| `preference_sheet.csv` | One row per student — `student_id`, `name`, `cpi`, `pref_1 … pref_N` (faculty IDs in preferences) |
 | `faculty_list.csv` | One row per faculty — `faculty_id`, `name`, `max_load` (blank; fill in manually) |
 
-The script handles flexible column naming, deduplicates repeated preferences, and fills trailing slots alphabetically so every student's list covers all faculty.
+The script applies the same cleaning steps as Clean & Load: flexible column naming, deduplication, and alphabetical backfill.
 
-**Options:**
+**Script options:**
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -499,7 +501,7 @@ No separate Round 1 or class-wise main allocation. Phase 0 tier classification i
 |--------|----------------|------------|------------|-----------------|
 | Round 1 | Yes | Yes | No | No |
 | Processing order | Tier-by-tier | Tier-by-tier | Strict descending CPI | Round-by-preference-rank |
-| Preference window | `N_tier` per tier | `N_tier` per tier | Full list | Full list (diagnostic only) |
+| Preference window | Applied per tier; overflow possible via promotion cascade | Applied per tier; overflow possible via promotion cascade | Full list | Full list (N_tier diagnostic only) |
 | Primary assignment criterion | Min load | Emptiness → preference | First pref with capacity | Highest CPI in round |
 | Tie-breaking | Preference rank | Preference rank | Student ID | Manual operator pick |
 | Empty-lab guarantee | Indirect | Strong | Explicit (Phase 2) | Implicit |
@@ -585,7 +587,10 @@ PSI is particularly useful when comparing policies: because `cpi_fill` processes
 
 The overflow count reports the number of students assigned **beyond their tier `N_tier` window** (rank > `N_tier`). This is a protocol-compliance diagnostic, tracked separately from NPSS. Because NPSS now uses $F$ as its denominator, out-of-window placements still receive a positive NPSS contribution — the overflow count is the only place where tier-cap compliance is flagged numerically.
 
-For `cpi_fill` and `tiered_rounds`, overflow is expected (these protocols do not enforce the tier cap), so the overflow count should be read as an informational statistic rather than an error signal.
+All four policies can produce overflow, but through different mechanisms:
+
+- **`least_loaded` / `nonempty`**: the N_tier window is applied first; a student is only promoted to a wider pool (B → C, or A → B → C) when every advisor within their current window is at capacity. Overflow occurs when the promotion chain ends at the Class C full-list round and the assigned rank exceeds the original N_tier. This is anomalous — it only happens under very tight capacity — and is flagged as a **red warning badge**.
+- **`cpi_fill` / `tiered_rounds`**: no N_tier window is applied during assignment; overflow is a structural feature of the protocol. For `tiered_rounds` in particular, a student reaches round *n* naturally when their first *n*−1 preferences were claimed by others, so assignments beyond N_tier are expected and routine. These are shown as a **blue informational badge**, not an error.
 
 #### Advisor CPI Entropy
 
@@ -641,7 +646,7 @@ When interpreting a single run or comparing policies, use this hierarchy:
 
 6. **CPI Skewness** *(diagnostic only)* — use as a cross-check for CPI concentration in the advisor mean-CPI distribution. Results are cohort-sensitive; do not declare a policy winner from skewness alone.
 
-7. **Overflow Count** *(protocol-compliance diagnostic)* — reports placements beyond the tier `N_tier` window. For cap-enforcing policies (`least_loaded`, `nonempty`) this signals near-overflow stress; for non-cap policies (`cpi_fill`, `tiered_rounds`) it is informational. It does not affect NPSS.
+7. **Overflow Count** *(protocol-compliance diagnostic)* — reports placements beyond the tier `N_tier` window. For window-applying policies (`least_loaded`, `nonempty`) this signals near-overflow stress (promotion cascaded all the way to the full-list round). For `cpi_fill` and `tiered_rounds` — which apply no window during assignment — it is purely informational, and the UI shows it as a blue badge rather than a red one. It does not affect NPSS.
 
 **If metrics disagree:** this is normal. The four policies trade off across dimensions rather than one uniformly dominating. The choice is a value judgement about institutional priorities — merit-weighted access, equitable treatment, load balance, or operator transparency — not a metric-determined optimum.
 

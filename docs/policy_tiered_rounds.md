@@ -110,7 +110,7 @@ A round-by-round trace is recorded and shown in a collapsible section of the com
 | Aspect | `tiered_rounds` | `least_loaded` / `nonempty` | `cpi_fill` |
 |--------|----------------|---------------------------|------------|
 | Assignment order | Round-by-preference-rank; CPI breaks ties within a round | Tier-by-tier (arbitrary within tier) | Strict descending CPI |
-| Tier cap | None (diagnostic only) | Enforced (`N_tier` window) | None |
+| Tier cap | None (N_tier diagnostic only) | Applied per tier; overflow possible via promotion cascade (A → B → C) | None |
 | Competition resolution | Manual tie-break if CPI equal | Automatic (least-load / empty-lab preference) | Automatic (first-come first-served in CPI order) |
 | Load balancing | Implicit (at most 1 per advisor per round) | Explicit (least-load criterion) | Weak (first-preference greedy) |
 | Empty-lab guarantee | Implicit | Indirect | Explicit (Phase 2 design) |
@@ -129,3 +129,4 @@ A round-by-round trace is recorded and shown in a collapsible section of the com
 - **Cannot run unattended** — CPI ties (even a single one) halt the run until manually resolved.
 - **No explicit load balancing** — an advisor that receives a student in round 1 may receive another in round 2 if they still have capacity, potentially diverging from load-balanced outcomes.
 - **CLI unavailable** — the policy requires the Dash UI.
+- **Overflow count is structural, not anomalous** — because N_tier windows are never applied during assignment, students may be placed at a rank > N_tier whenever their earlier preferences are taken. The completion panel shows this as a **blue informational badge** ("outside N-tier window — expected for tiered rounds") rather than a red error. The NPSS score is not affected.

@@ -64,7 +64,7 @@ In practice, after Round 1 assigns one student to roughly `min(F, S)` advisors, 
 | **Load balance** | Good early on; converges to preference-first once all labs are non-empty. |
 | **Preference satisfaction (PSI)** | Can be slightly better than `least_loaded` in some cohorts, because once empty labs are filled the fallback is pure preference-rank rather than minimum-load. |
 | **Merit sensitivity (NPSS)** | Similar to `least_loaded` — no explicit CPI ordering beyond the tier window. |
-| **Overflow** | Similar to `least_loaded`. |
+| **Overflow** | Possible but rare — same promotion cascade as `least_loaded` (A → B → C); a student is only placed beyond their original N_tier when every advisor in every promoted pool is at capacity. Shown as a red warning badge in the UI. |
 | **Empty-lab guarantee** | Strong — the policy will actively fill empty labs before balancing loads. |
 | **Robustness** | Good in standard cohorts; in very clustered cohorts where most students rank the same advisors first, the empty-lab preference may route students to lower-ranked advisors unnecessarily. |
 

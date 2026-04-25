@@ -23,7 +23,9 @@ Assignment is **sequential**: students are processed one by one, and for each, t
 - `S`: number of master’s students in the cohort
 - `F`: number of active faculty in the department
 - `CPI_i`: core performance index (CPI) of student `i`
-- `prefs_i`: student `i`’s ranked list of faculty preferences, covering all `F` faculty with no repeats. When preferences are collected via a form, use `scripts/make_preference_sheet.py` to produce this list: it removes any duplicate entries (shifting subsequent preferences up) and appends any unmentioned faculty in alphabetical order to fill the remaining slots.
+- `prefs_i`: student `i`’s ranked list of faculty preferences, covering all `F` faculty with no repeats. When preferences are collected via a form, the list can be prepared two ways:
+  - **In-app:** upload the raw form export and click **Clean & Load** — the app normalises column names, maps faculty names to IDs, removes duplicate entries (shifting subsequent preferences up), and appends unmentioned faculty alphabetically to fill the remaining slots.
+  - **Offline script:** `scripts/make_preference_sheet.py form_responses.csv` applies the same steps and writes `preference_sheet.csv` (students) and `faculty_list.csv` (faculty) for subsequent upload.
 
 ### 2.2 Tier Boundaries (Annual, Data‑Driven)
 

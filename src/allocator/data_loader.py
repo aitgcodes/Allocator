@@ -72,6 +72,80 @@ def _pref_columns(df: pd.DataFrame) -> List[str]:
     )
 
 
+def _normalise_raw_form_columns(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]]:
+    """
+    Rename raw Google Form column names to the standard names expected by
+    preprocess_students (student_id, name, cpi, pref_1, pref_2, …).
+
+    Handles common form column patterns:
+      - student_id ← Roll No., Roll Number, Roll, ID, student_id
+      - name       ← Name, Student Name, Full Name
+      - cpi        ← CPI (as on date), CPI, CGPA, GPA
+      - pref_N     ← Preference N, Preference  N, Pref N, Choice N  (regex)
+
+    Returns the renamed DataFrame and a list of warning strings.
+    """
+    import re as _re
+
+    warnings: List[str] = []
+    cols = list(df.columns)  # already lowercased + stripped by caller
+
+    def _find(candidates: List[str]) -> Optional[str]:
+        """Exact match first, then substring."""
+        for cand in candidates:
+            cl = cand.lower()
+            for c in cols:
+                if c == cl:
+                    return c
+        for cand in candidates:
+            cl = cand.lower()
+            for c in cols:
+                if cl in c:
+                    return c
+        return None
+
+    rename: Dict[str, str] = {}
+
+    if "student_id" not in cols:
+        found = _find(["roll no.", "roll no", "roll number", "roll", "rollno", "id"])
+        if found:
+            rename[found] = "student_id"
+            warnings.append(f"Mapped column '{found}' → 'student_id'.")
+        else:
+            warnings.append("Could not find a 'student_id' / 'Roll No.' column.")
+
+    if "cpi" not in cols:
+        found = _find(["cpi (as on date)", "cpi", "cgpa", "gpa"])
+        if found:
+            rename[found] = "cpi"
+            warnings.append(f"Mapped column '{found}' → 'cpi'.")
+        else:
+            warnings.append("Could not find a 'cpi' / 'CPI' column.")
+
+    # Preference columns: match 'preference N', 'pref N', 'choice N' etc.
+    _pref_pat = _re.compile(r'(?:preference|pref\.?|choice)\s*(\d+)', _re.IGNORECASE)
+    pref_matches = []
+    for c in cols:
+        m = _pref_pat.search(c)
+        if m and c not in rename and c not in ("pref_1",):
+            pref_matches.append((int(m.group(1)), c))
+
+    if pref_matches:
+        pref_matches.sort(key=lambda x: x[0])
+        for rank, col in pref_matches:
+            standard = f"pref_{rank}"
+            if col != standard:
+                rename[col] = standard
+        warnings.append(
+            f"Mapped {len(pref_matches)} preference column(s) to pref_1…pref_{pref_matches[-1][0]}."
+        )
+
+    if rename:
+        df = df.rename(columns=rename)
+
+    return df, warnings
+
+
 def _clean_id(val) -> str:
     return str(val).strip()
 
@@ -224,16 +298,20 @@ def load_faculty(path: str | Path) -> List[Faculty]:
 def preprocess_students(
     path: str | Path,
     faculty: List[Faculty],
-) -> Tuple[pd.DataFrame, List[str]]:
+) -> Tuple[pd.DataFrame, List[str], int]:
     """
     Load a raw student file (CSV or Excel), apply three cleaning steps, and
     return a cleaned DataFrame ready for load_students() plus a list of
     human-readable warning strings describing what changed.
 
+    Accepts both pre-processed files (with student_id / cpi / pref_N columns)
+    and raw Google Form exports (with Roll No. / CPI (as on date) /
+    Preference N columns) — column names are normalised automatically.
+
     Cleaning steps (in order):
+    0. Normalise raw form column names to standard names (student_id, cpi, pref_N).
     1. Map faculty names → IDs using the faculty list.  Any value already
-       matching a faculty ID is passed through unchanged, so the function
-       works on files that already use IDs.
+       matching a faculty ID is passed through unchanged.
     2. Remove duplicate preferences per student (shift remaining entries up).
     3. Backfill trailing empty slots with faculty the student did not mention,
        in alphabetical order by name, so every student has a complete ranking
@@ -246,10 +324,11 @@ def preprocess_students(
 
     Returns
     -------
-    (cleaned_df, warnings)
+    (cleaned_df, warnings, map_changed_count)
         cleaned_df columns: student_id, name, cpi, pref_1, ..., pref_N
             where N = len(faculty)
         warnings: list of message strings; empty if no changes were needed
+        map_changed_count: number of rows where name→ID mapping changed a value
     """
     path = Path(path)
     if path.suffix.lower() in (".xlsx", ".xls"):
@@ -259,10 +338,17 @@ def preprocess_students(
 
     df.columns = [c.strip().lower() for c in df.columns]
 
+    # Step 0 — normalise raw form column names to standard names
+    df, norm_warnings = _normalise_raw_form_columns(df)
+
     required = {"student_id", "name", "cpi"}
     missing = required - set(df.columns)
     if missing:
-        raise ValueError(f"students file missing columns: {missing}")
+        raise ValueError(
+            f"Students file is missing columns: {missing}. "
+            "Expected 'student_id' (or 'Roll No.'), 'name', 'cpi' (or 'CPI (as on date)'), "
+            "and preference columns ('pref_1' or 'Preference 1')."
+        )
 
     pref_cols = _pref_columns(df)
     if not pref_cols:
@@ -320,7 +406,7 @@ def preprocess_students(
     out[pref_out_cols] = out[pref_out_cols].apply(_fill_trailing, axis=1)
     fill_changed = (out[pref_out_cols].fillna("") != before_fill.fillna("")).any(axis=1).sum()
 
-    warnings: List[str] = []
+    warnings: List[str] = list(norm_warnings)
     if map_changed:
         warnings.append(f"Converted faculty names → IDs in {map_changed} student row(s).")
     if dedup_changed:

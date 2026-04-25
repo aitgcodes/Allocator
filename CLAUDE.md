@@ -63,7 +63,7 @@ python scripts/make_preference_sheet.py form_responses.csv
 | `app.py` | Dash web app: layout, all callbacks, global `_app_state` dict |
 | `allocation.py` | Core engine: Phase 0 (tiering), Round 1, main allocation, CPI-Fill Phase 1/2 |
 | `state.py` | Dataclasses: `Student`, `Faculty`, `AllocationSnapshot`, `SnapshotList` |
-| `data_loader.py` | CSV/Excel I/O, validation, Phase-0 report read/write |
+| `data_loader.py` | CSV/Excel I/O, raw Google Form column normalisation, preprocessing pipeline (`preprocess_students`), validation, Phase-0 report read/write |
 | `visualizer.py` | Plotly figure builders: bipartite graph, load bars, step log, stats panel |
 | `metrics.py` | NPSS (CPI-weighted, full-list denominator) and PSI (equal-weighted) satisfaction scores |
 
@@ -108,7 +108,8 @@ ALLOCATION_POLICY = "least_loaded"
 
 ## Input file formats
 
-**students.csv:** `student_id, name, cpi, pref_1, pref_2, ...`
+**students.csv (pre-processed):** `student_id, name, cpi, pref_1, pref_2, ...` — faculty IDs in preference columns
+**students (raw form export):** Google Form column names (`Roll No.`, `CPI (as on date)`, `Preference  1`, …) are normalised automatically by `preprocess_students` when using the app's **Clean & Load** button, or by running `scripts/make_preference_sheet.py` offline.
 **faculty.csv:** `faculty_id, name, max_load` — `max_load` optional; blank → Phase 0 fills with `floor(S/F) + 1`
 
 Sample data: `data/sample_students.csv` (24 students, 8 faculty)

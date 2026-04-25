@@ -557,7 +557,7 @@ def _render_student_picker(student, faculty_map, faculty_loads, meta, queue_idx,
 # Metrics panel renderer
 # ---------------------------------------------------------------------------
 
-def _render_metrics_panel(metrics: dict) -> html.Div:
+def _render_metrics_panel(metrics: dict, policy: str = "") -> html.Div:
     """
     Render the satisfaction metrics as a Dash component panel.
 
@@ -623,14 +623,24 @@ def _render_metrics_panel(metrics: dict) -> html.Div:
     # Overflow badge
     overflow_badge = []
     if overflow_count > 0:
-        overflow_badge = [
-            dbc.Badge(
-                f"⚠ {overflow_count} overflow (diagnostic)",
-                color="danger",
-                className="mb-2 me-2",
-                style={"fontSize": "0.9rem"},
-            )
-        ]
+        if policy == "tiered_rounds":
+            overflow_badge = [
+                dbc.Badge(
+                    f"ℹ {overflow_count} outside N-tier window — expected for tiered rounds (Phase 0 tiers are diagnostic only)",
+                    color="info",
+                    className="mb-2 me-2",
+                    style={"fontSize": "0.9rem"},
+                )
+            ]
+        else:
+            overflow_badge = [
+                dbc.Badge(
+                    f"⚠ {overflow_count} overflow (diagnostic)",
+                    color="danger",
+                    className="mb-2 me-2",
+                    style={"fontSize": "0.9rem"},
+                )
+            ]
 
     # Per-tier breakdown table
     tier_rows = []
@@ -1255,7 +1265,7 @@ def cb_load_files(n_direct, cleaned_json, s_contents, f_contents, s_fname, f_fna
         # Load students from the preprocessed DataFrame
         try:
             import tempfile
-            cleaned_df = pd.read_json(cleaned_json, orient="split")
+            cleaned_df = pd.read_json(io.StringIO(cleaned_json), orient="split")
             with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
                 cleaned_df.to_csv(tmp.name, index=False)
                 tmp_path = tmp.name
@@ -2460,7 +2470,7 @@ def _build_completion_panel(
                    color="link", size="sm", className="p-0 text-muted fw-bold"),
         summary_badges,
         dbc.Collapse(
-            _render_metrics_panel(metrics),
+            _render_metrics_panel(metrics, policy=ALLOCATION_POLICY),
             id="collapse-metrics",
             is_open=False,
         ),
@@ -3855,14 +3865,14 @@ def cb_analysis_load(n, path_a, path_b):
                 html.H5(f"Run A — {run_a['policy']}",
                         className="text-primary mb-1"),
                 html.Small(run_a["saved_at"][:16], className="text-muted d-block mb-2"),
-                _render_metrics_panel(run_a["metrics"]),
+                _render_metrics_panel(run_a["metrics"], policy=run_a["policy"]),
             ], md=col_width),
             *(
                 [dbc.Col([
                     html.H5(f"Run B — {run_b['policy']}",
                             className="text-warning mb-1"),
                     html.Small(run_b["saved_at"][:16], className="text-muted d-block mb-2"),
-                    _render_metrics_panel(run_b["metrics"]),
+                    _render_metrics_panel(run_b["metrics"], policy=run_b["policy"]),
                 ], md=col_width)]
                 if two_runs else []
             ),

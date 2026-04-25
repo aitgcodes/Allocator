@@ -61,7 +61,7 @@ This makes load balance the **primary criterion** and preference rank the **tieb
 | **Load balance** | Strong — advisors are filled as evenly as possible at every step. |
 | **Preference satisfaction (PSI)** | Good — most students land near the top of their list because low-load advisors often coincide with early preferences. |
 | **Merit sensitivity (NPSS)** | Moderate — high-CPI students are not given explicit priority in the main allocation; their advantage comes only from Round 1 and the tier window. |
-| **Overflow** | Low — the class-wise cascade (A → B → C) and the full-list fallback for Class C keep overflows near zero in balanced cohorts. |
+| **Overflow** | Possible but rare — the class-wise promotion cascade (A → B → C) widens the candidate pool before resorting to the full-list Class C round; a student is only placed beyond their original N_tier when every advisor within every promoted pool is at capacity. Shown as a red warning badge in the UI. |
 | **Advisor CPI diversity (entropy)** | High — spreading students by load tends to distribute different CPI tiers across advisors. |
 | **Robustness** | High — performs consistently across random, clustered, and polarised cohorts. |
 
