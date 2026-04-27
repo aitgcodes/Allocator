@@ -1378,6 +1378,7 @@ def run_full_allocation(
         students, assignments,
         F=len(faculty),
         faculty_ids=[f.id for f in faculty],
+        faculty=faculty,
     )
     return assignments, snaps, meta, metrics
 

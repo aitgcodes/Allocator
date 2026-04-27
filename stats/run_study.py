@@ -176,11 +176,12 @@ def build_report(all_results: Dict[str, dict], scenario_labels: Dict[str, str]) 
         "**Abbreviations:** LL = `least_loaded`, CF = `cpi_fill` (used in table annotations and inline comparisons throughout this report)  ",
         "**Datasets:** 1 original + 4 synthetic (random, clustered, polarised, uniform_high_cpi)  ",
         "**Metric hierarchy:**",
-        "  1. NPSS — primary deciding metric (CPI-weighted preference satisfaction within protected window)  ",
+        "  1. NPSS — primary student metric (CPI-weighted preference satisfaction)  ",
         "  2. PSI — secondary student metric (equal-weighted, global rank)  ",
-        "  3. Advisor CPI Entropy — preferred advisor-equity metric (tier diversity within each advisor's cohort)  ",
-        "  4. CPI Skewness — diagnostic only (asymmetry in advisor mean-CPI distribution; cohort-sensitive, not a stand-alone basis for declaring a policy winner)  ",
-        "**Diagnostic columns (not independent deciding metrics):** Overflow Count, % Assigned in Window  ",
+        "  3. MSES — primary advisor satisfaction metric (mean rank students placed their advisor; lower = more enthusiastic)  ",
+        "  4. Equity Retention Rate — advisor equity metric (% of cohort's achievable entropy preserved; protocol-attributable)  ",
+        "  5. CPI Skewness — diagnostic (asymmetry in advisor mean-CPI distribution; Fisher-Pearson formula, std-normalized)  ",
+        "**Diagnostic columns (not independent deciding metrics):** Overflow Count, % Assigned in Window, Avg LUR  ",
         "  — out-of-window assignments already score 0 in NPSS, so these columns explain *why* NPSS  ",
         "  is low in stressed scenarios but carry no additional evidential weight for policy comparison.  ",
         "",
@@ -246,10 +247,32 @@ def build_report(all_results: Dict[str, dict], scenario_labels: Dict[str, str]) 
     # Section 2 — Advisor metrics
     # ------------------------------------------------------------------ #
     lines += [
-        "## 2. Advisor Fairness Metrics",
+        "## 2. Advisor Metrics",
         "",
-        "| Dataset | Policy | Advisors Assigned | Avg CPI Entropy ↑ | CPI Skewness *(diag)* |",
-        "|---------|--------|------------------|-------------------|-----------------------|",
+        "### 2a. Advisor Satisfaction",
+        "",
+        "| Dataset | Policy | Avg MSES ↓ | Avg LUR *(diag)* |",
+        "|---------|--------|-----------|-----------------|",
+    ]
+
+    for ds_key, policy_results in all_results.items():
+        label = scenario_labels.get(ds_key, ds_key)
+        for policy, res in policy_results.items():
+            adv = res["metrics"]["advisor"]
+            mses_str = _fmt(adv.get("avg_mses")) if adv.get("avg_mses") is not None else "N/A"
+            lur_str  = f"{adv['avg_lur']*100:.1f}%" if adv.get("avg_lur") is not None else "N/A"
+            lines.append(
+                f"| {label} | {policy} "
+                f"| {mses_str} "
+                f"| {lur_str} |"
+            )
+
+    lines += [
+        "",
+        "### 2b. Advisor Equity",
+        "",
+        "| Dataset | Policy | Cohort Entropy Ceiling | Equity Retention % ↑ | CPI Skewness *(diag)* |",
+        "|---------|--------|------------------------|----------------------|-----------------------|",
     ]
 
     for ds_key, policy_results in all_results.items():
@@ -258,8 +281,8 @@ def build_report(all_results: Dict[str, dict], scenario_labels: Dict[str, str]) 
             adv = res["metrics"]["advisor"]
             lines.append(
                 f"| {label} | {policy} "
-                f"| {adv['advisors_assigned']} "
-                f"| {_fmt(adv['avg_entropy'])} "
+                f"| {_fmt(adv.get('baseline_entropy', 0.0))} "
+                f"| {adv.get('equity_retention', 100.0):.1f}% "
                 f"| {_fmt(adv['cpi_skewness'])} |"
             )
 
@@ -284,21 +307,24 @@ def build_report(all_results: Dict[str, dict], scenario_labels: Dict[str, str]) 
 
     # Significance thresholds (based on observed delta distributions)
     THRESHOLDS = {
-        "NPSS":                 0.04,
-        "PSI":                  0.025,
-        "Avg Advisor Entropy":  0.02,
-        "CPI Skewness (|abs|)": 0.10,
+        "NPSS":                  0.04,
+        "PSI":                   0.025,
+        "Avg MSES":              0.5,
+        "Equity Retention %":    5.0,
+        "CPI Skewness (|abs|)":  0.10,
     }
-    DIAGNOSTIC = {"Overflow Count", "% In Window", "Advisors Assigned"}
+    DIAGNOSTIC = {"Overflow Count", "% In Window", "Advisors Assigned", "Avg LUR"}
 
     metric_collectors: Dict[str, Dict[str, List[float]]] = {
-        "NPSS":                 {p: [] for p in POLICIES},
-        "PSI":                  {p: [] for p in POLICIES},
-        "Overflow Count":       {p: [] for p in POLICIES},
-        "% In Window":          {p: [] for p in POLICIES},
-        "Avg Advisor Entropy":  {p: [] for p in POLICIES},
-        "CPI Skewness (|abs|)": {p: [] for p in POLICIES},
-        "Advisors Assigned":    {p: [] for p in POLICIES},
+        "NPSS":                  {p: [] for p in POLICIES},
+        "PSI":                   {p: [] for p in POLICIES},
+        "Overflow Count":        {p: [] for p in POLICIES},
+        "% In Window":           {p: [] for p in POLICIES},
+        "Avg MSES":              {p: [] for p in POLICIES},
+        "Equity Retention %":    {p: [] for p in POLICIES},
+        "Avg LUR":               {p: [] for p in POLICIES},
+        "CPI Skewness (|abs|)":  {p: [] for p in POLICIES},
+        "Advisors Assigned":     {p: [] for p in POLICIES},
     }
 
     for ds_key, policy_results in all_results.items():
@@ -312,14 +338,18 @@ def build_report(all_results: Dict[str, dict], scenario_labels: Dict[str, str]) 
             metric_collectors["% In Window"][policy].append(
                 (1 - m["overflow_count"] / n) * 100 if n else 0
             )
-            metric_collectors["Avg Advisor Entropy"][policy].append(adv["avg_entropy"])
+            if adv.get("avg_mses") is not None:
+                metric_collectors["Avg MSES"][policy].append(adv["avg_mses"])
+            metric_collectors["Equity Retention %"][policy].append(adv.get("equity_retention", 100.0))
+            if adv.get("avg_lur") is not None:
+                metric_collectors["Avg LUR"][policy].append(adv["avg_lur"] * 100)
             if adv["cpi_skewness"] is not None:
                 metric_collectors["CPI Skewness (|abs|)"][policy].append(abs(adv["cpi_skewness"]))
             metric_collectors["Advisors Assigned"][policy].append(adv["advisors_assigned"])
 
-    # Direction: higher is better for NPSS, PSI, % In Window, Entropy, Advisors;
-    #            lower is better for Overflow, Skewness (|abs|)
-    higher_better = {"NPSS", "PSI", "% In Window", "Avg Advisor Entropy", "Advisors Assigned"}
+    # Direction: higher is better for NPSS, PSI, % In Window, Equity Retention, Avg LUR, Advisors;
+    #            lower is better for Overflow, MSES, Skewness (|abs|)
+    higher_better = {"NPSS", "PSI", "% In Window", "Equity Retention %", "Avg LUR", "Advisors Assigned"}
 
     for metric_name, by_policy in metric_collectors.items():
         means  = {p: mean(v) for p, v in by_policy.items()}
@@ -355,12 +385,13 @@ def build_report(all_results: Dict[str, dict], scenario_labels: Dict[str, str]) 
     lines += [
         "## 4. Per-Dataset Policy Deltas (cpi_fill − least_loaded)",
         "",
-        "Positive ΔNPSS / ΔPSI means `cpi_fill` is better; negative means `least_loaded` is better.",
+        "Positive ΔNPSS / ΔPSI / ΔEquity Retention means `cpi_fill` is better; negative means `least_loaded` is better.",
+        "ΔMSES: negative means CF students are more enthusiastic (lower mean rank = better).",
         "ΔSkewness = Δ|abs| = |CF| − |LL|; negative means CF has lower absolute skewness.",
         "Overflow and % In Window are shown for diagnostic context only (not used to declare wins).",
         "",
-        "| Dataset | ΔNPSS | ΔPSI | ΔOverflow *(diag)* | Δ% In Window *(diag)* | ΔAvg Entropy | ΔSkewness *(diag)* |",
-        "|---------|-------|------|--------------------|-----------------------|--------------|-------------------|",
+        "| Dataset | ΔNPSS | ΔPSI | ΔMSES | ΔEquity Ret% | ΔOverflow *(diag)* | Δ% In Window *(diag)* | ΔSkewness *(diag)* |",
+        "|---------|-------|------|-------|-------------|--------------------|-----------------------|-------------------|",
     ]
 
     for ds_key, policy_results in all_results.items():
@@ -376,18 +407,26 @@ def build_report(all_results: Dict[str, dict], scenario_labels: Dict[str, str]) 
         d_psi     = mc["mean_psi"]   - ml["mean_psi"]
         d_over    = mc["overflow_count"] - ml["overflow_count"]
         d_win     = ((1 - mc["overflow_count"]/n) - (1 - ml["overflow_count"]/n)) * 100
-        d_ent     = mc["advisor"]["avg_entropy"]  - ml["advisor"]["avg_entropy"]
         sk_cf     = mc["advisor"]["cpi_skewness"]
         sk_ll     = ml["advisor"]["cpi_skewness"]
         d_skew    = (_fmt(sk_cf - sk_ll) if (sk_cf is not None and sk_ll is not None) else "N/A")
+
+        mses_cf = mc["advisor"].get("avg_mses")
+        mses_ll = ml["advisor"].get("avg_mses")
+        d_mses  = f"{mses_cf - mses_ll:+.4f}" if (mses_cf is not None and mses_ll is not None) else "N/A"
+
+        err_cf  = mc["advisor"].get("equity_retention", 100.0)
+        err_ll  = ml["advisor"].get("equity_retention", 100.0)
+        d_err   = f"{err_cf - err_ll:+.1f}%"
 
         lines.append(
             f"| {label} "
             f"| {d_npss:+.4f} "
             f"| {d_psi:+.4f} "
+            f"| {d_mses} "
+            f"| {d_err} "
             f"| {d_over:+d} "
             f"| {d_win:+.1f}% "
-            f"| {d_ent:+.4f} "
             f"| {d_skew} |"
         )
 
@@ -434,7 +473,8 @@ def build_report(all_results: Dict[str, dict], scenario_labels: Dict[str, str]) 
 
     NPSS_THRESH = THRESHOLDS["NPSS"]
     PSI_THRESH  = THRESHOLDS["PSI"]
-    ENT_THRESH  = THRESHOLDS["Avg Advisor Entropy"]
+    MSES_THRESH = THRESHOLDS["Avg MSES"]
+    ERR_THRESH  = THRESHOLDS["Equity Retention %"]
     SKEW_THRESH = THRESHOLDS["CPI Skewness (|abs|)"]
 
     for ds_key, policy_results in all_results.items():
@@ -448,9 +488,21 @@ def build_report(all_results: Dict[str, dict], scenario_labels: Dict[str, str]) 
                 return "draw"
             return "win CF" if delta > 0 else "win LL"
 
-        npss_v = _verdict(ll["npss"],          cf["npss"],          NPSS_THRESH)
-        psi_v  = _verdict(ll["mean_psi"],       cf["mean_psi"],      PSI_THRESH)
-        ent_v  = _verdict(ll["advisor"]["avg_entropy"], cf["advisor"]["avg_entropy"], ENT_THRESH)
+        npss_v = _verdict(ll["npss"],     cf["npss"],     NPSS_THRESH)
+        psi_v  = _verdict(ll["mean_psi"], cf["mean_psi"], PSI_THRESH)
+
+        mses_ll = ll["advisor"].get("avg_mses")
+        mses_cf = cf["advisor"].get("avg_mses")
+        if mses_ll is not None and mses_cf is not None:
+            mses_v   = _verdict(mses_ll, mses_cf, MSES_THRESH, higher_is_better=False)
+            mses_str = f"LL={mses_ll:.4f}, CF={mses_cf:.4f} — **{mses_v}** (threshold {MSES_THRESH})"
+        else:
+            mses_str = "N/A"
+
+        err_ll  = ll["advisor"].get("equity_retention", 100.0)
+        err_cf  = cf["advisor"].get("equity_retention", 100.0)
+        err_v   = _verdict(err_ll, err_cf, ERR_THRESH)
+
         sk_ll  = ll["advisor"]["cpi_skewness"]
         sk_cf  = cf["advisor"]["cpi_skewness"]
         if sk_ll is not None and sk_cf is not None:
@@ -463,7 +515,8 @@ def build_report(all_results: Dict[str, dict], scenario_labels: Dict[str, str]) 
             f"### {label}",
             f"- NPSS: LL={ll['npss']:.4f}, CF={cf['npss']:.4f} — **{npss_v}** (threshold {NPSS_THRESH})",
             f"- PSI: LL={ll['mean_psi']:.4f}, CF={cf['mean_psi']:.4f} — **{psi_v}** (threshold {PSI_THRESH})",
-            f"- Advisor entropy: LL={ll['advisor']['avg_entropy']:.4f}, CF={cf['advisor']['avg_entropy']:.4f} — **{ent_v}** (threshold {ENT_THRESH})",
+            f"- MSES: {mses_str}",
+            f"- Equity Retention: LL={err_ll:.1f}%, CF={err_cf:.1f}% — **{err_v}** (threshold {ERR_THRESH}%)",
             f"- CPI skewness (diagnostic): {skew_str}",
             f"- Overflow (diagnostic): LL={ll['overflow_count']}, CF={cf['overflow_count']}",
             "",
@@ -474,7 +527,8 @@ def build_report(all_results: Dict[str, dict], scenario_labels: Dict[str, str]) 
     # ------------------------------------------------------------------ #
     npss_wins = {"least_loaded": 0, "cpi_fill": 0, "draw": 0}
     psi_wins  = {"least_loaded": 0, "cpi_fill": 0, "draw": 0}
-    ent_wins  = {"least_loaded": 0, "cpi_fill": 0, "draw": 0}
+    mses_wins = {"least_loaded": 0, "cpi_fill": 0, "draw": 0}
+    err_wins  = {"least_loaded": 0, "cpi_fill": 0, "draw": 0}
 
     for ds_key, policy_results in all_results.items():
         ll = policy_results["least_loaded"]["metrics"]
@@ -488,7 +542,17 @@ def build_report(all_results: Dict[str, dict], scenario_labels: Dict[str, str]) 
 
         npss_wins[_tally(ll["npss"],     cf["npss"],     NPSS_THRESH)] += 1
         psi_wins[ _tally(ll["mean_psi"], cf["mean_psi"], PSI_THRESH)]  += 1
-        ent_wins[ _tally(ll["advisor"]["avg_entropy"], cf["advisor"]["avg_entropy"], ENT_THRESH)] += 1
+
+        mses_ll = ll["advisor"].get("avg_mses")
+        mses_cf = cf["advisor"].get("avg_mses")
+        if mses_ll is not None and mses_cf is not None:
+            mses_wins[_tally(mses_ll, mses_cf, MSES_THRESH, higher_is_better=False)] += 1
+        else:
+            mses_wins["draw"] += 1
+
+        err_ll = ll["advisor"].get("equity_retention", 100.0)
+        err_cf = cf["advisor"].get("equity_retention", 100.0)
+        err_wins[_tally(err_ll, err_cf, ERR_THRESH)] += 1
 
     n_ds = len(all_results)
     lines += [
@@ -505,7 +569,8 @@ def build_report(all_results: Dict[str, dict], scenario_labels: Dict[str, str]) 
         f"|--------|--------------------|--------------------|-------|",
         f"| NPSS (primary, threshold {NPSS_THRESH}) | {npss_wins['least_loaded']} | {npss_wins['cpi_fill']} | {npss_wins['draw']} |",
         f"| PSI (secondary, threshold {PSI_THRESH}) | {psi_wins['least_loaded']} | {psi_wins['cpi_fill']} | {psi_wins['draw']} |",
-        f"| Advisor Entropy (threshold {ENT_THRESH}) | {ent_wins['least_loaded']} | {ent_wins['cpi_fill']} | {ent_wins['draw']} |",
+        f"| MSES (threshold {MSES_THRESH}) | {mses_wins['least_loaded']} | {mses_wins['cpi_fill']} | {mses_wins['draw']} |",
+        f"| Equity Retention % (threshold {ERR_THRESH}%) | {err_wins['least_loaded']} | {err_wins['cpi_fill']} | {err_wins['draw']} |",
         f"| CPI Skewness | *(diagnostic — see per-dataset notes in §6)* | | |",
         f"| Overflow Count | *(diagnostic — subsumed by NPSS)* | | |",
         f"| % In Window | *(diagnostic — subsumed by NPSS)* | | |",

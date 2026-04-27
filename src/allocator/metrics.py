@@ -298,44 +298,66 @@ def compute_advisor_metrics(
     students: List[Student],
     assignments: Dict[str, Optional[str]],
     all_faculty_ids: Optional[List[str]] = None,
+    faculty: Optional[List] = None,
 ) -> dict:
     """
-    Compute advisor-fairness metrics for a completed allocation.
+    Compute advisor satisfaction and equity metrics for a completed allocation.
 
-    Metric 1 — CPI entropy per advisor:
-        For each advisor, bucket their assigned students into CPI tiers, compute
-        Shannon entropy H(a) = -∑ p_k log p_k (with 0·log0 = 0), and normalize
-        by log(K) where K is the number of tiers, so the score lies in [0, 1].
-        Also reports the average normalized entropy across all assigned advisors.
+    Satisfaction metrics:
+        MSES (Mean Student Enthusiasm Score) — per advisor, the mean rank at which
+        their assigned students listed them in the preference list. Lower = students
+        were more enthusiastic about this advisor. Averaged across all advisors.
 
-    Metric 2 — Skewness of advisor mean CPIs:
-        For each advisor, compute the mean CPI of their assigned students.
-        Then compute the sample skewness of those advisor-wise means:
-            n / ((n-1)(n-2)) * ∑ ((x_i - x̄) / s)³
-        Returns None when fewer than 3 advisors have students.
+        LUR (Load Utilization Rate) — per advisor, actual_load / max_load.
+        Averaged across all advisors. Requires the faculty list to be passed.
+
+    Equity metrics:
+        Baseline entropy — Shannon entropy of the cohort's tier distribution,
+        normalized by log(K). This is the equity ceiling set by the cohort;
+        no protocol can exceed it.
+
+        Equity Retention Rate — avg_entropy / baseline_entropy × 100. Measures
+        what fraction of the achievable equity the protocol preserved, as a
+        percentage. Protocol-attributable; cohort-scale-independent.
+
+        CPI entropy per advisor — normalized Shannon entropy of tier distribution
+        within each advisor's cohort. Averaged across all assigned advisors.
+
+        CPI Skewness — Fisher-Pearson sample skewness of advisor mean CPIs.
+        Normalized by the std of advisor means (built into the formula), so
+        scale-invariant. Returns None when fewer than 3 advisors have students.
 
     Mode is inferred from the student tiers present (quartile mode if any
     student has tier B1 or B2).
 
     Parameters
     ----------
-    students        : list of Student (with .tier and .cpi set)
+    students        : list of Student (with .tier, .cpi, .preferences set)
     assignments     : {student_id: faculty_id | None}
     all_faculty_ids : unused (kept for call-site compatibility)
+    faculty         : list of Faculty (with .id and .max_load); required for LUR
 
     Returns
     -------
     {
-        "avg_entropy"       : float        — mean normalized entropy across assigned advisors
+        "avg_mses"          : float | None — mean MSES across assigned advisors
+        "avg_lur"           : float | None — mean LUR across assigned advisors
+        "avg_entropy"       : float        — mean normalized CPI entropy across assigned advisors
+        "baseline_entropy"  : float        — load-aware ceiling [(F-r)·H_max(⌊S/F⌋)+r·H_max(⌈S/F⌉)]/F
+                                             computed over ALL faculty (F_total), including empty labs
+        "equity_retention"  : float        — avg_entropy / baseline_entropy × 100 (percentage)
         "cpi_skewness"      : float | None — sample skewness of advisor mean CPIs; None if n < 3
         "quartile_mode"     : bool         — True if quartile tier labels (A/B1/B2/C) were used
         "K"                 : int          — number of tiers (3 or 4)
         "advisors_assigned" : int          — advisors who received ≥1 student
+        "empty_labs"        : int          — F_total - advisors_assigned
         "per_faculty"       : {
             faculty_id: {
-                "entropy"      : float  — normalized Shannon entropy [0, 1]
-                "mean_cpi"     : float  — mean CPI of assigned students
+                "entropy"      : float       — normalized Shannon entropy [0, 1]
+                "mean_cpi"     : float       — mean CPI of assigned students
                 "student_count": int
+                "mses"         : float | None — mean rank students placed this advisor
+                "lur"          : float | None — actual_load / max_load
             }
         }
     }
@@ -345,6 +367,11 @@ def compute_advisor_metrics(
     tier_labels = _QUARTILE_TIERS if quartile_mode else _PERCENTILE_TIERS
     K = len(tier_labels)
     log_K = math.log(K) if K > 1 else 1.0  # denominator for normalization
+
+    # Faculty max-load lookup for LUR
+    faculty_max_loads: Dict[str, int] = {}
+    if faculty:
+        faculty_max_loads = {f.id: f.max_load for f in faculty}
 
     # Group students by assigned faculty
     faculty_students: Dict[str, List[Student]] = {}
@@ -378,11 +405,26 @@ def compute_advisor_metrics(
         # --- Metric 2 component: mean CPI ---
         mean_cpi = sum(s.cpi for s in assigned) / n
 
+        # --- MSES: mean rank at which assigned students listed this advisor ---
+        mses_ranks = []
+        for s in assigned:
+            try:
+                mses_ranks.append(s.preferences.index(fid) + 1)
+            except ValueError:
+                pass
+        mses = sum(mses_ranks) / len(mses_ranks) if mses_ranks else None
+
+        # --- LUR: actual_load / max_load ---
+        ml = faculty_max_loads.get(fid)
+        lur = (n / ml) if (ml and ml > 0) else None
+
         per_faculty[fid] = {
             "entropy":       normalized_entropy,
             "mean_cpi":      mean_cpi,
             "student_count": n,
             "tier_counts":   tier_counts,
+            "mses":          mses,
+            "lur":           lur,
         }
 
     advisors_assigned = len(per_faculty)
@@ -392,6 +434,34 @@ def compute_advisor_metrics(
         sum(d["entropy"] for d in per_faculty.values()) / advisors_assigned
         if advisors_assigned else 0.0
     )
+
+    # Load-aware entropy ceiling using ALL faculty (including empty labs).
+    # An advisor with n students can span at most min(n, K) distinct tiers.
+    # Max per-advisor entropy = log(min(n, K)) / log(K).
+    # Uses F_total so the ceiling is consistent across policies regardless of
+    # how many labs end up empty — empty labs contribute 0 to the numerator.
+    F_total = len(faculty) if faculty else advisors_assigned
+    S_total = len(students)
+    if F_total > 0 and K > 1:
+        n_lo = S_total // F_total
+        n_hi = n_lo + 1
+        r    = S_total % F_total          # advisors receiving n_hi students
+        ent_lo = (math.log(min(n_lo, K)) / log_K) if n_lo > 0 else 0.0
+        ent_hi = (math.log(min(n_hi, K)) / log_K) if n_hi > 0 else 0.0
+        baseline_entropy = ((F_total - r) * ent_lo + r * ent_hi) / F_total
+    else:
+        baseline_entropy = 1.0
+
+    # Equity Retention Rate
+    equity_retention = (avg_entropy / baseline_entropy * 100.0) if baseline_entropy > 0 else 100.0
+
+    # Avg MSES
+    mses_vals = [d["mses"] for d in per_faculty.values() if d["mses"] is not None]
+    avg_mses: Optional[float] = sum(mses_vals) / len(mses_vals) if mses_vals else None
+
+    # Avg LUR
+    lur_vals = [d["lur"] for d in per_faculty.values() if d["lur"] is not None]
+    avg_lur: Optional[float] = sum(lur_vals) / len(lur_vals) if lur_vals else None
 
     # --- Metric 2: sample skewness of advisor mean CPIs ---
     cpi_skewness: Optional[float] = None
@@ -409,12 +479,18 @@ def compute_advisor_metrics(
         else:
             cpi_skewness = 0.0
 
+    empty_labs = F_total - advisors_assigned
     return {
+        "avg_mses":          avg_mses,
+        "avg_lur":           avg_lur,
         "avg_entropy":       avg_entropy,
+        "baseline_entropy":  baseline_entropy,
+        "equity_retention":  equity_retention,
         "cpi_skewness":      cpi_skewness,
         "quartile_mode":     quartile_mode,
         "K":                 K,
         "advisors_assigned": advisors_assigned,
+        "empty_labs":        empty_labs,
         "per_faculty":       per_faculty,
     }
 
@@ -428,6 +504,7 @@ def compute_metrics(
     assignments: Dict[str, Optional[str]],
     F: int,
     faculty_ids: Optional[List[str]] = None,
+    faculty: Optional[List] = None,
 ) -> dict:
     """
     Compute all satisfaction metrics for a completed allocation.
@@ -437,8 +514,8 @@ def compute_metrics(
     students    : list of Student (with .tier, .n_tier, .cpi, .preferences set)
     assignments : {student_id: faculty_id | None}
     F           : total number of faculty (for PSI denominator)
-    faculty_ids : full list of faculty IDs (for advisor-satisfaction denominator).
-                  If omitted, only advisors who received ≥1 student are counted.
+    faculty_ids : full list of faculty IDs (unused; kept for compatibility)
+    faculty     : list of Faculty objects; required for LUR computation
 
     Returns
     -------
@@ -467,12 +544,21 @@ def compute_metrics(
             }, ...
         },
         "advisor": {
+            "avg_mses":          float | None,
+            "avg_lur":           float | None,
             "avg_entropy":       float,
+            "baseline_entropy":  float,
+            "equity_retention":  float,
             "cpi_skewness":      float | None,
             "quartile_mode":     bool,
             "K":                 int,
             "advisors_assigned": int,
-            "per_faculty":       {faculty_id: {"entropy": float, "mean_cpi": float, "student_count": int}},
+            "per_faculty": {
+                faculty_id: {
+                    "entropy": float, "mean_cpi": float, "student_count": int,
+                    "mses": float | None, "lur": float | None,
+                }
+            },
         },
     }
     """
@@ -480,7 +566,11 @@ def compute_metrics(
     npss_res    = compute_npss(students, ranks)
     psi_res     = compute_psi(students, ranks, F)
     per_tier    = _build_per_tier(students, ranks, F)
-    advisor_res = compute_advisor_metrics(students, assignments, all_faculty_ids=faculty_ids)
+    advisor_res = compute_advisor_metrics(
+        students, assignments,
+        all_faculty_ids=faculty_ids,
+        faculty=faculty,
+    )
 
     # Build per-student detail
     weights = npss_res["weights"]

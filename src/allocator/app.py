@@ -682,47 +682,125 @@ def _render_metrics_panel(metrics: dict, policy: str = "") -> html.Div:
         if tier_rows else html.P("No tier data available.", className="text-muted")
     )
 
-    # ---- Advisor satisfaction section ----
+    # ---- Advisor metrics section (satisfaction + equity) ----
     advisor = metrics.get("advisor", {})
     advisor_section = []
     if advisor:
-        qmode       = advisor.get("quartile_mode", False)
-        K           = advisor.get("K", 3)
-        avg_entropy = advisor.get("avg_entropy", 0.0)
-        skewness    = advisor.get("cpi_skewness")
-        adv_asgn    = advisor.get("advisors_assigned", 0)
-        tier_note   = f"{'A · B1 · B2 · C' if qmode else 'A · B · C'} ({K} tiers)"
+        qmode             = advisor.get("quartile_mode", False)
+        K                 = advisor.get("K", 3)
+        adv_asgn          = advisor.get("advisors_assigned", 0)
+        tier_note         = f"{'A · B1 · B2 · C' if qmode else 'A · B · C'} ({K} tiers)"
 
-        skew_text = f"{skewness:.3f}" if skewness is not None else "N/A"
+        # --- Satisfaction ---
+        avg_mses = advisor.get("avg_mses")
+        avg_lur  = advisor.get("avg_lur")
+
+        mses_text  = f"{avg_mses:.2f}" if avg_mses is not None else "N/A"
+        if avg_mses is None:
+            mses_color = "text-secondary"
+        elif avg_mses <= 2:
+            mses_color = "text-success"
+        elif avg_mses <= 4:
+            mses_color = "text-warning"
+        else:
+            mses_color = "text-danger"
+
+        lur_text  = f"{avg_lur * 100:.1f}%" if avg_lur is not None else "N/A"
+        lur_color = "text-primary"
+
+        satisfaction_cards = dbc.Row([
+            dbc.Col(dbc.Card(dbc.CardBody([
+                html.Span(mses_text,
+                          style={"fontSize": "1.6rem", "fontWeight": "bold"},
+                          className=mses_color),
+                html.Div("Avg MSES", className="fw-bold"),
+                html.Small(
+                    "Mean Student Enthusiasm Score. Mean rank at which assigned students listed "
+                    "their advisor. Lower = students were more enthusiastic about their assignment.",
+                    className="text-muted"),
+            ]), className="mb-2 border-0 bg-light"), md=6),
+
+            dbc.Col(dbc.Card(dbc.CardBody([
+                html.Span(lur_text,
+                          style={"fontSize": "1.6rem", "fontWeight": "bold"},
+                          className=lur_color),
+                html.Div("Avg Load Utilization", className="fw-bold"),
+                html.Small(
+                    "Mean actual-load / max-load across all advisors. "
+                    "Per-advisor utilization is shown in the Tier Heatmap.",
+                    className="text-muted"),
+            ]), className="mb-2 border-0 bg-light"), md=6),
+        ])
+
+        # --- Equity ---
+        avg_entropy       = advisor.get("avg_entropy", 0.0)
+        baseline_entropy  = advisor.get("baseline_entropy", 0.0)
+        equity_retention  = advisor.get("equity_retention", 100.0)
+        skewness          = advisor.get("cpi_skewness")
+        empty_labs        = advisor.get("empty_labs", 0)
+
+        baseline_text = f"{baseline_entropy:.3f}"
+        err_text      = f"{equity_retention:.1f}%"
+        if equity_retention >= 80:
+            err_color = "text-success"
+        elif equity_retention >= 60:
+            err_color = "text-warning"
+        else:
+            err_color = "text-danger"
+
+        skew_text  = f"{skewness:.3f}" if skewness is not None else "N/A"
         skew_color = "text-warning" if skewness is not None and abs(skewness) > 1 else "text-primary"
 
-        advisor_cards = dbc.Row([
+        equity_cards = dbc.Row([
             dbc.Col(dbc.Card(dbc.CardBody([
-                html.Span(f"{avg_entropy:.3f}",
+                html.Span(baseline_text,
                           style={"fontSize": "1.6rem", "fontWeight": "bold"},
-                          className="text-primary"),
-                html.Div("Avg CPI Entropy", className="fw-bold"),
-                html.Small(f"Advisor-equity metric. Higher = more mixed tier composition per advisor · {adv_asgn} advisors w/ students",
-                           className="text-muted"),
-            ]), className="mb-2 border-0 bg-light"), md=6),
+                          className="text-secondary"),
+                html.Div("Entropy Ceiling", className="fw-bold"),
+                html.Small(
+                    f"Max achievable equity given load ({adv_asgn} assigned · "
+                    f"{empty_labs} empty · {tier_note}). "
+                    f"Reaches 1.0 only when each advisor receives ≥ K students.",
+                    className="text-muted"),
+            ]), className="mb-2 border-0 bg-light"), md=4),
+
+            dbc.Col(dbc.Card(dbc.CardBody([
+                html.Span(err_text,
+                          style={"fontSize": "1.6rem", "fontWeight": "bold"},
+                          className=err_color),
+                html.Div("Equity Retention Rate", className="fw-bold"),
+                html.Small(
+                    "Percentage of the cohort's achievable equity preserved by this policy. "
+                    "Protocol-attributable; compare across policies on the same cohort.",
+                    className="text-muted"),
+            ]), className="mb-2 border-0 bg-light"), md=4),
 
             dbc.Col(dbc.Card(dbc.CardBody([
                 html.Span(skew_text,
                           style={"fontSize": "1.6rem", "fontWeight": "bold"},
                           className=skew_color),
-                html.Div("CPI Skewness (diagnostic)", className="fw-bold"),
-                html.Small("Diagnostic only. Measures asymmetry in advisor-avg CPI distribution; cohort-sensitive — interpret alongside entropy, not in isolation.",
-                           className="text-muted"),
-            ]), className="mb-2 border-0 bg-light"), md=6),
+                html.Div("CPI Skewness", className="fw-bold"),
+                html.Small(
+                    "Asymmetry in the distribution of advisor mean CPIs. "
+                    "Fisher-Pearson formula — std-normalized, scale-invariant. "
+                    "|skew| > 1 warrants attention.",
+                    className="text-muted"),
+            ]), className="mb-2 border-0 bg-light"), md=4),
         ])
 
+        empty_badge = dbc.Badge(
+            f"{empty_labs} empty lab{'s' if empty_labs != 1 else ''}",
+            color="secondary", className="me-2",
+        ) if empty_labs else dbc.Badge("0 empty labs", color="success", className="me-2")
         advisor_section = [
-            html.H6("Advisor Fairness", className="mt-3 mb-1 text-muted"),
-            html.Small(f"Tiers: {tier_note}", className="text-muted d-block mb-2"),
-            advisor_cards,
+            html.H6("Advisor Metrics", className="mt-3 mb-1 text-muted"),
+            html.Small("Satisfaction", className="text-muted fw-bold d-block mb-1"),
+            satisfaction_cards,
+            html.Small("Equity", className="text-muted fw-bold d-block mt-2 mb-1"),
+            equity_cards,
+            html.Div([empty_badge], className="mb-1"),
             html.Small(
-                "See the 'Tier Heatmap' tab in the replay panel for a visual breakdown "
-                "of advisor tier composition. Use together with Avg CPI Entropy.",
+                "See the 'Tier Heatmap' tab for per-advisor load utilization and tier breakdown.",
                 className="text-muted d-block mt-1",
             ),
         ]
@@ -1427,11 +1505,12 @@ def cb_toggle_load_buttons(s, f):
 # ---------------------------------------------------------------------------
 
 @app.callback(
-    Output("run-status", "children"),
-    Output("store-phase", "data"),
-    Output("step-slider", "max"),
-    Output("step-slider", "marks"),
-    Output("step-slider", "value"),
+    Output("run-status",       "children"),
+    Output("store-phase",      "data"),
+    Output("step-slider",      "max"),
+    Output("step-slider",      "marks"),
+    Output("step-slider",      "value"),
+    Output("main-alloc-panel", "children", allow_duplicate=True),
     Input("btn-phase0", "n_clicks"),
     Input("btn-full",   "n_clicks"),
     State("store-loaded", "data"),
@@ -1440,7 +1519,7 @@ def cb_toggle_load_buttons(s, f):
 def cb_run(n_phase0, n_full, loaded):
     # Also accept preloaded data that was set before any upload callback fired
     if not loaded and not (_app_state["students"] and _app_state["faculty"]):
-        return "⚠ Please load student and faculty files first.", "idle", 0, {}, 0
+        return "⚠ Please load student and faculty files first.", "idle", 0, {}, 0, dash.no_update
 
     triggered = ctx.triggered_id
 
@@ -1491,14 +1570,14 @@ def cb_run(n_phase0, n_full, loaded):
                            f"C={sum(1 for s in students if s.tier=='C')} "
                            f"| N_A={meta['N_A']} N_B={meta['N_B']}")
             except Exception as e:
-                return f"✗ Phase 0 error: {e}", "idle", 0, {}, 0
+                return f"✗ Phase 0 error: {e}", "idle", 0, {}, 0, dash.no_update
         else:
             msg = "Phase-0 already computed (loaded from report)."
         snaps = _app_state["snapshots"]
         if not snaps:
-            return msg, "phase0_done", 0, {}, 0
+            return msg, "phase0_done", 0, {}, 0, dash.no_update
         marks = {i: str(snaps[i].step) for i in range(0, len(snaps), max(1, len(snaps)//10))}
-        return msg, "phase0_done", len(snaps)-1, marks, len(snaps)-1
+        return msg, "phase0_done", len(snaps)-1, marks, len(snaps)-1, dash.no_update
 
     if triggered == "btn-full":
         # Run Phase 0 if not already done
@@ -1528,7 +1607,7 @@ def cb_run(n_phase0, n_full, loaded):
                     "cpi_phase1_stats":      {},
                 })
             except Exception as e:
-                return f"✗ Phase 0 error: {e}", "idle", 0, {}, 0
+                return f"✗ Phase 0 error: {e}", "idle", 0, {}, 0, dash.no_update
         else:
             snaps = _app_state["snapshots"]
             meta  = _app_state["meta"]
@@ -1543,7 +1622,7 @@ def cb_run(n_phase0, n_full, loaded):
             try:
                 tr_state = tiered_rounds_start(students, faculty, snaps)
             except Exception as e:
-                return f"✗ Tiered-rounds error: {e}", "idle", 0, {}, 0
+                return f"✗ Tiered-rounds error: {e}", "idle", 0, {}, 0, dash.no_update
             _app_state["tr_state"]  = tr_state
             _app_state["snapshots"] = tr_state.snapshots
             snaps = tr_state.snapshots
@@ -1559,7 +1638,7 @@ def cb_run(n_phase0, n_full, loaded):
                     + "."
                 )
                 _app_state["phase"] = "tr_tie_pending"
-                return msg, "tr_tie_pending", n - 1, marks, n - 1
+                return msg, "tr_tie_pending", n - 1, marks, n - 1, dash.no_update
             if tr_state.status == "complete":
                 _app_state["phase"] = "complete"
                 _app_state["current_assignments"]   = dict(tr_state.assignments)
@@ -1568,14 +1647,24 @@ def cb_run(n_phase0, n_full, loaded):
                     tr_state.students, tr_state.assignments,
                     F=len(tr_state.faculty),
                     faculty_ids=[f.id for f in tr_state.faculty],
+                    faculty=tr_state.faculty,
                 )
                 assigned = sum(1 for fid in tr_state.assignments.values() if fid is not None)
                 return (
                     f"Preference rounds complete — all {assigned} students assigned.",
                     "complete", n - 1, marks, n - 1,
+                    _finalize_prompt(dict(tr_state.assignments), dict(tr_state.faculty_loads), tr_state.faculty),
                 )
             if tr_state.status == "stalled":
                 _app_state["phase"] = "complete"
+                _app_state["current_assignments"]   = dict(tr_state.assignments)
+                _app_state["current_faculty_loads"] = dict(tr_state.faculty_loads)
+                _app_state["metrics"] = compute_metrics(
+                    tr_state.students, tr_state.assignments,
+                    F=len(tr_state.faculty),
+                    faculty_ids=[f.id for f in tr_state.faculty],
+                    faculty=tr_state.faculty,
+                )
                 stall_names = [
                     next((s.name for s in tr_state.students if s.id == sid), sid)
                     for sid in tr_state.stall_unassigned
@@ -1583,8 +1672,9 @@ def cb_run(n_phase0, n_full, loaded):
                 return (
                     f"⚠ Allocation stalled — could not assign: {', '.join(stall_names)}.",
                     "complete", n - 1, marks, n - 1,
+                    _finalize_prompt(dict(tr_state.assignments), dict(tr_state.faculty_loads), tr_state.faculty),
                 )
-            return "⚠ Unexpected engine state.", "idle", 0, {}, 0
+            return "⚠ Unexpected engine state.", "idle", 0, {}, 0, dash.no_update
 
         # CPI-Fill skips Round 1 — initialise empty assignments and wait for operator.
         if ALLOCATION_POLICY == "cpi_fill":
@@ -1598,7 +1688,7 @@ def cb_run(n_phase0, n_full, loaded):
             n = len(snaps)
             marks = {i: str(snaps[i].step) for i in range(0, n, max(1, n // 10))}
             return (f"Phase 0 complete — {len(students)} students ready for Phase 1."), \
-                   "r1_done", n - 1, marks, n - 1
+                   "r1_done", n - 1, marks, n - 1, dash.no_update
 
         # For least_loaded / nonempty: populate Round-1 candidate lists;
         # pause for operator picks.
@@ -1612,9 +1702,9 @@ def cb_run(n_phase0, n_full, loaded):
         msg = (f"Phase 0 done. Round 1: {len(r1_candidates)} faculties have "
                "1st-choice applicants — please make picks below, then click "
                "'Confirm Round-1 picks'.")
-        return msg, "r1", n-1, marks, n-1
+        return msg, "r1", n-1, marks, n-1, dash.no_update
 
-    return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
+    return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
 
 
 # ---------------------------------------------------------------------------
@@ -1821,30 +1911,31 @@ def cb_confirm_r1(n_clicks, pick_values, pick_ids):
 # ---------------------------------------------------------------------------
 
 @app.callback(
-    Output("r1-panel",    "children",  allow_duplicate=True),
-    Output("run-status",  "children",  allow_duplicate=True),
-    Output("store-phase", "data",      allow_duplicate=True),
-    Output("step-slider", "max",       allow_duplicate=True),
-    Output("step-slider", "marks",     allow_duplicate=True),
-    Output("step-slider", "value",     allow_duplicate=True),
+    Output("r1-panel",         "children",  allow_duplicate=True),
+    Output("run-status",       "children",  allow_duplicate=True),
+    Output("store-phase",      "data",      allow_duplicate=True),
+    Output("step-slider",      "max",       allow_duplicate=True),
+    Output("step-slider",      "marks",     allow_duplicate=True),
+    Output("step-slider",      "value",     allow_duplicate=True),
+    Output("main-alloc-panel", "children",  allow_duplicate=True),
     Input("btn-tr-resolve", "n_clicks"),
     State("tr-tie-dropdown", "value"),
     prevent_initial_call=True,
 )
 def cb_tr_resolve(n_clicks, chosen_sid):
-    no_up6 = (dash.no_update,) * 6
+    no_up7 = (dash.no_update,) * 7
     if not n_clicks:
-        return no_up6
+        return no_up7
 
     tr_state = _app_state.get("tr_state")
     if tr_state is None or tr_state.status != "awaiting_tie":
-        return no_up6
+        return no_up7
 
     if not chosen_sid:
         return (
             dash.no_update,
             "⚠ Please select a student before confirming.",
-            dash.no_update, dash.no_update, dash.no_update, dash.no_update,
+            dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update,
         )
 
     try:
@@ -1853,7 +1944,7 @@ def cb_tr_resolve(n_clicks, chosen_sid):
         return (
             dash.no_update,
             f"✗ Error resolving tie: {e}",
-            dash.no_update, dash.no_update, dash.no_update, dash.no_update,
+            dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update,
         )
 
     _app_state["tr_state"]  = tr_state
@@ -1868,16 +1959,30 @@ def cb_tr_resolve(n_clicks, chosen_sid):
         _app_state["phase"] = "complete"
         _app_state["current_assignments"]   = dict(tr_state.assignments)
         _app_state["current_faculty_loads"] = dict(tr_state.faculty_loads)
-        _app_state["metrics"] = _tr_compute_metrics(tr_state)
+        _app_state["metrics"] = compute_metrics(
+            tr_state.students, tr_state.assignments,
+            F=len(tr_state.faculty),
+            faculty_ids=[f.id for f in tr_state.faculty],
+            faculty=tr_state.faculty,
+        )
         assigned = sum(1 for fid in tr_state.assignments.values() if fid is not None)
         return (
             panel,
             f"Preference rounds complete — all {assigned} students assigned.",
             "complete", n - 1, marks, n - 1,
+            _finalize_prompt(dict(tr_state.assignments), dict(tr_state.faculty_loads), tr_state.faculty),
         )
 
     if tr_state.status == "stalled":
         _app_state["phase"] = "complete"
+        _app_state["current_assignments"]   = dict(tr_state.assignments)
+        _app_state["current_faculty_loads"] = dict(tr_state.faculty_loads)
+        _app_state["metrics"] = compute_metrics(
+            tr_state.students, tr_state.assignments,
+            F=len(tr_state.faculty),
+            faculty_ids=[f.id for f in tr_state.faculty],
+            faculty=tr_state.faculty,
+        )
         stall_names = [
             next((s.name for s in tr_state.students if s.id == sid), sid)
             for sid in tr_state.stall_unassigned
@@ -1886,6 +1991,7 @@ def cb_tr_resolve(n_clicks, chosen_sid):
             panel,
             f"⚠ Allocation stalled — could not assign: {', '.join(stall_names)}.",
             "complete", n - 1, marks, n - 1,
+            _finalize_prompt(dict(tr_state.assignments), dict(tr_state.faculty_loads), tr_state.faculty),
         )
 
     if tr_state.status == "awaiting_tie":
@@ -1898,9 +2004,9 @@ def cb_tr_resolve(n_clicks, chosen_sid):
             + (f" ({remaining} more tie(s) in this round)" if remaining else "")
             + "."
         )
-        return panel, msg, "tr_tie_pending", n - 1, marks, n - 1
+        return panel, msg, "tr_tie_pending", n - 1, marks, n - 1, dash.no_update
 
-    return no_up6
+    return no_up7
 
 
 # ---------------------------------------------------------------------------
@@ -2167,6 +2273,7 @@ def cb_cpi_proceed_phase2(n_clicks):
         metrics = compute_metrics(
             students, assignments, len(faculty),
             faculty_ids=[f.id for f in faculty],
+            faculty=faculty,
         )
         _app_state["metrics"] = metrics
         _app_state["phase"]   = "complete"
@@ -2225,6 +2332,7 @@ def cb_cpi_autorun_phase2(n_clicks):
     metrics = compute_metrics(
         students, assignments, len(faculty),
         faculty_ids=[f.id for f in faculty],
+        faculty=faculty,
     )
     _app_state["metrics"] = metrics
     n = len(snaps)
@@ -2283,6 +2391,7 @@ def cb_autorun_main(n_clicks):
         metrics = compute_metrics(
             students, assignments, len(faculty),
             faculty_ids=[f.id for f in faculty],
+            faculty=faculty,
         )
         _app_state["metrics"] = metrics
         n = len(snaps)
@@ -2318,7 +2427,7 @@ def cb_autorun_main(n_clicks):
     _app_state["current_assignments"]   = assignments
     _app_state["current_faculty_loads"] = faculty_loads
     _app_state["phase"]                 = "complete"
-    metrics = compute_metrics(students, assignments, F=len(faculty))
+    metrics = compute_metrics(students, assignments, F=len(faculty), faculty=faculty)
     _app_state["metrics"] = metrics
 
     n = len(snaps)
@@ -2834,6 +2943,7 @@ def _do_cpi_p2_pick(fid: str) -> tuple:
         metrics = compute_metrics(
             students, assignments, len(faculty),
             faculty_ids=[f.id for f in faculty],
+            faculty=faculty,
         )
         _app_state["metrics"] = metrics
 
@@ -3086,7 +3196,7 @@ def cb_r1_finalize(n_clicks):
     _app_state["current_faculty_loads"] = faculty_loads
     _app_state["phase"]                 = "complete"
 
-    metrics = compute_metrics(students, assignments, F=len(faculty))
+    metrics = compute_metrics(students, assignments, F=len(faculty), faculty=faculty)
     _app_state["metrics"] = metrics
 
     content = _build_completion_panel(
@@ -3115,7 +3225,7 @@ def cb_finalize_main(n_clicks):
     students      = _app_state["students"]
     faculty       = _app_state["faculty"]
     metrics       = _app_state.get("metrics") or compute_metrics(
-        students, assignments, F=len(faculty)
+        students, assignments, F=len(faculty), faculty=faculty
     )
     return _build_completion_panel(
         assignments, faculty_loads, students, faculty, metrics,
@@ -3194,6 +3304,7 @@ def _do_pick(fid: str) -> tuple:
         metrics = compute_metrics(
             students, assignments, len(faculty),
             faculty_ids=[f.id for f in faculty],
+            faculty=faculty,
         )
         _app_state["metrics"] = metrics
 

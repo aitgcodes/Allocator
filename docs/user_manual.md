@@ -592,37 +592,53 @@ All four policies can produce overflow, but through different mechanisms:
 - **`least_loaded` / `nonempty`**: the N_tier window is applied first; a student is only promoted to a wider pool (B → C, or A → B → C) when every advisor within their current window is at capacity. Overflow occurs when the promotion chain ends at the Class C full-list round and the assigned rank exceeds the original N_tier. This is anomalous — it only happens under very tight capacity — and is flagged as a **red warning badge**.
 - **`cpi_fill` / `tiered_rounds`**: no N_tier window is applied during assignment; overflow is a structural feature of the protocol. For `tiered_rounds` in particular, a student reaches round *n* naturally when their first *n*−1 preferences were claimed by others, so assignments beyond N_tier are expected and routine. These are shown as a **blue informational badge**, not an error.
 
-#### Advisor CPI Entropy
+#### Advisor Satisfaction Metrics
 
-This metric measures **CPI diversity within each advisor's cohort** — whether each advisor received a mix of students from different academic tiers.
-
-For each advisor $a$, bucket assigned students by tier label and compute the Shannon entropy of the tier distribution, normalised to [0, 1]:
+**MSES — Mean Student Enthusiasm Score** is the primary advisor satisfaction metric. For each advisor, it is the mean preference rank at which their assigned students listed them:
 
 $$
-H_{\text{norm}}(a) = \frac{-\sum_k p_k(a) \log p_k(a)}{\log K}
+\text{MSES}(a) = \frac{1}{n_a} \sum_{i \in \mathcal{S}_a} \text{rank}(a, i)
 $$
 
-where $K$ is the number of tier labels and $p_k(a)$ is the fraction of advisor $a$'s students in tier $k$.
+The system-level score is the mean MSES across all assigned advisors. Lower is better — a value near 1.0 means students were predominantly assigned to advisors they ranked 1st.
 
-The **system-level score** is the mean of $H_{\text{norm}}(a)$ across all advisors with at least one student. A value near 1.0 indicates most advisors received a mixed-tier cohort; a value near 0 indicates widespread tier segregation.
+| Avg MSES | Interpretation |
+|----------|----------------|
+| ≤ 2.0 | Students are highly enthusiastic about their advisor assignments |
+| ≤ 4.0 | Good match overall |
+| > 4.0 | Students landing further down their lists; check capacity or preference diversity |
 
-#### CPI Skewness of Advisor Mean CPIs
+**Avg Load Utilization (LUR)** is the mean of `actual_load / max_load` across all advisors, reported as a percentage. It summarises how close advisors are to their stated capacity system-wide. Per-advisor LUR appears in the Tier Heatmap y-axis labels.
 
-This metric measures whether the **distribution of advisor-averaged CPIs** is symmetric or skewed — whether a few advisors are receiving a disproportionately high- or low-CPI cohort.
+#### Advisor Equity Metrics
 
-For each advisor $a$, compute the mean CPI of their assigned students. Collect these mean CPIs across all advisors and compute Fisher's adjusted sample skewness:
+**Load-Aware Entropy Ceiling** is the maximum average normalized entropy achievable given both the cohort's tier structure and the actual number of students each advisor receives. An advisor with *n* students can span at most *min(n, K)* distinct tiers, so their entropy ceiling is `log(min(n, K)) / log(K)`. The system-level ceiling is the weighted average of this across all advisors at their floor or ceiling load. It equals 1.0 only when each advisor receives at least *K* students — otherwise it is structurally below 1.0 regardless of the policy.
+
+**Equity Retention Rate (ERR)** measures what fraction of that ceiling the policy actually preserved:
+
+$$
+\text{ERR} = \frac{\overline{H}_{\text{norm}}}{H_{\text{baseline}}} \times 100\%
+$$
+
+where $\overline{H}_{\text{norm}}$ is the mean per-advisor normalized CPI entropy and $H_{\text{baseline}}$ is the load-aware ceiling. ERR is protocol-attributable — values are directly comparable across policies on the same cohort.
+
+| ERR | Interpretation |
+|-----|----------------|
+| ≥ 80% | Policy preserved most achievable equity |
+| 60–80% | Moderate preservation; some tier concentration |
+| < 60% | Significant tier concentration introduced by the policy |
+
+Both the baseline entropy (cohort constraint) and ERR (protocol score) are reported together.
+
+**CPI Skewness** measures whether the distribution of advisor mean CPIs is symmetric or skewed — whether a few advisors are receiving a disproportionately high- or low-CPI cohort.
+
+For each advisor $a$, compute the mean CPI of their assigned students. Collect these across all assigned advisors and compute Fisher's adjusted sample skewness:
 
 $$
 \gamma = \frac{A}{(A-1)(A-2)} \sum_{a=1}^{A} \left(\frac{\bar{x}_a - \bar{\bar{x}}}{s}\right)^3
 $$
 
-| Skewness | Meaning |
-|----------|---------|
-| ~ 0 | Symmetric — no systematic CPI concentration at any advisor |
-| > 0 | A few advisors have notably higher mean CPIs than the bulk |
-| < 0 | A few advisors have notably lower mean CPIs than the bulk |
-
-An absolute skewness below 0.5 is generally acceptable. Values above 1.0 warrant investigation.
+The division by `s` normalises for the spread of the cohort's CPI distribution, making this metric scale-invariant. `|γ| < 0.5` is acceptable; `|γ| > 1.0` warrants investigation.
 
 #### Load Balance
 
@@ -634,19 +650,21 @@ Load Balance = `max(advisor loads) − min(advisor loads)` across all advisors i
 
 When interpreting a single run or comparing policies, use this hierarchy:
 
-1. **NPSS** *(primary)* — start here. It directly measures whether the allocation honours student preferences and is CPI-weighted to reflect the protocol's intent. All four policies use the same full-list denominator, so NPSS values are directly comparable across policies.
+1. **NPSS** *(primary student metric)* — start here. It directly measures whether the allocation honours student preferences, weighted by CPI. All four policies use the same full-list denominator, so NPSS values are directly comparable across policies.
 
 2. **PSI** *(secondary student metric)* — check for redistribution effects. If NPSS and PSI move in opposite directions across policies, the allocation is trading higher CPI-weighted satisfaction for lower equal-weighted satisfaction (or vice versa). This is a value judgement, not a failure.
 
-3. **Advisor CPI Entropy** *(preferred advisor-equity metric)* — check whether advisors are receiving a mixed or homogeneous tier composition.
+3. **MSES** *(primary advisor satisfaction metric)* — check whether students were matched to advisors they genuinely sought out. A rising MSES across policies indicates students are landing further from their preferences on the advisor's side.
 
-4. **Advisor Tier Distribution Heatmap** *(visual diagnostic)* — shows which tiers each advisor's cohort contains, row-normalized by capacity. Use it to understand *why* entropy is high or low.
+4. **Equity Retention Rate** *(advisor equity)* — compare across policies on the same cohort. A higher ERR means the policy preserved more of the cohort's achievable tier diversity. The baseline entropy value shows how constrained the cohort was to begin with.
 
-5. **Load Balance** *(sanity check)* — max minus min of final advisor loads. A quick scan; expand the Metrics or Advisor Loads panels for detail.
+5. **Advisor Tier Distribution Heatmap** *(visual diagnostic)* — shows which tiers each advisor's cohort contains, row-normalised by capacity. Use it to understand *why* ERR is high or low for specific advisors.
 
-6. **CPI Skewness** *(diagnostic only)* — use as a cross-check for CPI concentration in the advisor mean-CPI distribution. Results are cohort-sensitive; do not declare a policy winner from skewness alone.
+6. **Load Balance** *(sanity check)* — max minus min of final advisor loads. A quick scan; expand the Metrics or Advisor Loads panels for detail.
 
-7. **Overflow Count** *(protocol-compliance diagnostic)* — reports placements beyond the tier `N_tier` window. For window-applying policies (`least_loaded`, `nonempty`) this signals near-overflow stress (promotion cascaded all the way to the full-list round). For `cpi_fill` and `tiered_rounds` — which apply no window during assignment — it is purely informational, and the UI shows it as a blue badge rather than a red one. It does not affect NPSS.
+7. **CPI Skewness** *(diagnostic)* — cross-check for CPI concentration in the advisor mean-CPI distribution. Already std-normalized (scale-invariant). `|γ| > 1.0` warrants attention.
+
+8. **Overflow Count** *(protocol-compliance diagnostic)* — reports placements beyond the tier `N_tier` window. For window-applying policies (`least_loaded`, `nonempty`) this signals near-overflow stress. For `cpi_fill` and `tiered_rounds` — which apply no window during assignment — it is purely informational (blue badge, not red). It does not affect NPSS.
 
 **If metrics disagree:** this is normal. The four policies trade off across dimensions rather than one uniformly dominating. The choice is a value judgement about institutional priorities — merit-weighted access, equitable treatment, load balance, or operator transparency — not a metric-determined optimum.
 

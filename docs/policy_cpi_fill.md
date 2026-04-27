@@ -101,7 +101,8 @@ Let `U` be the number of unassigned students at any point and `E` the number of 
 | **Load balance** | Weaker than `least_loaded` — popular advisors can fill up quickly through Phase 1, while less popular ones wait for Phase 2. |
 | **Empty-lab guarantee** | Very strong — the stopping condition and Phase 2 design make it structurally impossible to leave an advisor empty. |
 | **Overflow count** | Can be higher than `least_loaded` in clustered cohorts — many students land beyond their `N_tier` window because there is no window-based redirection. The NPSS score uses the full preference list F as its denominator, so out-of-window placements still receive a positive NPSS contribution; the overflow count is the separate diagnostic for tier-cap compliance. |
-| **Advisor CPI diversity (entropy)** | Moderate — because high-CPI students all land at popular advisors, those advisors tend to have homogeneous high-CPI cohorts. |
+| **Equity Retention Rate** | Moderate — because high-CPI students all land at popular advisors first, those advisors tend to accumulate homogeneous high-CPI cohorts, reducing the ERR below what `least_loaded` achieves. |
+| **MSES** | Tends to be low (good) for high-CPI students, who claim their top-preferred advisors first; higher for lower-CPI students who receive whoever remains. System-level MSES outcome depends on cohort composition. |
 
 ### When `cpi_fill` performs best
 

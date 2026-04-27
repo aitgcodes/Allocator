@@ -100,6 +100,8 @@ A round-by-round trace is recorded and shown in a collapsible section of the com
 | **Preference satisfaction (PSI)** | High in balanced cohorts — students advance down their list only if their earlier preferences are taken |
 | **Load balance** | Variable — each advisor gains at most one student per round, but popular advisors fill faster |
 | **Empty-lab guarantee** | Indirect — if sufficient total capacity exists and all students list all faculty, everyone is assigned |
+| **MSES** | High in balanced cohorts — students advance down their list only when earlier preferences are taken, so assignments tend to reflect genuine enthusiasm |
+| **Equity Retention Rate** | Variable — no load-balancing mechanism; popular advisors fill early, which can concentrate CPI tiers |
 | **Transparency / auditability** | Highest — every assignment, every tie, and every manual decision is recorded in the trace log |
 | **Interactivity** | Required — the operator must resolve all CPI ties manually; the run cannot complete unattended if ties exist |
 

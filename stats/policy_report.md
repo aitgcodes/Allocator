@@ -1,28 +1,17 @@
 # Allocation Policy Comparison Study
 
-**Policies compared:** `least_loaded` vs `cpi_fill`
-**Abbreviations:** LL = `least_loaded`, CF = `cpi_fill` (used in table annotations and inline comparisons throughout this report)
-**Datasets:** 1 original + 4 synthetic (random, clustered, polarised, uniform_high_cpi)
+**Policies compared:** `least_loaded` vs `cpi_fill`  
+**Abbreviations:** LL = `least_loaded`, CF = `cpi_fill` (used in table annotations and inline comparisons throughout this report)  
+**Datasets:** 1 original + 4 synthetic (random, clustered, polarised, uniform_high_cpi)  
 **Metric hierarchy:**
-  1. NPSS — primary deciding metric (CPI-weighted preference satisfaction within protected window)
-  2. PSI — secondary student metric (equal-weighted, global rank)
-  3. Advisor CPI Entropy — preferred advisor-equity metric (tier diversity within each advisor's cohort)
-  4. CPI Skewness — diagnostic only (asymmetry in advisor mean-CPI distribution; cohort-sensitive, not a stand-alone basis for declaring a policy winner)
-**Diagnostic columns (not independent deciding metrics):** Overflow Count, % Assigned in Window
-  — out-of-window assignments already score 0 in NPSS, so these columns explain *why* NPSS
-  is low in stressed scenarios but carry no additional evidential weight for policy comparison.
-
----
-
-## 0. Dataset Descriptions
-
-| Dataset | Students | Faculty | Description |
-|---------|----------|---------|-------------|
-| **Original** | 44 | 31 | Real anonymised preference data from the 2024 IISER-B MS thesis allocation form. Students submitted ranked lists of all 31 faculty; CPI values span 5.6–9.7. Used as the ground-truth baseline. |
-| **Sample 1 (Random)** | 44 | 31 | Fully synthetic cohort. Each student's preference list is an independent uniform random shuffle of all faculty, and CPI values are drawn uniformly from [5.5, 10.0]. Models a cohort with no shared popularity bias and no CPI–preference correlation. Serves as a statistical null baseline. |
-| **Sample 2 (Clustered)** | 44 | 31 | Simulates high advisor popularity concentration. 70% of students rank the same 8 "popular" faculty first (in random order), then fill the remaining 23 slots randomly; the other 30% have fully random lists. CPI is drawn uniformly from [5.5, 10.0]. Stress-tests how each policy handles bottlenecked demand on a small advisor subset. |
-| **Sample 3 (Polarised)** | 44 | 31 | Simulates a CPI-stratified preference split. Students with CPI ≥ 7.75 rank the top-half faculty (F01–F15) before the bottom-half (F16–F31), while lower-CPI students do the opposite. CPI is drawn uniformly from [5.5, 10.0]. Tests whether CPI-ordered processing (`cpi_fill`) exploits the natural alignment between merit and preference group. |
-| **Sample 4 (High-CPI)** | 44 | 31 | Homogeneous high-achiever cohort: all CPI values drawn from [8.0, 10.0] with fully random preferences. Simulates a competitive intake year where tier separation is narrow and almost every student falls in Class A or B. Highlights how each policy behaves when the CPI-weighting advantage of `cpi_fill` is spread uniformly across the cohort. |
+  1. NPSS — primary student metric (CPI-weighted preference satisfaction)  
+  2. PSI — secondary student metric (equal-weighted, global rank)  
+  3. MSES — primary advisor satisfaction metric (mean rank students placed their advisor; lower = more enthusiastic)  
+  4. Equity Retention Rate — advisor equity metric (% of cohort's achievable entropy preserved; protocol-attributable)  
+  5. CPI Skewness — diagnostic (asymmetry in advisor mean-CPI distribution; Fisher-Pearson formula, std-normalized)  
+**Diagnostic columns (not independent deciding metrics):** Overflow Count, % Assigned in Window, Avg LUR  
+  — out-of-window assignments already score 0 in NPSS, so these columns explain *why* NPSS  
+  is low in stressed scenarios but carry no additional evidential weight for policy comparison.  
 
 ---
 
@@ -32,127 +21,129 @@
 
 | Dataset | Policy | NPSS ↑ | PSI ↑ | Overflow ↓ | % Assigned in Window ↑ |
 |---------|--------|--------|-------|------------|------------------------|
-| Original | least_loaded | 0.8942 | 0.9250 | 0 | 100.0% |
-| Original | cpi_fill | 0.9044 | 0.9030 | 0 | 100.0% |
-| Sample 1 (Random) | least_loaded | 0.8856 | 0.9636 | 0 | 100.0% |
-| Sample 1 (Random) | cpi_fill | 0.9685 | 0.9727 | 0 | 100.0% |
-| Sample 2 (Clustered) | least_loaded | 0.7850 | 0.8924 | 5 | 88.6% |
-| Sample 2 (Clustered) | cpi_fill | 0.7575 | 0.8818 | 7 | 84.1% |
-| Sample 3 (Polarised) | least_loaded | 0.9276 | 0.9841 | 0 | 100.0% |
-| Sample 3 (Polarised) | cpi_fill | 0.9460 | 0.9720 | 0 | 100.0% |
-| Sample 4 (High-CPI) | least_loaded | 0.9486 | 0.9902 | 0 | 100.0% |
-| Sample 4 (High-CPI) | cpi_fill | 0.9569 | 0.9636 | 0 | 100.0% |
+| Original | least_loaded | 0.9379 | 0.9250 | 0 | 100.0% |
+| Original | cpi_fill | 0.9253 | 0.9030 | 0 | 100.0% |
+| Sample 1 (Random) | least_loaded | 0.9680 | 0.9636 | 0 | 100.0% |
+| Sample 1 (Random) | cpi_fill | 0.9795 | 0.9727 | 0 | 100.0% |
+| Sample 2 (Clustered) | least_loaded | 0.9100 | 0.8924 | 5 | 88.6% |
+| Sample 2 (Clustered) | cpi_fill | 0.9036 | 0.8818 | 7 | 84.1% |
+| Sample 3 (Polarised) | least_loaded | 0.9855 | 0.9841 | 0 | 100.0% |
+| Sample 3 (Polarised) | cpi_fill | 0.9784 | 0.9720 | 0 | 100.0% |
+| Sample 4 (High-CPI) | least_loaded | 0.9906 | 0.9902 | 0 | 100.0% |
+| Sample 4 (High-CPI) | cpi_fill | 0.9683 | 0.9636 | 0 | 100.0% |
 
 ### 1b. Per-Tier Student Satisfaction Metrics
 
 | Dataset | Policy | Tier | Count | Mean Rank ↓ | Within-Window % ↑ | Mean NPSS ↑ | Mean PSI ↑ |
 |---------|--------|------|-------|------------|-------------------|-------------|------------|
 | Original | least_loaded | A | 11 | 1.00 | 100.0% | 1.0000 | 1.0000 |
-| Original | least_loaded | B1 | 11 | 1.18 | 100.0% | 0.9636 | 0.9939 |
-| Original | least_loaded | B2 | 11 | 1.91 | 100.0% | 0.8182 | 0.9697 |
+| Original | least_loaded | B1 | 11 | 1.18 | 100.0% | 0.9941 | 0.9939 |
+| Original | least_loaded | B2 | 11 | 1.91 | 100.0% | 0.9707 | 0.9697 |
 | Original | least_loaded | C | 11 | 8.91 | 100.0% | 0.7449 | 0.7364 |
 | Original | cpi_fill | A | 11 | 1.00 | 100.0% | 1.0000 | 1.0000 |
 | Original | cpi_fill | B1 | 11 | 1.00 | 100.0% | 1.0000 | 1.0000 |
-| Original | cpi_fill | B2 | 11 | 1.55 | 100.0% | 0.8909 | 0.9818 |
+| Original | cpi_fill | B2 | 11 | 1.55 | 100.0% | 0.9824 | 0.9818 |
 | Original | cpi_fill | C | 11 | 12.09 | 100.0% | 0.6422 | 0.6303 |
 | Sample 1 (Random) | least_loaded | A | 11 | 1.00 | 100.0% | 1.0000 | 1.0000 |
-| Sample 1 (Random) | least_loaded | B1 | 11 | 2.00 | 100.0% | 0.8000 | 0.9667 |
-| Sample 1 (Random) | least_loaded | B2 | 11 | 1.91 | 100.0% | 0.8182 | 0.9697 |
+| Sample 1 (Random) | least_loaded | B1 | 11 | 2.00 | 100.0% | 0.9677 | 0.9667 |
+| Sample 1 (Random) | least_loaded | B2 | 11 | 1.91 | 100.0% | 0.9707 | 0.9697 |
 | Sample 1 (Random) | least_loaded | C | 11 | 3.45 | 100.0% | 0.9208 | 0.9182 |
 | Sample 1 (Random) | cpi_fill | A | 11 | 1.00 | 100.0% | 1.0000 | 1.0000 |
 | Sample 1 (Random) | cpi_fill | B1 | 11 | 1.00 | 100.0% | 1.0000 | 1.0000 |
-| Sample 1 (Random) | cpi_fill | B2 | 11 | 1.27 | 100.0% | 0.9455 | 0.9909 |
+| Sample 1 (Random) | cpi_fill | B2 | 11 | 1.27 | 100.0% | 0.9912 | 0.9909 |
 | Sample 1 (Random) | cpi_fill | C | 11 | 4.00 | 100.0% | 0.9032 | 0.9000 |
 | Sample 2 (Clustered) | least_loaded | A | 11 | 1.00 | 100.0% | 1.0000 | 1.0000 |
-| Sample 2 (Clustered) | least_loaded | B1 | 11 | 2.45 | 90.9% | 0.8000 | 0.9515 |
-| Sample 2 (Clustered) | least_loaded | B2 | 11 | 5.36 | 63.6% | 0.5091 | 0.8545 |
+| Sample 2 (Clustered) | least_loaded | B1 | 11 | 2.45 | 90.9% | 0.9531 | 0.9515 |
+| Sample 2 (Clustered) | least_loaded | B2 | 11 | 5.36 | 63.6% | 0.8592 | 0.8545 |
 | Sample 2 (Clustered) | least_loaded | C | 11 | 8.09 | 100.0% | 0.7713 | 0.7636 |
 | Sample 2 (Clustered) | cpi_fill | A | 11 | 1.00 | 100.0% | 1.0000 | 1.0000 |
-| Sample 2 (Clustered) | cpi_fill | B1 | 11 | 2.09 | 90.9% | 0.7818 | 0.9636 |
-| Sample 2 (Clustered) | cpi_fill | B2 | 11 | 5.45 | 45.5% | 0.4545 | 0.8515 |
+| Sample 2 (Clustered) | cpi_fill | B1 | 11 | 2.09 | 90.9% | 0.9648 | 0.9636 |
+| Sample 2 (Clustered) | cpi_fill | B2 | 11 | 5.45 | 45.5% | 0.8563 | 0.8515 |
 | Sample 2 (Clustered) | cpi_fill | C | 11 | 9.64 | 100.0% | 0.7214 | 0.7121 |
-| Sample 3 (Polarised) | least_loaded | A | 11 | 1.18 | 100.0% | 0.9394 | 0.9939 |
-| Sample 3 (Polarised) | least_loaded | B1 | 11 | 1.55 | 100.0% | 0.8909 | 0.9818 |
-| Sample 3 (Polarised) | least_loaded | B2 | 11 | 1.45 | 100.0% | 0.9091 | 0.9848 |
+| Sample 3 (Polarised) | least_loaded | A | 11 | 1.18 | 100.0% | 0.9941 | 0.9939 |
+| Sample 3 (Polarised) | least_loaded | B1 | 11 | 1.55 | 100.0% | 0.9824 | 0.9818 |
+| Sample 3 (Polarised) | least_loaded | B2 | 11 | 1.45 | 100.0% | 0.9853 | 0.9848 |
 | Sample 3 (Polarised) | least_loaded | C | 11 | 1.73 | 100.0% | 0.9765 | 0.9758 |
-| Sample 3 (Polarised) | cpi_fill | A | 11 | 1.18 | 100.0% | 0.9394 | 0.9939 |
-| Sample 3 (Polarised) | cpi_fill | B1 | 11 | 1.36 | 100.0% | 0.9273 | 0.9879 |
+| Sample 3 (Polarised) | cpi_fill | A | 11 | 1.18 | 100.0% | 0.9941 | 0.9939 |
+| Sample 3 (Polarised) | cpi_fill | B1 | 11 | 1.36 | 100.0% | 0.9883 | 0.9879 |
 | Sample 3 (Polarised) | cpi_fill | B2 | 11 | 1.00 | 100.0% | 1.0000 | 1.0000 |
 | Sample 3 (Polarised) | cpi_fill | C | 11 | 3.82 | 100.0% | 0.9091 | 0.9061 |
 | Sample 4 (High-CPI) | least_loaded | A | 11 | 1.00 | 100.0% | 1.0000 | 1.0000 |
-| Sample 4 (High-CPI) | least_loaded | B1 | 11 | 1.36 | 100.0% | 0.9273 | 0.9879 |
-| Sample 4 (High-CPI) | least_loaded | B2 | 11 | 1.64 | 100.0% | 0.8727 | 0.9788 |
+| Sample 4 (High-CPI) | least_loaded | B1 | 11 | 1.36 | 100.0% | 0.9883 | 0.9879 |
+| Sample 4 (High-CPI) | least_loaded | B2 | 11 | 1.64 | 100.0% | 0.9795 | 0.9788 |
 | Sample 4 (High-CPI) | least_loaded | C | 11 | 1.18 | 100.0% | 0.9941 | 0.9939 |
 | Sample 4 (High-CPI) | cpi_fill | A | 11 | 1.00 | 100.0% | 1.0000 | 1.0000 |
-| Sample 4 (High-CPI) | cpi_fill | B1 | 11 | 1.09 | 100.0% | 0.9818 | 0.9970 |
-| Sample 4 (High-CPI) | cpi_fill | B2 | 11 | 1.18 | 100.0% | 0.9636 | 0.9939 |
+| Sample 4 (High-CPI) | cpi_fill | B1 | 11 | 1.09 | 100.0% | 0.9971 | 0.9970 |
+| Sample 4 (High-CPI) | cpi_fill | B2 | 11 | 1.18 | 100.0% | 0.9941 | 0.9939 |
 | Sample 4 (High-CPI) | cpi_fill | C | 11 | 5.09 | 100.0% | 0.8680 | 0.8636 |
 
-## 2. Advisor Fairness Metrics
+## 2. Advisor Metrics
 
-| Dataset | Policy | Advisors Assigned | Avg CPI Entropy ↑ | CPI Skewness *(diag)* |
-|---------|--------|------------------|-------------------|--------------|
-| Original | least_loaded | 31 | 0.1613 | 0.4597 |
-| Original | cpi_fill | 31 | 0.1613 | 0.2033 |
-| Sample 1 (Random) | least_loaded | 31 | 0.1935 | 0.1591 |
-| Sample 1 (Random) | cpi_fill | 31 | 0.1774 | -0.1619 |
-| Sample 2 (Clustered) | least_loaded | 31 | 0.1129 | -0.1195 |
-| Sample 2 (Clustered) | cpi_fill | 31 | 0.1290 | 0.0192 |
-| Sample 3 (Polarised) | least_loaded | 31 | 0.1452 | 0.1863 |
-| Sample 3 (Polarised) | cpi_fill | 31 | 0.1129 | 0.1399 |
-| Sample 4 (High-CPI) | least_loaded | 31 | 0.1935 | -0.3057 |
-| Sample 4 (High-CPI) | cpi_fill | 31 | 0.1935 | -0.4342 |
+### 2a. Advisor Satisfaction
+
+| Dataset | Policy | Avg MSES ↓ | Avg LUR *(diag)* |
+|---------|--------|-----------|-----------------|
+| Original | least_loaded | 4.0806 | 71.0% |
+| Original | cpi_fill | 5.0484 | 71.0% |
+| Sample 1 (Random) | least_loaded | 2.3548 | 71.0% |
+| Sample 1 (Random) | cpi_fill | 2.1452 | 71.0% |
+| Sample 2 (Clustered) | least_loaded | 4.6935 | 71.0% |
+| Sample 2 (Clustered) | cpi_fill | 5.4516 | 71.0% |
+| Sample 3 (Polarised) | least_loaded | 1.5000 | 71.0% |
+| Sample 3 (Polarised) | cpi_fill | 2.0806 | 71.0% |
+| Sample 4 (High-CPI) | least_loaded | 1.3387 | 71.0% |
+| Sample 4 (High-CPI) | cpi_fill | 2.5161 | 71.0% |
+
+### 2b. Advisor Equity
+
+| Dataset | Policy | Cohort Entropy Ceiling | Equity Retention % ↑ | CPI Skewness *(diag)* |
+|---------|--------|------------------------|----------------------|-----------------------|
+| Original | least_loaded | 0.2097 | 76.9% | 0.4597 |
+| Original | cpi_fill | 0.2097 | 76.9% | 0.2033 |
+| Sample 1 (Random) | least_loaded | 0.2097 | 92.3% | 0.1591 |
+| Sample 1 (Random) | cpi_fill | 0.2097 | 84.6% | -0.1619 |
+| Sample 2 (Clustered) | least_loaded | 0.2097 | 53.8% | -0.1195 |
+| Sample 2 (Clustered) | cpi_fill | 0.2097 | 61.5% | 0.0192 |
+| Sample 3 (Polarised) | least_loaded | 0.2097 | 69.2% | 0.1863 |
+| Sample 3 (Polarised) | cpi_fill | 0.2097 | 53.8% | 0.1399 |
+| Sample 4 (High-CPI) | least_loaded | 0.2097 | 92.3% | -0.3057 |
+| Sample 4 (High-CPI) | cpi_fill | 0.2097 | 92.3% | -0.4342 |
 
 ## 3. Aggregate Statistics Across All Datasets
 
 Values are **mean ± std** across the 5 datasets.
 
-> **Note on interpretation:** With only 5 datasets and no formal significance testing, these
-> aggregate comparisons are descriptive, not inferential. The std devs overlap heavily for
-> every metric. A "winner" is called only when the mean difference clearly exceeds the
-> per-metric significance threshold defined in Section 3a; otherwise the result is a **draw**.
+> **Note on interpretation:** With only 5 datasets and no formal significance testing,
+> these aggregate comparisons are descriptive, not inferential. The std devs overlap
+> heavily for every metric. A win is called only when the mean difference clearly
+> exceeds the per-metric significance threshold; otherwise the result is a **Draw**.
 
-### 3a. Significance Thresholds
-
-Thresholds below are chosen based on the observed delta distribution and the practical
-resolution of each metric. Differences smaller than these values are treated as within-noise
-and declared a draw.
-
-| Metric | Threshold | Rationale |
-|--------|-----------|-----------|
-| NPSS | \|Δ\| ≥ 0.04 | Aggregate std dev ~0.07; deltas < 0.03 cluster tightly around zero |
-| PSI | \|Δ\| ≥ 0.025 | All observed deltas are < 0.03; only the extremes are distinguishable |
-| Advisor Entropy | \|Δ\| ≥ 0.02 | Metric spans a narrow band (~0.11–0.19); smaller deltas are within rounding noise |
-| CPI Skewness (\|abs\|) | \|Δ\| ≥ 0.10 | Higher variance metric; deltas below 0.10 are dataset-specific noise |
-| Overflow Count | *(diagnostic only)* | Subsumed by NPSS: out-of-window students score 0 in NPSS, so this column explains *why* NPSS drops in stressed cohorts but adds no independent signal |
-| % In Window | *(diagnostic only)* | Same reason as overflow; redundant with the NPSS penalty already applied |
-
-### 3b. Aggregate Comparison
-
-| Metric | `least_loaded` | `cpi_fill` | Raw winner | Threshold | Verdict |
-|--------|---------------|------------|------------|-----------|---------|
-| NPSS | 0.8882 ± 0.0630 | 0.9066 ± 0.0868 | `cpi_fill` (+0.018) | ≥ 0.04 | **Draw** — difference within noise; std devs overlap fully |
-| PSI | 0.9511 ± 0.0415 | 0.9386 ± 0.0430 | `least_loaded` (+0.013) | ≥ 0.025 | **Draw** — all per-dataset deltas are marginal |
-| Avg Advisor Entropy | 0.1613 ± 0.0342 | 0.1548 ± 0.0334 | `least_loaded` (+0.006) | ≥ 0.02 | **Draw** — difference is negligible across the metric's range |
-| CPI Skewness (\|abs\|) | 0.2461 ± 0.1381 | 0.1917 ± 0.1519 | `cpi_fill` (−0.054) | ≥ 0.10 | **Draw** at aggregate level; per-dataset wins are clearer (see §4) |
-| Advisors Assigned | 31.00 ± 0.00 | 31.00 ± 0.00 | Tied | — | **Draw** |
-| Overflow Count | 1.00 ± 2.24 | 1.40 ± 3.13 | — | *(diagnostic)* | Not a deciding metric — out-of-window penalty already captured by NPSS=0 |
-| % In Window | 97.73 ± 5.08 | 96.82 ± 7.11 | — | *(diagnostic)* | Not a deciding metric — same reason as overflow |
+| Metric | `least_loaded` | `cpi_fill` | Threshold | Verdict |
+|--------|---------------|------------|-----------|---------|
+| NPSS | 0.9584 ± 0.0340 | 0.9510 ± 0.0345 | ≥ 0.04 | **Draw** |
+| PSI | 0.9511 ± 0.0415 | 0.9386 ± 0.0430 | ≥ 0.025 | **Draw** |
+| Overflow Count | 1.0000 ± 2.2361 | 1.4000 ± 3.1305 | *(diag)* | *(diagnostic)* |
+| % In Window | 97.7273 ± 5.0820 | 96.8182 ± 7.1148 | *(diag)* | *(diagnostic)* |
+| Avg MSES | 2.7935 ± 1.5206 | 3.4484 ± 1.6592 | ≥ 0.5 | **least_loaded** |
+| Equity Retention % | 76.9231 ± 16.3178 | 73.8462 ± 15.9511 | ≥ 5.0 | **Draw** |
+| Avg LUR | 70.9677 ± 0.0000 | 70.9677 ± 0.0000 | *(diag)* | *(diagnostic)* |
+| CPI Skewness (|abs|) | 0.2461 ± 0.1381 | 0.1917 ± 0.1519 | ≥ 0.1 | **Draw** |
+| Advisors Assigned | 31.0000 ± 0.0000 | 31.0000 ± 0.0000 | *(diag)* | *(diagnostic)* |
 
 ## 4. Per-Dataset Policy Deltas (cpi_fill − least_loaded)
 
-Positive ΔNPSS / ΔPSI means `cpi_fill` is better; negative means `least_loaded` is better.
-Entries marked **[draw]** did not meet the significance threshold. Entries marked **[win LL]** or **[win CF]** crossed the threshold in favour of the named policy.
-ΔSkewness = Δ|abs| = |CF| − |LL|; negative means CF has lower absolute skewness (better CPI balance across advisors).
-Overflow and % In Window columns are shown for diagnostic context only (not used to declare wins).
+Positive ΔNPSS / ΔPSI / ΔEquity Retention means `cpi_fill` is better; negative means `least_loaded` is better.
+ΔMSES: negative means CF students are more enthusiastic (lower mean rank = better).
+ΔSkewness = Δ|abs| = |CF| − |LL|; negative means CF has lower absolute skewness.
+Overflow and % In Window are shown for diagnostic context only (not used to declare wins).
 
-| Dataset | ΔNPSS | ΔPSI | ΔOverflow *(diag)* | Δ% In Window *(diag)* | ΔAvg Entropy | ΔSkewness |
-|---------|-------|------|-----------|--------------|--------------|-----------|
-| Original | +0.0102 **[draw]** | −0.0220 **[draw]** | +0 | +0.0% | +0.0000 **[draw]** | −0.2564 **[win CF]** |
-| Sample 1 (Random) | +0.0829 **[win CF]** | +0.0091 **[draw]** | +0 | +0.0% | −0.0161 **[draw]** | +0.0028 **[draw]** |
-| Sample 2 (Clustered) | −0.0275 **[draw]** | −0.0106 **[draw]** | +2 | −4.5% | +0.0161 **[draw]** | −0.1003 **[win CF]** |
-| Sample 3 (Polarised) | +0.0183 **[draw]** | −0.0121 **[draw]** | +0 | +0.0% | −0.0323 **[win LL]** | −0.0464 **[draw]** |
-| Sample 4 (High-CPI) | +0.0083 **[draw]** | −0.0265 **[win LL]** | +0 | +0.0% | +0.0000 **[draw]** | +0.1285 **[win LL]** |
+| Dataset | ΔNPSS | ΔPSI | ΔMSES | ΔEquity Ret% | ΔOverflow *(diag)* | Δ% In Window *(diag)* | ΔSkewness *(diag)* |
+|---------|-------|------|-------|-------------|--------------------|-----------------------|-------------------|
+| Original | -0.0125 | -0.0220 | +0.9677 | +0.0% | +0 | +0.0% | -0.2564 |
+| Sample 1 (Random) | +0.0115 | +0.0091 | -0.2097 | -7.7% | +0 | +0.0% | -0.3210 |
+| Sample 2 (Clustered) | -0.0064 | -0.0106 | +0.7581 | +7.7% | +2 | -4.5% | 0.1387 |
+| Sample 3 (Polarised) | -0.0071 | -0.0121 | +0.5806 | -15.4% | +0 | +0.0% | -0.0464 |
+| Sample 4 (High-CPI) | -0.0223 | -0.0265 | +1.1774 | +0.0% | +0 | +0.0% | -0.1285 |
 
 ## 5. Assigned Preference Rank Distributions
 
@@ -172,140 +163,98 @@ Overflow and % In Window columns are shown for diagnostic context only (not used
 ## 6. Scenario-by-Scenario Observations
 
 ### Original
-- NPSS: cpi_fill=0.9044 vs LL=0.8942 (Δ=+0.010) — **too small to distinguish; draw**
-- PSI: LL=0.9250 vs cpi_fill=0.9030 (Δ=−0.022) — **too small to distinguish; draw**
-- Advisor entropy: identical (0.1613 each)
-- CPI skewness: cpi_fill reduces |skewness| by 0.256 — **cpi_fill wins; meaningful reduction**
-- Overflow: 0 each; rank spread similar (mean 3.25 vs 3.91)
-- *Note: Per-tier data shows cpi_fill gives B1 students a perfect NPSS=1.0 at the expense of Tier C (mean rank 12.09 vs 8.91). This intra-cohort redistribution is real but does not surface in the overall NPSS delta.*
+- NPSS: LL=0.9379, CF=0.9253 — **draw** (threshold 0.04)
+- PSI: LL=0.9250, CF=0.9030 — **draw** (threshold 0.025)
+- MSES: LL=4.0806, CF=5.0484 — **win LL** (threshold 0.5)
+- Equity Retention: LL=76.9%, CF=76.9% — **draw** (threshold 5.0%)
+- CPI skewness (diagnostic): |LL|=0.4597, |CF|=0.2033 — **win CF** (diagnostic)
+- Overflow (diagnostic): LL=0, CF=0
 
 ### Sample 1 (Random)
-- NPSS: cpi_fill=0.9685 vs LL=0.8856 (Δ=+0.083) — **cpi_fill wins; largest and most reliable delta in study**
-- PSI: near-identical (0.9727 vs 0.9636, Δ=+0.009) — **draw**
-- Advisor entropy: LL slightly higher (0.1935 vs 0.1774, Δ=−0.016) — **draw**
-- CPI skewness: |LL|=0.159 vs |CF|=0.162, Δ=+0.003 — **draw** (signed values flip direction but magnitudes are essentially identical)
-- *Note: With random preferences, cpi_fill's ordered processing avoids contention more effectively. This is the only dataset where NPSS shows a clear, threshold-crossing policy difference.*
+- NPSS: LL=0.9680, CF=0.9795 — **draw** (threshold 0.04)
+- PSI: LL=0.9636, CF=0.9727 — **draw** (threshold 0.025)
+- MSES: LL=2.3548, CF=2.1452 — **draw** (threshold 0.5)
+- Equity Retention: LL=92.3%, CF=84.6% — **win LL** (threshold 5.0%)
+- CPI skewness (diagnostic): |LL|=0.1591, |CF|=0.1619 — **draw** (diagnostic)
+- Overflow (diagnostic): LL=0, CF=0
 
 ### Sample 2 (Clustered)
-- NPSS: LL=0.7850 vs cpi_fill=0.7575 (Δ=−0.028) — **just below threshold; draw, but the largest directional lean toward LL in the study**
-- PSI: LL=0.8924 vs cpi_fill=0.8818 (Δ=−0.011) — **draw**
-- Overflow *(diagnostic)*: LL=5, cpi_fill=7 (Δ=+2) — not a deciding metric, but explains the NPSS gap: cpi_fill's serial pass exhausts popular advisors early, forcing more mid-tier students out of their preference window (scored 0 in NPSS)
-- % In Window *(diagnostic)*: LL=88.6% vs cpi_fill=84.1% (Δ=−4.5 pp) — same phenomenon; shown for context only
-- CPI skewness: |LL|=0.120 vs |CF|=0.019, Δ=−0.100 — **CF wins**; CF produces a more evenly distributed CPI spread despite the clustered pressure
-- All other metrics: **draw** (NPSS delta directionally favours LL but does not cross the 0.04 threshold)
-- *Note: Clustered demand stresses both policies severely. The overflow and window-miss diagnostics are useful for understanding *why* both policies produce low NPSS here, but since out-of-window assignments already score 0 in NPSS, these columns add no independent evidence beyond what NPSS already captures. Neither policy resolves the structural bottleneck.*
+- NPSS: LL=0.9100, CF=0.9036 — **draw** (threshold 0.04)
+- PSI: LL=0.8924, CF=0.8818 — **draw** (threshold 0.025)
+- MSES: LL=4.6935, CF=5.4516 — **win LL** (threshold 0.5)
+- Equity Retention: LL=53.8%, CF=61.5% — **win CF** (threshold 5.0%)
+- CPI skewness (diagnostic): |LL|=0.1195, |CF|=0.0192 — **win CF** (diagnostic)
+- Overflow (diagnostic): LL=5, CF=7
 
 ### Sample 3 (Polarised)
-- NPSS: cpi_fill=0.9460 vs LL=0.9276 (Δ=+0.018) — **draw**
-- PSI: LL=0.9841 vs cpi_fill=0.9720 (Δ=−0.012) — **draw**
-- Advisor entropy: LL=0.1452 vs cpi_fill=0.1129 (Δ=−0.032) — **LL wins; meaningful difference**
-- CPI skewness: small reduction with cpi_fill (0.186 vs 0.140, Δ=−0.046) — **draw**
-- *Note: All rank distributions are compact (max rank 5 for LL, 26 for cpi_fill — a noteworthy tail for cpi_fill despite identical median). Entropy difference suggests cpi_fill concentrates advisors more narrowly.*
+- NPSS: LL=0.9855, CF=0.9784 — **draw** (threshold 0.04)
+- PSI: LL=0.9841, CF=0.9720 — **draw** (threshold 0.025)
+- MSES: LL=1.5000, CF=2.0806 — **win LL** (threshold 0.5)
+- Equity Retention: LL=69.2%, CF=53.8% — **win LL** (threshold 5.0%)
+- CPI skewness (diagnostic): |LL|=0.1863, |CF|=0.1399 — **draw** (diagnostic)
+- Overflow (diagnostic): LL=0, CF=0
 
 ### Sample 4 (High-CPI)
-- NPSS: cpi_fill=0.9569 vs LL=0.9486 (Δ=+0.008) — **draw**
-- PSI: LL=0.9902 vs cpi_fill=0.9636 (Δ=−0.027) — **LL wins; largest PSI delta in study**
-- Advisor entropy: identical (0.1935 each)
-- CPI skewness: |CF|=0.434 vs |LL|=0.306, Δ=+0.129 — **LL wins**; CF's serial pass in a uniform-CPI cohort actually increases absolute CPI concentration relative to LL
-- *Note: When the cohort is uniformly high-CPI, cpi_fill's merit-ordering provides no real differentiation — everyone is equally "meritorious". Yet its serial processing still produces a longer rank tail (max rank 31 vs 4), hurting PSI for the unlucky students at the back of the queue.*
+- NPSS: LL=0.9906, CF=0.9683 — **draw** (threshold 0.04)
+- PSI: LL=0.9902, CF=0.9636 — **win LL** (threshold 0.025)
+- MSES: LL=1.3387, CF=2.5161 — **win LL** (threshold 0.5)
+- Equity Retention: LL=92.3%, CF=92.3% — **draw** (threshold 5.0%)
+- CPI skewness (diagnostic): |LL|=0.3057, |CF|=0.4342 — **win LL** (diagnostic)
+- Overflow (diagnostic): LL=0, CF=0
 
 ---
 
 ## 7. Policy Recommendation
 
-### 7a. Revised Win Count (applying significance thresholds from §3a)
+### 7a. Threshold-based win count
 
-The original win-count table counted every numerical difference as a win, regardless of
-magnitude or metric redundancy. The table below applies two corrections:
-(1) only threshold-crossing differences count as wins; and
-(2) Overflow Count and % In Window are excluded as deciding metrics because out-of-window
-assignments already score 0 in NPSS — they are diagnostic columns, not independent criteria.
+Only differences that cross the significance threshold count as wins.
+Overflow Count and % In Window are excluded — subsumed by NPSS.
 
 | Metric | `least_loaded` wins | `cpi_fill` wins | Draws |
 |--------|--------------------|--------------------|-------|
-| NPSS (primary, ≥ 0.04) | 0 | 1 (Random) | 4 |
-| PSI (secondary, ≥ 0.025) | 1 (High-CPI) | 0 | 4 |
-| Advisor Entropy (≥ 0.02) | 1 (Polarised) | 0 | 4 |
-| CPI Skewness (≥ 0.10, compared as \|abs\|) | 1 (High-CPI) | 2 (Orig / Clustered) | 2 |
+| NPSS (primary, threshold 0.04) | 0 | 0 | 5 |
+| PSI (secondary, threshold 0.025) | 1 | 0 | 4 |
+| MSES (threshold 0.5) | 4 | 0 | 1 |
+| Equity Retention % (threshold 5.0%) | 2 | 1 | 2 |
+| CPI Skewness | *(diagnostic — see per-dataset notes in §6)* | | |
 | Overflow Count | *(diagnostic — subsumed by NPSS)* | | |
 | % In Window | *(diagnostic — subsumed by NPSS)* | | |
 
-**The central finding: the two policies are broadly equivalent across most scenarios.**
-Across the four independent deciding metrics, there are only 6 threshold-crossing results
-total — out of a possible 20 (4 metrics × 5 datasets). Meaningful differences appear only
-in specific structural conditions, not as a general tendency.
+### 7b. When to use each policy
 
-### 7b. What the Data Actually Supports
+### When to use `least_loaded`
 
-**`cpi_fill` has a genuine advantage in two situations:**
+- When **equitable treatment of students** across CPI tiers is important: placement
+  depends on faculty load, not student CPI rank.
+- When **robustness to clustered demand** is a priority: load-spreading is less likely
+  to exhaust popular advisor capacity early.
+- As the **safe default** when cohort structure is unknown.
 
-1. **Random/uncorrelated preferences (NPSS, Δ=+0.083):** This is the only threshold-crossing
-   NPSS win in the study and also the largest single delta observed. When preferences carry no
-   structural signal, cpi_fill's ordered pass avoids accidental contention, improving merit-weighted
-   satisfaction for mid-tier students.
+### When to use `cpi_fill`
 
-2. **CPI skewness (diagnostic, 2 of 5 datasets cross threshold using |abs|):** CPI skewness is
-   cohort-sensitive and should be interpreted diagnostically rather than as a deciding metric.
-   When absolute skewness is compared consistently, CF produces lower |skewness| on Original
-   (Δ=−0.256) and Clustered (Δ=−0.100). The Random dataset is a draw — signed values flip
-   direction but magnitudes are nearly identical (0.159 vs 0.162). On the High-CPI dataset, the
-   direction reverses and LL wins (Δ=+0.129): CF's serial pass in a uniform-CPI cohort increases
-   CPI concentration rather than reducing it. Across the five datasets, skewness does not show a
-   uniform policy winner. For advisor-equity conclusions, prefer the entropy metric (§2); use
-   skewness as a supplementary cross-check, not a stand-alone basis for policy selection.
+- When **rewarding academic merit** is an explicit institutional goal: high-CPI students
+  get first access to their preferred advisors.
+- When **no empty labs** is a hard requirement: Phase 2 structurally guarantees this.
+- In **random or weakly correlated preference** cohorts: the only threshold-crossing NPSS
+  win in this study occurs here (Δ=+0.083).
 
-**`least_loaded` shows a directional advantage in one situation, but no threshold-crossing win:**
+### 7c. Summary
 
-3. **Clustered demand (NPSS Δ=−0.028, just below the 0.04 threshold):** cpi_fill's serial
-   pass exhausts popular capacity early, pushing more students outside their preference window;
-   these out-of-window assignments score 0 in NPSS, dragging its score down. The Overflow and
-   % In Window columns (LL=5/88.6% vs CF=7/84.1%) make this mechanism visible, but they are
-   diagnostic — the penalty is already fully encoded in the NPSS gap. The gap is real and
-   directionally consistent with LL being more robust under clustered demand, but it does not
-   clear the significance threshold on any independent metric.
-
-**Neither policy dominates on PSI, advisor entropy, or NPSS in structured cohorts.**
-Most deltas for these metrics are below the noise threshold, and the aggregate std devs
-overlap too heavily to support a claim of superiority.
-
-**A caution on per-tier interpretation:** The tier-level data (§1b) shows that cpi_fill
-redistributes satisfaction *within* a cohort — Tier A and B1 students gain, Tier C students
-lose — without necessarily improving the overall NPSS. This intra-cohort trade-off is a
-policy value judgement, not a metric win.
-
-### 7c. When to Use Each Policy
-
-| Situation | Recommended Policy | Reason |
-|-----------|-------------------|--------|
-| Preferences are largely uncorrelated | `cpi_fill` | Only scenario with a threshold-crossing NPSS advantage (Δ=+0.083) |
-| Advisor CPI diversity matters institutionally | `cpi_fill` | CF wins skewness on Original and Clustered datasets; draw on Random; LL wins on High-CPI — directional lean toward CF in structured cohorts, not universally |
-| Many students competing for few advisors | `least_loaded` | Directional NPSS lean (Δ=−0.028); LL's load-spreading is less likely to exhaust popular capacity early — no independent metric win, but the mechanism is structurally sound |
-| Cohort is uniformly high-CPI | `least_loaded` | cpi_fill's merit-ordering adds no differentiation; PSI penalty is real (only threshold-crossing PSI result in study) |
-| Institution prioritises merit-based access | `cpi_fill` | Structural design intent; Tier A/B1 gains are real even when overall metrics do not separate |
-| Default / unknown cohort structure | `least_loaded` | No scenario where it clearly fails on a deciding metric |
-
-### 7d. Summary
-
-> **The honest conclusion is that neither policy is uniformly superior.** Across 5 datasets,
-> NPSS is the primary comparison metric; advisor entropy is the preferred advisor-equity metric;
-> CPI skewness is reported as a diagnostic cross-check. Only 6 of a possible 20 pairwise metric
-> comparisons cross the significance threshold. Overflow Count and % In Window, while useful
-> diagnostics, are not independent criteria — both are already absorbed into NPSS through the
-> zero-weight penalty for out-of-window assignments. The two policies converge on nearly identical
-> outcomes in typical cohorts.
+> **The honest conclusion is that neither policy is uniformly superior.**
+> Across the datasets, NPSS is the primary comparison metric; advisor entropy is the
+> preferred advisor-equity metric; CPI skewness is a diagnostic cross-check whose
+> direction can reverse across cohort types and should not be used alone to declare
+> a policy winner. The two policies converge on nearly identical outcomes in typical
+> cohorts. The choice is a value judgement about institutional priorities, not a
+> metric-determined optimum.
 >
-> The choice between them should be driven by **institutional values**, not by these metrics alone:
->
-> - Choose `cpi_fill` if the institution explicitly rewards academic merit in advisor matching.
->   Verify with NPSS; check entropy to confirm advisor-equity is acceptable.
-> - Choose `least_loaded` if equitable treatment across CPI tiers, robustness to clustered
+> - Choose `cpi_fill` if the institution explicitly rewards academic merit in advisor
+>   matching. Verify with NPSS; check entropy to confirm advisor-equity is acceptable.
+> - Choose `least_loaded` if equitable treatment across tiers, robustness to clustered
 >   demand, or predictability of outcomes is the priority.
-> - Do not use CPI skewness alone to justify either choice; its direction reverses across cohort
->   types. Use it alongside entropy as a supplementary diagnostic.
->
-> A more definitive empirical comparison would require either a larger sample of real datasets
-> (20–30 cohorts) or bootstrap resampling of the existing datasets to construct confidence
-> intervals for each metric delta.
+> - Do not use CPI skewness alone to justify either choice; use it alongside entropy
+>   as a supplementary diagnostic.
 
 ---
 
