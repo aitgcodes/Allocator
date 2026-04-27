@@ -16,22 +16,52 @@ No Python, Conda, or any other runtime needs to be installed — Docker bundles 
 | Disk space | ~2 GB free for the Docker image |
 | Architecture | x86-64 (Intel / AMD) — ARM devices not supported |
 
-WSL 2 (Windows Subsystem for Linux 2) must be enabled. Docker Desktop installs it automatically if it is not already present.
+WSL 2 (Windows Subsystem for Linux 2) is required by Docker Desktop and must be installed first.
 
 ---
 
-### 1.2 Install Docker Desktop
+### 1.2 Install WSL 2 (Required)
 
-1. Download Docker Desktop for Windows from [docker.com/products/docker-desktop](https://www.docker.com/products/docker-desktop/).
+Docker Desktop requires WSL 2. Install it before installing Docker Desktop.
+
+1. Open **PowerShell as Administrator**: search "PowerShell" in the Start menu, right-click it, and choose **Run as administrator**.
+2. Run:
+   ```powershell
+   wsl --install
+   ```
+3. Restart your computer when prompted.
+4. After reboot, a Ubuntu terminal window may open to complete Linux setup — create a username and password when asked, then close it.
+
+> **Already have WSL?** Run `wsl --update` to ensure WSL 2 is up to date.
+
+> **If `wsl --install` fails:** Enable the required Windows features manually — go to **Settings → Apps → Optional features → More Windows features**, check both **Windows Subsystem for Linux** and **Virtual Machine Platform**, click OK, restart, then run `wsl --set-default-version 2` in an elevated PowerShell.
+
+---
+
+### 1.3 Install Docker Desktop Personal
+
+1. Download **Docker Desktop for Windows** (Personal — free) from [docker.com/products/docker-desktop](https://www.docker.com/products/docker-desktop/).
 2. Run the installer. Accept the default options — "Use WSL 2 instead of Hyper-V" should be selected.
-3. When prompted, restart your computer.
-4. After reboot, Docker Desktop launches automatically. Wait for the whale icon in the system tray to stop animating — that means Docker is ready.
+3. When the installer asks you to choose a plan, select **Personal** (free, no subscription required).
+4. When prompted, restart your computer.
+5. After reboot, Docker Desktop launches automatically. Wait for the whale icon in the system tray to stop animating — that means Docker is ready.
+6. Docker Desktop will ask you to sign in or create a Docker Hub account. Create a free account (or sign in with an existing one) and select the **Personal** plan when prompted.
 
-> **First-time setup:** Docker Desktop may prompt you to install or update WSL 2. Follow the on-screen instructions; this is a one-time step.
+> **Elevated account / "docker-users group" error:** If the installer reports that it requires elevated privileges, or that your user is not a member of the `docker-users` group, try one of the following workarounds:
+>
+> - **Option A — Run the installer as Administrator:** Right-click the downloaded installer → **Run as administrator**, then proceed through the setup normally.
+>
+> - **Option B — Add your account to the docker-users group (post-install):** Open PowerShell as Administrator and run:
+>   ```powershell
+>   net localgroup docker-users "<YourWindowsUsername>" /add
+>   ```
+>   Replace `<YourWindowsUsername>` with your actual Windows login name. Then **sign out and back in** (or restart) for the change to take effect.
+>
+> - **Option C — Domain / corporate account:** If your PC is joined to a work or university domain, the `docker-users` group may be managed by IT policy. Ask your system administrator to add your account to the local `docker-users` group, or request that Docker Desktop be installed under administrator credentials.
 
 ---
 
-### 1.3 Install Git (optional)
+### 1.4 Install Git (optional)
 
 Git is only needed to download the project. If you already have the project folder, skip this step.
 
