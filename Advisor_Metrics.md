@@ -1,6 +1,6 @@
 # Advisor Metrics
 
-Two dimensions of advisor-side evaluation are tracked after each allocation: **satisfaction** (how well students and advisors are matched from the advisor's viewpoint) and **equity** (how fairly the student population is distributed across faculty).
+Advisor-side evaluation covers three dimensions: **satisfaction** (how well students were matched to advisors they genuinely sought), **load distribution equity** (whether students were spread fairly across advisors), and **tier mixing equity** (whether each advisor received a diverse cross-section of the CPI spectrum).
 
 ---
 
@@ -16,7 +16,7 @@ $$
 \text{MSES}(a) = \frac{1}{n_a} \sum_{i \in \mathcal{S}_a} \text{rank}(a, i)
 $$
 
-where `rank(a, i)` is the 1-based position of advisor *a* in student *i*'s preference list, and `S_a` is the set of students assigned to *a*.
+where `rank(a, i)` is the 1-based position of advisor *a* in student *i*'s preference list, and $\mathcal{S}_a$ is the set of students assigned to *a*.
 
 The system-level score is the mean MSES across all assigned advisors:
 
@@ -56,71 +56,110 @@ $$
 \overline{\text{LUR}} = \frac{1}{|\mathcal{A}|} \sum_{a \in \mathcal{A}} \text{LUR}(a)
 $$
 
-Reported as a percentage. A value of 100% means every advisor is at full capacity.
+Reported as a percentage. A value of 100 % means every advisor is at full capacity.
 
 #### Interpretation
 
-`max_load` represents the advisor's stated willingness to supervise. An advisor significantly below their max is underutilized; one at 100% is fully committed. The protocol enforces load balance (loads differ by at most 1), so LUR variation is mainly driven by heterogeneous `max_load` settings.
+LUR is a **capacity utilisation signal**, not an equity metric. It answers "how fully are allocated seats being used?" — not "how evenly are students distributed?". Two allocations with very different load spreads can have identical Avg LUR. For load equity, use the Load Distribution metrics below.
 
-Per-advisor LUR is displayed in the **Tier Heatmap** y-axis labels; the metrics panel reports the system-level average.
+`max_load` represents the advisor's stated willingness to supervise. Per-advisor LUR is displayed in the **Tier Heatmap** y-axis labels; the metrics panel reports the system-level average.
 
 ---
 
-## Advisor Equity Metrics
+## Advisor Equity — Load Distribution
 
-### Load-Aware Entropy Ceiling and Equity Retention Rate
+These metrics measure whether students were spread fairly across advisors.
 
-#### Motivation
+### Empty Labs
 
-Any allocation faces two constraints on advisor tier diversity: the cohort's tier distribution, and the number of students each advisor actually receives. An advisor with only 3 students can span at most 3 distinct tiers regardless of the cohort composition — they cannot simultaneously represent all 4 tiers in quartile mode. The load-aware ceiling captures both constraints; the Equity Retention Rate measures what fraction of that ceiling the protocol preserved.
+The count of advisors who received no students. Surfaced as a badge in the metrics panel.
 
-#### Load-Aware Entropy Ceiling
+| Empty Labs | Meaning |
+|------------|---------|
+| **0** | All advisors received at least one student |
+| **> 0** | Some advisors were entirely bypassed — worth reviewing whether this was intentional (e.g. an advisor on leave) or a structural consequence of the policy |
 
-The maximum normalized entropy an advisor with *n* students can achieve is:
+### Load Balance
 
-$$
-H_{\text{max}}(n) = \frac{\log \min(n,\, K)}{\log K}
-$$
+`max(advisor loads) − min(advisor loads)` across **all** advisors including empty labs (which contribute 0). A value of 0 means identical loads; 1 is the minimum non-zero spread and is typical in well-balanced runs. Values ≥ 2 indicate significant imbalance.
 
-since *n* students can span at most *min(n, K)* distinct tiers. Under the protocol's load balance guarantee, advisors receive either $\lfloor S/F \rfloor$ or $\lceil S/F \rceil$ students. The system-level ceiling is the weighted average:
+---
 
-$$
-\boxed{H_{\text{baseline}} = \frac{(F - r)\cdot H_{\text{max}}(\lfloor S/F \rfloor)\;+\; r\cdot H_{\text{max}}(\lceil S/F \rceil)}{F}}
-$$
+## Advisor Equity — Tier Mixing
 
-where *S* is the number of students, *F* the **total** number of advisors (including any empty labs), and *r = S mod F*. Using the total faculty count ensures the ceiling is computed consistently across all policies — advisors who receive no students contribute 0 to the numerator but are counted in the denominator.
+These metrics measure whether each advisor received a diverse cross-section of CPI tiers, not just students from one end of the academic spectrum.
 
-This ceiling is 1.0 only when $\lfloor S/F \rfloor \geq K$ — when each advisor receives enough students to potentially cover every tier. When loads are smaller than *K* (common in moderate-sized cohorts), the ceiling is below 1.0, reflecting the structural impossibility of perfect mixing.
+### Per-Advisor Entropy — $H_{\text{norm}}$
 
-#### Per-Advisor Entropy
+#### Definition
 
-For each advisor *a*, the normalized Shannon entropy of their assigned students' tier distribution:
-
-$$
-H_{\text{norm}}(a) = \frac{-\sum_{k=1}^{K} p_k(a) \log p_k(a)}{\log K}
-$$
-
-The system-level **average normalized entropy** `H̄_norm` is the mean across all assigned advisors.
-
-#### Equity Retention Rate
+For each advisor *a* with $n_a$ assigned students, bucket those students into CPI tiers and compute the **normalized Shannon entropy** of the resulting distribution:
 
 $$
-\boxed{\text{Equity Retention Rate} = \frac{\overline{H}_{\text{norm}}}{H_{\text{baseline}}} \times 100\%}
+\boxed{H_{\text{norm}}(a) = \frac{-\displaystyle\sum_{k=1}^{K} p_k(a)\,\log p_k(a)}{\log K}}
 $$
 
-This is the fraction of achievable equity the policy actually preserved, expressed as a percentage. It is cohort-scale-independent and protocol-attributable: two runs on different cohorts with the same ERR are directly comparable.
+where:
+
+- $K$ = number of CPI tiers: **3** in percentile mode (A, B, C) or **4** in quartile mode (A, B1, B2, C), detected automatically from student tier labels
+- $p_k(a) = n_{a,k} / n_a$ is the fraction of advisor *a*'s students in tier *k*
+- $0 \cdot \log 0 \equiv 0$ by convention
+
+$H_{\text{norm}}(a) \in [0, 1]$: it equals **0** when all of *a*'s students are in the same tier, and **1** when students are perfectly uniformly distributed across all *K* tiers.
+
+The system-level average sums over **all** *F* faculty (empty labs contribute $H_{\text{norm}} = 0$):
+
+$$
+\overline{H}_{\text{norm}} = \frac{1}{F} \sum_{a=1}^{F} H_{\text{norm}}(a)
+$$
+
+---
+
+### Load-Aware Entropy Ceiling — $H_{\text{max}}$ and $H_{\text{baseline}}$
+
+#### Per-advisor ceiling
+
+An advisor with $n$ students can represent at most $\min(n, K)$ distinct tiers simultaneously. The tightest upper bound on $H_{\text{norm}}(a)$ is therefore:
+
+$$
+\boxed{H_{\text{max}}(n) = \frac{\log \min(n,\, K)}{\log K}}
+$$
+
+This equals 0 when $n = 1$ (a single student occupies exactly one tier; no diversity is possible), and approaches 1 as $n \geq K$ (enough students to fill every tier uniformly).
+
+#### System-level ceiling
+
+The system-level baseline averages $H_{\text{max}}$ over all *F* advisors using their **actual assigned loads** (empty labs contribute 0):
+
+$$
+\boxed{H_{\text{baseline}} = \frac{1}{F} \sum_{a=1}^{F} H_{\text{max}}\!\left(\text{actual\_load}(a)\right)}
+$$
+
+Because $H_{\text{norm}}(a) \leq H_{\text{max}}(\text{actual\_load}(a))$ holds for every advisor by construction, we have $\overline{H}_{\text{norm}} \leq H_{\text{baseline}}$ always, guaranteeing the Equity Retention Rate lies in $[0\,\%, 100\,\%]$.
+
+The ceiling is 1.0 only when every advisor receives at least *K* students; in moderate-sized cohorts with low loads per advisor, the ceiling is structurally below 1.0 regardless of the policy.
+
+---
+
+### Equity Retention Rate — ERR
+
+$$
+\boxed{\text{ERR} = \frac{\overline{H}_{\text{norm}}}{H_{\text{baseline}}} \times 100\,\%}
+$$
+
+ERR answers: *"Given how this policy distributed students across advisors, what fraction of the maximum possible tier mixing was actually achieved?"*
+
+Because $H_{\text{baseline}}$ reflects the **actual load distribution** produced by the policy, ERR is specific to each run. Read it alongside the Load Distribution metrics: a high ERR under a low ceiling (few students per advisor, many empty labs) tells a different story from a high ERR under a high ceiling.
 
 | ERR | Meaning |
 |-----|---------|
-| **≥ 80%** | The policy preserved most of the cohort's achievable equity |
-| **60–80%** | Moderate equity preservation; some tier concentration introduced by the policy |
-| **< 60%** | Significant tier concentration — the policy is distributing students much less evenly than the cohort structure would allow |
-
-Both the baseline entropy (the cohort constraint) and the ERR (the protocol score) are reported together so that a high ERR on a low-ceiling cohort can be interpreted correctly.
+| **≥ 80 %** | The policy used most of the tier-mixing headroom available given its load distribution |
+| **60–80 %** | Moderate mixing; some tier concentration within advisors |
+| **< 60 %** | Significant tier concentration — advisors are receiving students predominantly from one part of the CPI spectrum |
 
 ---
 
-### CPI Skewness
+### CPI Skewness *(diagnostic)*
 
 #### Definition
 
@@ -136,9 +175,9 @@ $$
 \boxed{\gamma = \frac{A}{(A-1)(A-2)} \sum_{a=1}^{A} \left(\frac{\bar{x}_a - \bar{\bar{x}}}{s}\right)^3}
 $$
 
-where `x̄̄` is the mean and `s` is the sample standard deviation of the advisor mean CPIs. The division by `s` inside the cube normalizes for the spread of the cohort's CPI distribution, making this metric scale-invariant and cohort-scale-independent.
+where $\bar{\bar{x}}$ is the grand mean and $s$ is the sample standard deviation of the advisor mean CPIs. Normalizing by $s$ makes this scale-invariant and cohort-scale-independent.
 
-Returns `None` if fewer than 3 advisors have students (undefined for *A* < 3), and `0.0` if all advisor mean CPIs are identical.
+Returns `None` if fewer than 3 advisors have students (undefined for $A < 3$), and `0.0` if all advisor mean CPIs are identical.
 
 #### Interpretation
 
@@ -148,13 +187,19 @@ Returns `None` if fewer than 3 advisors have students (undefined for *A* < 3), a
 | **> 0** | A few advisors have notably higher mean CPIs — high-CPI students are clustering at popular advisors |
 | **< 0** | A few advisors have notably lower mean CPIs — low-CPI students are systematically concentrated |
 
-`|γ| < 0.5` is acceptable; `|γ| > 1.0` warrants investigation.
+`|γ| < 0.5` is acceptable; `|γ| > 1.0` warrants investigation. CPI Skewness is a **diagnostic cross-check** — use it alongside ERR, not as a standalone equity verdict.
 
 ---
 
 ## Reporting
 
-All metrics are computed by `metrics.compute_advisor_metrics()` and displayed in the **Metrics** panel after allocation finalization (Allocation Area → Metrics collapse → Advisor Metrics section), split into Satisfaction and Equity sub-sections. They also appear in the Analysis page for side-by-side policy comparison.
+All metrics are computed by `metrics.compute_advisor_metrics()` and displayed in the **Metrics** panel after allocation finalization, grouped as:
+
+- **Advisor Satisfaction** — MSES, LUR
+- **Advisor Equity — Load Distribution** — Empty Labs, Load Balance, Advisors Assigned
+- **Advisor Equity — Tier Mixing** — Entropy Ceiling, ERR, CPI Skewness
+
+They also appear in the Analysis page for side-by-side policy comparison.
 
 Per-advisor detail is available in `metrics["advisor"]["per_faculty"]`:
 
@@ -162,7 +207,7 @@ Per-advisor detail is available in `metrics["advisor"]["per_faculty"]`:
 |-------|-------------|
 | `mses` | Mean rank at which this advisor's students listed them |
 | `lur` | `actual_load / max_load` |
-| `entropy` | Normalized CPI entropy for this advisor's cohort |
+| `entropy` | $H_{\text{norm}}(a)$ — normalized CPI entropy for this advisor's cohort |
 | `mean_cpi` | Mean CPI of assigned students |
 | `student_count` | Number of students assigned |
 
@@ -170,6 +215,6 @@ Per-advisor detail is available in `metrics["advisor"]["per_faculty"]`:
 
 ## Notes
 
-- **Single-student advisors** always have `H_norm = 0` (one student, one tier, zero entropy). This is mathematically correct; interpret with that context.
-- **Tiny cohort mode** (`S < 10`): all students are Class A, so `K = 1` and entropy is identically 0. Entropy metrics are not meaningful in this mode.
-- **Quartile vs percentile mode**: `K` is detected automatically from student tier labels (3 in percentile mode, 4 in quartile mode). Baseline entropy values are not directly comparable across modes.
+- **Single-student advisors** always have $H_{\text{norm}} = 0$ (one student, one tier, zero entropy), and $H_{\text{max}} = 0$ as well — they contribute 0 to both numerator and denominator of ERR. This is mathematically correct; interpret with that context.
+- **Tiny cohort mode** (`S < 10`): all students are Class A, so $K = 1$ and entropy is identically 0. Tier mixing metrics are not meaningful in this mode.
+- **Quartile vs percentile mode**: $K$ is detected automatically from student tier labels (3 in percentile mode, 4 in quartile mode). Baseline entropy values are not directly comparable across modes.

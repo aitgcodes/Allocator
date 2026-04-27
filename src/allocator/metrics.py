@@ -342,9 +342,10 @@ def compute_advisor_metrics(
     {
         "avg_mses"          : float | None — mean MSES across assigned advisors
         "avg_lur"           : float | None — mean LUR across assigned advisors
-        "avg_entropy"       : float        — mean normalized CPI entropy across assigned advisors
-        "baseline_entropy"  : float        — load-aware ceiling [(F-r)·H_max(⌊S/F⌋)+r·H_max(⌈S/F⌉)]/F
-                                             computed over ALL faculty (F_total), including empty labs
+        "avg_entropy"       : float        — Σ entropy_i / F_total (empty labs = 0)
+        "baseline_entropy"  : float        — Σ H_max(actual_load_i) / F_total; the tightest
+                                             ceiling for this particular load distribution —
+                                             equity_retention is guaranteed ≤ 100 %
         "equity_retention"  : float        — avg_entropy / baseline_entropy × 100 (percentage)
         "cpi_skewness"      : float | None — sample skewness of advisor mean CPIs; None if n < 3
         "quartile_mode"     : bool         — True if quartile tier labels (A/B1/B2/C) were used
@@ -429,30 +430,35 @@ def compute_advisor_metrics(
 
     advisors_assigned = len(per_faculty)
 
-    # Average normalized entropy across all assigned advisors
+    # F_total is the authoritative denominator for both avg_entropy and
+    # baseline_entropy so the ratio is comparable across policies regardless
+    # of how many labs end up empty.
+    F_total = len(faculty) if faculty else advisors_assigned
+
+    # Average normalized entropy — sum over ALL faculty, empty labs contribute 0.
     avg_entropy = (
-        sum(d["entropy"] for d in per_faculty.values()) / advisors_assigned
-        if advisors_assigned else 0.0
+        sum(d["entropy"] for d in per_faculty.values()) / F_total
+        if F_total else 0.0
     )
 
-    # Load-aware entropy ceiling using ALL faculty (including empty labs).
-    # An advisor with n students can span at most min(n, K) distinct tiers.
-    # Max per-advisor entropy = log(min(n, K)) / log(K).
-    # Uses F_total so the ceiling is consistent across policies regardless of
-    # how many labs end up empty — empty labs contribute 0 to the numerator.
-    F_total = len(faculty) if faculty else advisors_assigned
-    S_total = len(students)
+    # Load-aware entropy ceiling — the maximum avg_entropy achievable for the
+    # *actual* load distribution produced by this policy.  For each advisor
+    # with n assigned students the per-advisor ceiling is
+    #   H_max(n) = log(min(n, K)) / log(K)
+    # (an advisor with 1 student cannot have diversity > 0; empty labs = 0).
+    # Dividing by F_total keeps the same scale as avg_entropy above, so
+    # equity_retention = avg_entropy / baseline_entropy is guaranteed ≤ 1.
     if F_total > 0 and K > 1:
-        n_lo = S_total // F_total
-        n_hi = n_lo + 1
-        r    = S_total % F_total          # advisors receiving n_hi students
-        ent_lo = (math.log(min(n_lo, K)) / log_K) if n_lo > 0 else 0.0
-        ent_hi = (math.log(min(n_hi, K)) / log_K) if n_hi > 0 else 0.0
-        baseline_entropy = ((F_total - r) * ent_lo + r * ent_hi) / F_total
+        baseline_entropy = sum(
+            (math.log(min(d["student_count"], K)) / log_K)
+            for d in per_faculty.values()
+        ) / F_total   # empty labs contribute 0 (not in per_faculty)
+        if baseline_entropy == 0.0:
+            baseline_entropy = 1.0  # guard: all advisors have 1 student → no diversity possible
     else:
         baseline_entropy = 1.0
 
-    # Equity Retention Rate
+    # Equity Retention Rate — guaranteed in [0, 100] by construction.
     equity_retention = (avg_entropy / baseline_entropy * 100.0) if baseline_entropy > 0 else 100.0
 
     # Avg MSES

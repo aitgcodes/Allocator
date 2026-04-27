@@ -7,7 +7,7 @@
   1. NPSS — primary student metric (CPI-weighted preference satisfaction)  
   2. PSI — secondary student metric (equal-weighted, global rank)  
   3. MSES — primary advisor satisfaction metric (mean rank students placed their advisor; lower = more enthusiastic)  
-  4. Equity Retention Rate — advisor equity metric (% of cohort's achievable entropy preserved; protocol-attributable)  
+  4. Equity Retention Rate — advisor equity metric (% of load-distribution's achievable entropy preserved; always in [0,100%])  
   5. CPI Skewness — diagnostic (asymmetry in advisor mean-CPI distribution; Fisher-Pearson formula, std-normalized)  
 **Diagnostic columns (not independent deciding metrics):** Overflow Count, % Assigned in Window, Avg LUR  
   — out-of-window assignments already score 0 in NPSS, so these columns explain *why* NPSS  
@@ -81,8 +81,8 @@
 
 ### 2a. Advisor Satisfaction
 
-| Dataset | Policy | Avg MSES ↓ | Avg LUR *(diag)* |
-|---------|--------|-----------|-----------------|
+| Dataset | Policy | Avg MSES ↓ | Avg LUR *(utilisation)* |
+|---------|--------|-----------|------------------------|
 | Original | least_loaded | 4.0806 | 71.0% |
 | Original | cpi_fill | 5.0484 | 71.0% |
 | Sample 1 (Random) | least_loaded | 2.3548 | 71.0% |
@@ -94,10 +94,25 @@
 | Sample 4 (High-CPI) | least_loaded | 1.3387 | 71.0% |
 | Sample 4 (High-CPI) | cpi_fill | 2.5161 | 71.0% |
 
-### 2b. Advisor Equity
+### 2b. Advisor Equity — Load Distribution
 
-| Dataset | Policy | Cohort Entropy Ceiling | Equity Retention % ↑ | CPI Skewness *(diag)* |
-|---------|--------|------------------------|----------------------|-----------------------|
+| Dataset | Policy | Advisors Assigned | Empty Labs ↓ |
+|---------|--------|-------------------|--------------|
+| Original | least_loaded | 31 | 0 |
+| Original | cpi_fill | 31 | 0 |
+| Sample 1 (Random) | least_loaded | 31 | 0 |
+| Sample 1 (Random) | cpi_fill | 31 | 0 |
+| Sample 2 (Clustered) | least_loaded | 31 | 0 |
+| Sample 2 (Clustered) | cpi_fill | 31 | 0 |
+| Sample 3 (Polarised) | least_loaded | 31 | 0 |
+| Sample 3 (Polarised) | cpi_fill | 31 | 0 |
+| Sample 4 (High-CPI) | least_loaded | 31 | 0 |
+| Sample 4 (High-CPI) | cpi_fill | 31 | 0 |
+
+### 2c. Advisor Equity — Tier Mixing
+
+| Dataset | Policy | Load-Aware Entropy Ceiling | Equity Retention % ↑ | CPI Skewness *(diag)* |
+|---------|--------|----------------------------|----------------------|-----------------------|
 | Original | least_loaded | 0.2097 | 76.9% | 0.4597 |
 | Original | cpi_fill | 0.2097 | 76.9% | 0.2033 |
 | Sample 1 (Random) | least_loaded | 0.2097 | 92.3% | 0.1591 |

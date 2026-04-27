@@ -179,7 +179,7 @@ def build_report(all_results: Dict[str, dict], scenario_labels: Dict[str, str]) 
         "  1. NPSS — primary student metric (CPI-weighted preference satisfaction)  ",
         "  2. PSI — secondary student metric (equal-weighted, global rank)  ",
         "  3. MSES — primary advisor satisfaction metric (mean rank students placed their advisor; lower = more enthusiastic)  ",
-        "  4. Equity Retention Rate — advisor equity metric (% of cohort's achievable entropy preserved; protocol-attributable)  ",
+        "  4. Equity Retention Rate — advisor equity metric (% of load-distribution's achievable entropy preserved; always in [0,100%])  ",
         "  5. CPI Skewness — diagnostic (asymmetry in advisor mean-CPI distribution; Fisher-Pearson formula, std-normalized)  ",
         "**Diagnostic columns (not independent deciding metrics):** Overflow Count, % Assigned in Window, Avg LUR  ",
         "  — out-of-window assignments already score 0 in NPSS, so these columns explain *why* NPSS  ",
@@ -251,8 +251,8 @@ def build_report(all_results: Dict[str, dict], scenario_labels: Dict[str, str]) 
         "",
         "### 2a. Advisor Satisfaction",
         "",
-        "| Dataset | Policy | Avg MSES ↓ | Avg LUR *(diag)* |",
-        "|---------|--------|-----------|-----------------|",
+        "| Dataset | Policy | Avg MSES ↓ | Avg LUR *(utilisation)* |",
+        "|---------|--------|-----------|------------------------|",
     ]
 
     for ds_key, policy_results in all_results.items():
@@ -269,10 +269,28 @@ def build_report(all_results: Dict[str, dict], scenario_labels: Dict[str, str]) 
 
     lines += [
         "",
-        "### 2b. Advisor Equity",
+        "### 2b. Advisor Equity — Load Distribution",
         "",
-        "| Dataset | Policy | Cohort Entropy Ceiling | Equity Retention % ↑ | CPI Skewness *(diag)* |",
-        "|---------|--------|------------------------|----------------------|-----------------------|",
+        "| Dataset | Policy | Advisors Assigned | Empty Labs ↓ |",
+        "|---------|--------|-------------------|--------------|",
+    ]
+
+    for ds_key, policy_results in all_results.items():
+        label = scenario_labels.get(ds_key, ds_key)
+        for policy, res in policy_results.items():
+            adv = res["metrics"]["advisor"]
+            lines.append(
+                f"| {label} | {policy} "
+                f"| {adv.get('advisors_assigned', '?')} "
+                f"| {adv.get('empty_labs', '?')} |"
+            )
+
+    lines += [
+        "",
+        "### 2c. Advisor Equity — Tier Mixing",
+        "",
+        "| Dataset | Policy | Load-Aware Entropy Ceiling | Equity Retention % ↑ | CPI Skewness *(diag)* |",
+        "|---------|--------|----------------------------|----------------------|-----------------------|",
     ]
 
     for ds_key, policy_results in all_results.items():

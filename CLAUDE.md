@@ -65,7 +65,7 @@ python scripts/make_preference_sheet.py form_responses.csv
 | `state.py` | Dataclasses: `Student`, `Faculty`, `AllocationSnapshot`, `SnapshotList` |
 | `data_loader.py` | CSV/Excel I/O, raw Google Form column normalisation, preprocessing pipeline (`preprocess_students`), validation, Phase-0 report read/write |
 | `visualizer.py` | Plotly figure builders: bipartite graph, load bars, step log, stats panel |
-| `metrics.py` | NPSS (CPI-weighted, full-list denominator) and PSI (equal-weighted) satisfaction scores |
+| `metrics.py` | NPSS (CPI-weighted, full-list denominator), PSI (equal-weighted), and advisor metrics: MSES, LUR, Equity Retention Rate (avg entropy / actual-load ceiling × 100, bounded [0,100%]), CPI skewness |
 
 ### Data flow
 

@@ -682,20 +682,20 @@ def _render_metrics_panel(metrics: dict, policy: str = "") -> html.Div:
         if tier_rows else html.P("No tier data available.", className="text-muted")
     )
 
-    # ---- Advisor metrics section (satisfaction + equity) ----
+    # ---- Advisor metrics section ----
     advisor = metrics.get("advisor", {})
     advisor_section = []
     if advisor:
-        qmode             = advisor.get("quartile_mode", False)
-        K                 = advisor.get("K", 3)
-        adv_asgn          = advisor.get("advisors_assigned", 0)
-        tier_note         = f"{'A · B1 · B2 · C' if qmode else 'A · B · C'} ({K} tiers)"
+        qmode    = advisor.get("quartile_mode", False)
+        K        = advisor.get("K", 3)
+        adv_asgn = advisor.get("advisors_assigned", 0)
+        tier_note = f"{'A · B1 · B2 · C' if qmode else 'A · B · C'} ({K} tiers)"
 
         # --- Satisfaction ---
         avg_mses = advisor.get("avg_mses")
         avg_lur  = advisor.get("avg_lur")
 
-        mses_text  = f"{avg_mses:.2f}" if avg_mses is not None else "N/A"
+        mses_text = f"{avg_mses:.2f}" if avg_mses is not None else "N/A"
         if avg_mses is None:
             mses_color = "text-secondary"
         elif avg_mses <= 2:
@@ -706,7 +706,6 @@ def _render_metrics_panel(metrics: dict, policy: str = "") -> html.Div:
             mses_color = "text-danger"
 
         lur_text  = f"{avg_lur * 100:.1f}%" if avg_lur is not None else "N/A"
-        lur_color = "text-primary"
 
         satisfaction_cards = dbc.Row([
             dbc.Col(dbc.Card(dbc.CardBody([
@@ -715,32 +714,52 @@ def _render_metrics_panel(metrics: dict, policy: str = "") -> html.Div:
                           className=mses_color),
                 html.Div("Avg MSES", className="fw-bold"),
                 html.Small(
-                    "Mean Student Enthusiasm Score. Mean rank at which assigned students listed "
-                    "their advisor. Lower = students were more enthusiastic about their assignment.",
+                    "Mean Student Enthusiasm Score — mean rank at which assigned students "
+                    "listed their advisor. Lower = more enthusiastic assignments.",
                     className="text-muted"),
             ]), className="mb-2 border-0 bg-light"), md=6),
 
             dbc.Col(dbc.Card(dbc.CardBody([
                 html.Span(lur_text,
                           style={"fontSize": "1.6rem", "fontWeight": "bold"},
-                          className=lur_color),
-                html.Div("Avg Load Utilization", className="fw-bold"),
+                          className="text-primary"),
+                html.Div("Avg LUR", className="fw-bold"),
                 html.Small(
-                    "Mean actual-load / max-load across all advisors. "
-                    "Per-advisor utilization is shown in the Tier Heatmap.",
+                    "Mean actual-load / max-load across assigned advisors. "
+                    "Capacity utilisation signal — not an equity measure. "
+                    "Per-advisor detail in the Tier Heatmap.",
                     className="text-muted"),
             ]), className="mb-2 border-0 bg-light"), md=6),
         ])
 
-        # --- Equity ---
-        avg_entropy       = advisor.get("avg_entropy", 0.0)
-        baseline_entropy  = advisor.get("baseline_entropy", 0.0)
-        equity_retention  = advisor.get("equity_retention", 100.0)
-        skewness          = advisor.get("cpi_skewness")
-        empty_labs        = advisor.get("empty_labs", 0)
+        # --- Equity: Load Distribution ---
+        empty_labs = advisor.get("empty_labs", 0)
+        per_faculty = advisor.get("per_faculty", {})
+        assigned_loads = [d["student_count"] for d in per_faculty.values()] if per_faculty else []
+        max_load_val   = max(assigned_loads) if assigned_loads else 0
+        load_balance   = max_load_val if empty_labs > 0 else (
+            max_load_val - min(assigned_loads) if assigned_loads else 0
+        )
 
-        baseline_text = f"{baseline_entropy:.3f}"
-        err_text      = f"{equity_retention:.1f}%"
+        empty_badge = dbc.Badge(
+            f"{empty_labs} empty lab{'s' if empty_labs != 1 else ''}",
+            color="warning" if empty_labs else "success", className="me-2",
+        )
+        lb_badge = dbc.Badge(
+            f"Load balance: {load_balance}",
+            color="light", text_color="dark", className="me-2",
+        )
+        asgn_badge = dbc.Badge(
+            f"{adv_asgn} advisors assigned · {tier_note}",
+            color="light", text_color="dark", className="me-2",
+        )
+
+        # --- Equity: Tier Mixing ---
+        baseline_entropy = advisor.get("baseline_entropy", 0.0)
+        equity_retention = advisor.get("equity_retention", 100.0)
+        skewness         = advisor.get("cpi_skewness")
+
+        err_text = f"{equity_retention:.1f}%"
         if equity_retention >= 80:
             err_color = "text-success"
         elif equity_retention >= 60:
@@ -751,18 +770,18 @@ def _render_metrics_panel(metrics: dict, policy: str = "") -> html.Div:
         skew_text  = f"{skewness:.3f}" if skewness is not None else "N/A"
         skew_color = "text-warning" if skewness is not None and abs(skewness) > 1 else "text-primary"
 
-        equity_cards = dbc.Row([
+        tier_mixing_cards = dbc.Row([
             dbc.Col(dbc.Card(dbc.CardBody([
-                html.Span(baseline_text,
+                html.Span(f"{baseline_entropy:.3f}",
                           style={"fontSize": "1.6rem", "fontWeight": "bold"},
                           className="text-secondary"),
                 html.Div("Entropy Ceiling", className="fw-bold"),
                 html.Small(
-                    f"Max achievable equity given load ({adv_asgn} assigned · "
-                    f"{empty_labs} empty · {tier_note}). "
-                    f"Reaches 1.0 only when each advisor receives ≥ K students.",
+                    "H_baseline = Σ H_max(actual_load) / F. "
+                    "H_max(n) = log(min(n, K)) / log(K). "
+                    "Reaches 1.0 only when every advisor receives ≥ K students.",
                     className="text-muted"),
-            ]), className="mb-2 border-0 bg-light"), md=4),
+            ]), className="mb-2 border-0 bg-light"), md=6),
 
             dbc.Col(dbc.Card(dbc.CardBody([
                 html.Span(err_text,
@@ -770,43 +789,45 @@ def _render_metrics_panel(metrics: dict, policy: str = "") -> html.Div:
                           className=err_color),
                 html.Div("Equity Retention Rate", className="fw-bold"),
                 html.Small(
-                    "Percentage of the cohort's achievable equity preserved by this policy. "
-                    "Protocol-attributable; compare across policies on the same cohort.",
+                    "H̄_norm / H_baseline × 100 %. Fraction of the maximum possible tier "
+                    "mixing achieved given this run's load distribution. "
+                    "Always in [0, 100 %]. Read alongside Empty Labs.",
                     className="text-muted"),
-            ]), className="mb-2 border-0 bg-light"), md=4),
+            ]), className="mb-2 border-0 bg-light"), md=6),
+        ])
 
+        skew_card = dbc.Row([
             dbc.Col(dbc.Card(dbc.CardBody([
                 html.Span(skew_text,
                           style={"fontSize": "1.6rem", "fontWeight": "bold"},
                           className=skew_color),
                 html.Div("CPI Skewness", className="fw-bold"),
                 html.Small(
-                    "Asymmetry in the distribution of advisor mean CPIs. "
-                    "Fisher-Pearson formula — std-normalized, scale-invariant. "
-                    "|skew| > 1 warrants attention.",
+                    "Diagnostic — asymmetry in advisor mean-CPI distribution. "
+                    "Fisher-Pearson, std-normalized. |γ| > 1 warrants attention. "
+                    "Use alongside ERR, not as a standalone verdict.",
                     className="text-muted"),
             ]), className="mb-2 border-0 bg-light"), md=4),
         ])
 
-        empty_badge = dbc.Badge(
-            f"{empty_labs} empty lab{'s' if empty_labs != 1 else ''}",
-            color="secondary", className="me-2",
-        ) if empty_labs else dbc.Badge("0 empty labs", color="success", className="me-2")
         advisor_section = [
-            html.H6("Advisor Metrics", className="mt-3 mb-1 text-muted"),
-            html.Small("Satisfaction", className="text-muted fw-bold d-block mb-1"),
+            html.H6("Advisor Satisfaction", className="mt-3 mb-1 text-muted"),
             satisfaction_cards,
-            html.Small("Equity", className="text-muted fw-bold d-block mt-2 mb-1"),
-            equity_cards,
-            html.Div([empty_badge], className="mb-1"),
+            html.H6("Advisor Equity — Load Distribution",
+                    className="mt-3 mb-1 text-muted"),
+            html.Div([empty_badge, lb_badge, asgn_badge], className="mb-2"),
+            html.H6("Advisor Equity — Tier Mixing",
+                    className="mt-3 mb-1 text-muted"),
+            tier_mixing_cards,
+            skew_card,
             html.Small(
-                "See the 'Tier Heatmap' tab for per-advisor load utilization and tier breakdown.",
+                "See the 'Tier Heatmap' tab for per-advisor load and tier breakdown.",
                 className="text-muted d-block mt-1",
             ),
         ]
 
     return html.Div([
-        html.H5("Satisfaction Metrics", className="mt-3 mb-2"),
+        html.H5("Student Outcomes", className="mt-3 mb-2"),
         html.H6("Student Satisfaction", className="mb-1 text-muted"),
         dbc.Row([
             dbc.Col(primary_card, md=4),
@@ -2526,15 +2547,15 @@ def _build_completion_panel(
     loads        = list(faculty_loads.values())
     load_balance = max(loads) - min(loads) if len(loads) >= 2 else 0
 
-    npss    = metrics.get("npss", 0.0)
-    psi     = metrics.get("mean_psi", 0.0)
-    entropy = metrics.get("advisor", {}).get("avg_entropy", 0.0)
+    npss = metrics.get("npss", 0.0)
+    psi  = metrics.get("mean_psi", 0.0)
+    err  = metrics.get("advisor", {}).get("equity_retention", 100.0)
 
     summary_badges = html.Div([
-        dbc.Badge(f"NPSS: {npss:.3f}",             color="primary",   className="me-1"),
-        dbc.Badge(f"PSI: {psi:.3f}",               color="secondary", className="me-1"),
-        dbc.Badge(f"Entropy: {entropy:.3f}",        color="info",      className="me-1"),
-        dbc.Badge(f"Load balance: {load_balance}",  color="light",
+        dbc.Badge(f"NPSS: {npss:.3f}",            color="primary",   className="me-1"),
+        dbc.Badge(f"PSI: {psi:.3f}",              color="secondary", className="me-1"),
+        dbc.Badge(f"ERR: {err:.1f}%",             color="info",      className="me-1"),
+        dbc.Badge(f"Load balance: {load_balance}", color="light",
                   text_color="dark", className="me-1"),
     ], className="mb-2")
 

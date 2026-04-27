@@ -608,41 +608,59 @@ The system-level score is the mean MSES across all assigned advisors. Lower is b
 | ≤ 4.0 | Good match overall |
 | > 4.0 | Students landing further down their lists; check capacity or preference diversity |
 
-**Avg Load Utilization (LUR)** is the mean of `actual_load / max_load` across all advisors, reported as a percentage. It summarises how close advisors are to their stated capacity system-wide. Per-advisor LUR appears in the Tier Heatmap y-axis labels.
+**Avg Load Utilization (LUR)** is the mean of `actual_load / max_load` across assigned advisors, reported as a percentage. It is a **capacity utilisation signal** — it summarises how fully the allocated seats are being used — not an equity measure. Two allocations with very different load spreads can have identical Avg LUR. Per-advisor LUR appears in the Tier Heatmap y-axis labels.
 
-#### Advisor Equity Metrics
+#### Advisor Equity — Load Distribution
 
-**Load-Aware Entropy Ceiling** is the maximum average normalized entropy achievable given both the cohort's tier structure and the actual number of students each advisor receives. An advisor with *n* students can span at most *min(n, K)* distinct tiers, so their entropy ceiling is `log(min(n, K)) / log(K)`. The system-level ceiling is the weighted average of this across all advisors at their floor or ceiling load. It equals 1.0 only when each advisor receives at least *K* students — otherwise it is structurally below 1.0 regardless of the policy.
+These metrics measure whether students were spread fairly across advisors.
 
-**Equity Retention Rate (ERR)** measures what fraction of that ceiling the policy actually preserved:
+**Empty Labs** is the count of advisors who received no students. Shown as a badge in the completion panel and metrics section.
+
+**Load Balance** = `max(advisor loads) − min(advisor loads)` across **all** advisors including empty labs. A value of 0 means identical loads; 1 is the minimum non-zero spread and is typical in well-balanced runs.
+
+#### Advisor Equity — Tier Mixing
+
+These metrics measure whether each advisor received a diverse cross-section of CPI tiers.
+
+**Per-advisor entropy** $H_{\text{norm}}(a)$ is the normalized Shannon entropy of the CPI-tier distribution within advisor *a*'s cohort:
 
 $$
-\text{ERR} = \frac{\overline{H}_{\text{norm}}}{H_{\text{baseline}}} \times 100\%
+H_{\text{norm}}(a) = \frac{-\displaystyle\sum_{k=1}^{K} p_k(a)\,\log p_k(a)}{\log K}
 $$
 
-where $\overline{H}_{\text{norm}}$ is the mean per-advisor normalized CPI entropy and $H_{\text{baseline}}$ is the load-aware ceiling. ERR is protocol-attributable — values are directly comparable across policies on the same cohort.
+where $K$ is the number of tiers (3 in percentile mode, 4 in quartile mode) and $p_k(a)$ is the fraction of *a*'s students in tier *k*. $H_{\text{norm}} \in [0,1]$: 0 when all students are in the same tier, 1 when perfectly uniform across all tiers.
+
+The system-level figure $\overline{H}_{\text{norm}}$ sums over all *F* faculty (empty labs contribute 0) and divides by *F*.
+
+**Load-Aware Entropy Ceiling** $H_{\text{baseline}}$ is the tightest upper bound on $\overline{H}_{\text{norm}}$ for this run's actual load distribution. The per-advisor ceiling is:
+
+$$
+H_{\text{max}}(n) = \frac{\log \min(n,\, K)}{\log K}
+$$
+
+since an advisor with $n$ students can represent at most $\min(n, K)$ distinct tiers. The system-level ceiling averages this over all *F* advisors using their actual loads (empty labs contribute 0):
+
+$$
+H_{\text{baseline}} = \frac{1}{F} \sum_{a=1}^{F} H_{\text{max}}\!\left(\text{actual\_load}(a)\right)
+$$
+
+This guarantees $\overline{H}_{\text{norm}} \leq H_{\text{baseline}}$, so ERR is always in [0 %, 100 %].
+
+**Equity Retention Rate (ERR)** measures what fraction of that ceiling the policy actually achieved:
+
+$$
+\text{ERR} = \frac{\overline{H}_{\text{norm}}}{H_{\text{baseline}}} \times 100\,\%
+$$
+
+ERR answers "given how this run distributed students across advisors, what fraction of the maximum possible tier mixing was achieved?" Because the baseline reflects the actual load distribution, read ERR together with Empty Labs and Load Balance for the full equity picture.
 
 | ERR | Interpretation |
 |-----|----------------|
-| ≥ 80% | Policy preserved most achievable equity |
-| 60–80% | Moderate preservation; some tier concentration |
+| ≥ 80% | Policy used most of its tier-mixing headroom |
+| 60–80% | Moderate mixing; some tier concentration within advisors |
 | < 60% | Significant tier concentration introduced by the policy |
 
-Both the baseline entropy (cohort constraint) and ERR (protocol score) are reported together.
-
-**CPI Skewness** measures whether the distribution of advisor mean CPIs is symmetric or skewed — whether a few advisors are receiving a disproportionately high- or low-CPI cohort.
-
-For each advisor $a$, compute the mean CPI of their assigned students. Collect these across all assigned advisors and compute Fisher's adjusted sample skewness:
-
-$$
-\gamma = \frac{A}{(A-1)(A-2)} \sum_{a=1}^{A} \left(\frac{\bar{x}_a - \bar{\bar{x}}}{s}\right)^3
-$$
-
-The division by `s` normalises for the spread of the cohort's CPI distribution, making this metric scale-invariant. `|γ| < 0.5` is acceptable; `|γ| > 1.0` warrants investigation.
-
-#### Load Balance
-
-Load Balance = `max(advisor loads) − min(advisor loads)` across all advisors in the final allocation (including any with zero students). It appears only in the **completion panel summary badge row**. A value of 0 means identical loads. A value of 1 is the minimum non-zero spread and is typical in well-balanced runs.
+**CPI Skewness** *(diagnostic)* measures asymmetry in the distribution of advisor mean CPIs. Fisher-Pearson formula, std-normalized and scale-invariant. `|γ| < 0.5` is acceptable; `|γ| > 1.0` warrants investigation. Use alongside ERR, not as a standalone equity verdict.
 
 ---
 
@@ -656,15 +674,17 @@ When interpreting a single run or comparing policies, use this hierarchy:
 
 3. **MSES** *(primary advisor satisfaction metric)* — check whether students were matched to advisors they genuinely sought out. A rising MSES across policies indicates students are landing further from their preferences on the advisor's side.
 
-4. **Equity Retention Rate** *(advisor equity)* — compare across policies on the same cohort. A higher ERR means the policy preserved more of the cohort's achievable tier diversity. The baseline entropy value shows how constrained the cohort was to begin with.
+4. **LUR** *(capacity utilisation)* — how fully are allocated seats being used? Not an equity measure; two runs with very different load spreads can have identical Avg LUR.
 
-5. **Advisor Tier Distribution Heatmap** *(visual diagnostic)* — shows which tiers each advisor's cohort contains, row-normalised by capacity. Use it to understand *why* ERR is high or low for specific advisors.
+5. **Empty Labs + Load Balance** *(load distribution equity)* — check whether students were spread fairly. Empty Labs flags advisors bypassed entirely; Load Balance gives the full spread. These two together capture load equity independently of tier composition.
 
-6. **Load Balance** *(sanity check)* — max minus min of final advisor loads. A quick scan; expand the Metrics or Advisor Loads panels for detail.
+6. **Equity Retention Rate + Entropy Ceiling** *(tier mixing equity)* — given how students were distributed, how much of the possible tier diversity was achieved? Read ERR alongside the ceiling: a high ERR under a low ceiling (few students per advisor) is different from a high ERR under a high ceiling.
 
-7. **CPI Skewness** *(diagnostic)* — cross-check for CPI concentration in the advisor mean-CPI distribution. Already std-normalized (scale-invariant). `|γ| > 1.0` warrants attention.
+7. **Advisor Tier Distribution Heatmap** *(visual diagnostic)* — shows which tiers each advisor's cohort contains, row-normalised by capacity. Use it to understand *why* ERR is high or low for specific advisors.
 
-8. **Overflow Count** *(protocol-compliance diagnostic)* — reports placements beyond the tier `N_tier` window. For window-applying policies (`least_loaded`, `nonempty`) this signals near-overflow stress. For `cpi_fill` and `tiered_rounds` — which apply no window during assignment — it is purely informational (blue badge, not red). It does not affect NPSS.
+8. **CPI Skewness** *(diagnostic)* — cross-check for CPI concentration in the advisor mean-CPI distribution. Already std-normalized (scale-invariant). `|γ| > 1.0` warrants attention. Use alongside ERR, not as a standalone verdict.
+
+9. **Overflow Count** *(protocol-compliance diagnostic)* — reports placements beyond the tier `N_tier` window. For window-applying policies (`least_loaded`, `nonempty`) this signals near-overflow stress. For `cpi_fill` and `tiered_rounds` — which apply no window during assignment — it is purely informational (blue badge, not red). It does not affect NPSS.
 
 **If metrics disagree:** this is normal. The four policies trade off across dimensions rather than one uniformly dominating. The choice is a value judgement about institutional priorities — merit-weighted access, equitable treatment, load balance, or operator transparency — not a metric-determined optimum.
 
