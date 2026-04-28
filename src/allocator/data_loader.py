@@ -246,18 +246,25 @@ def load_faculty(path: str | Path) -> List[Faculty]:
 
     df.columns = [c.strip().lower() for c in df.columns]
 
-    required = {"faculty_id", "name"}
-    missing = required - set(df.columns)
-    if missing:
-        raise ValueError(f"faculty file missing columns: {missing}")
+    if "name" not in df.columns:
+        raise ValueError("faculty file missing columns: {'name'}")
 
+    has_faculty_id = "faculty_id" in df.columns
     has_max_load = "max_load" in df.columns
+
+    # Auto-assign IDs when faculty_id column is absent: sort by name, assign F01, F02, …
+    if not has_faculty_id:
+        sorted_names = sorted(df["name"].str.strip(), key=str.lower)
+        name_to_id = {n: f"F{i+1:02d}" for i, n in enumerate(sorted_names)}
 
     faculty: List[Faculty] = []
     seen_ids: set[str] = set()
 
     for _, row in df.iterrows():
-        fid = _clean_id(row["faculty_id"])
+        if has_faculty_id:
+            fid = _clean_id(row["faculty_id"])
+        else:
+            fid = name_to_id.get(str(row["name"]).strip(), "")
         if not fid:
             continue
         if fid in seen_ids:
