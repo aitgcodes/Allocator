@@ -367,6 +367,26 @@ def _build_meta(S, F, ratio, mode, p_low, p_mid, p_high, p_low_pct, p_high_pct, 
 # Empty-lab risk analysis (used by LL and Adaptive LL)
 # ---------------------------------------------------------------------------
 
+def _r1_assigned_ids(
+    students: List[Student],
+    faculty: List[Faculty],
+) -> Set[str]:
+    """
+    Simulate Round 1 bucket picks (highest-CPI wins each faculty's first-choice slot).
+    Returns the set of student IDs assigned in Round 1.
+    No mutations; used to compute tier_c_remaining for the empty-lab check.
+    """
+    fac_ids = {f.id for f in faculty}
+    buckets: Dict[str, List[Student]] = defaultdict(list)
+    for s in students:
+        if s.preferences and s.preferences[0] in fac_ids:
+            buckets[s.preferences[0]].append(s)
+    assigned: Set[str] = set()
+    for applicants in buckets.values():
+        assigned.add(_sorted_by_cpi(applicants)[0].id)
+    return assigned
+
+
 def simulate_tiers_ab(
     students: List[Student],
     faculty: List[Faculty],
@@ -383,14 +403,14 @@ def simulate_tiers_ab(
     """
     faculty_map   = {f.id: f for f in faculty}
     faculty_loads = {f.id: 0 for f in faculty}
-    assigned: Set[str] = set()
-    fac_ids = {f.id for f in faculty}
 
-    # Round 1: highest-CPI first-choice student wins each faculty's single pick
+    # Round 1: replicate bucket logic to populate loads correctly
+    fac_ids = {f.id for f in faculty}
     buckets: Dict[str, List[Student]] = defaultdict(list)
     for s in students:
         if s.preferences and s.preferences[0] in fac_ids:
             buckets[s.preferences[0]].append(s)
+    assigned: Set[str] = set()
     for fid, applicants in buckets.items():
         picked = _sorted_by_cpi(applicants)[0]
         assigned.add(picked.id)
@@ -427,17 +447,21 @@ def check_empty_lab_risk(
 
     Returns None (no risk), or (level, count) where:
       "s_lt_f"  S < F; count = guaranteed empty labs (F − S).
-      "e_gt_c"  E_after_B > |C|; count = guaranteed empty labs (E_after_B − |C|).
+      "e_gt_c"  E_after_B > |C_remaining|; count = guaranteed empty labs.
+
+    |C_remaining| = C-tier students NOT assigned in the simulated Round 1.
+    C students assigned in Round 1 are already placed and cannot fill empty labs.
 
     Prerequisite: students have .tier set and meta contains N_A, N_B.
     """
     S, F = len(students), len(faculty)
     if S < F:
         return ("s_lt_f", F - S)
-    tier_c = sum(1 for s in students if s.tier == "C")
+    r1_ids = _r1_assigned_ids(students, faculty)
+    tier_c_remaining = sum(1 for s in students if s.tier == "C" and s.id not in r1_ids)
     E = simulate_tiers_ab(students, faculty, meta["N_A"], meta["N_B"])
-    if E > tier_c:
-        return ("e_gt_c", E - tier_c)
+    if E > tier_c_remaining:
+        return ("e_gt_c", E - tier_c_remaining)
     return None
 
 
@@ -447,8 +471,9 @@ def phase0_optimize_caps(
     meta: dict,
 ) -> Tuple[int, int, int, bool]:
     """
-    Find the minimum N_A, N_B caps such that E_after_B <= |C| (Adaptive LL).
+    Find the minimum N_A, N_B caps such that E_after_B <= |C_remaining| (Adaptive LL).
 
+    |C_remaining| = C-tier students not assigned in the simulated Round 1.
     Invariant: N_A <= N_B <= F (Tier A always at least as protected as Tier B).
     N_B expands first; N_A expands only after N_B reaches F.
 
@@ -456,18 +481,19 @@ def phase0_optimize_caps(
     structural=True means no window adjustment can resolve the empty-lab deficit.
     """
     F = len(faculty)
-    tier_c = sum(1 for s in students if s.tier == "C")
+    r1_ids = _r1_assigned_ids(students, faculty)
+    tier_c_remaining = sum(1 for s in students if s.tier == "C" and s.id not in r1_ids)
     N_A, N_B = meta["N_A"], meta["N_B"]
 
     while True:
         E = simulate_tiers_ab(students, faculty, N_A, N_B)
-        if E <= tier_c:
+        if E <= tier_c_remaining:
             return N_A, N_B, E, False
         if N_B < F:
             N_B += 1
         elif N_A < N_B:
             N_A += 1
-        else:                    # N_A = N_B = F, still E > |C|
+        else:                    # N_A = N_B = F, still E > |C_remaining|
             return N_A, N_B, E, True
 
 

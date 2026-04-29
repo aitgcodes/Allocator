@@ -9,6 +9,7 @@ import pytest
 
 from src.allocator.state import Faculty, Student
 from src.allocator.allocation import (
+    _r1_assigned_ids,
     check_empty_lab_risk,
     phase0,
     phase0_optimize_caps,
@@ -412,11 +413,12 @@ class TestAdaptiveLLEndToEnd:
         f_for_pred = copy.deepcopy(faculty)
         s_for_pred, f_for_pred, meta, _ = phase0(s_for_pred, f_for_pred)
         N_A, N_B = meta["N_A"], meta["N_B"]
-        tier_c = sum(1 for s in s_for_pred if s.tier == "C")
+        r1_ids = _r1_assigned_ids(s_for_pred, f_for_pred)
+        tier_c_remaining = sum(1 for s in s_for_pred if s.tier == "C" and s.id not in r1_ids)
 
         # Step 2: compute prediction using the real tier distribution
         E = simulate_tiers_ab(s_for_pred, f_for_pred, N_A=N_A, N_B=N_B)
-        predicted_empty = max(0, E - tier_c)
+        predicted_empty = max(0, E - tier_c_remaining)
 
         # Step 3: run full LL allocation
         assignments, _, _, _ = run_full_allocation(
