@@ -558,7 +558,7 @@ def _render_student_picker(student, faculty_map, faculty_loads, meta, queue_idx,
 # Metrics panel renderer
 # ---------------------------------------------------------------------------
 
-def _render_metrics_panel(metrics: dict, policy: str = "") -> html.Div:
+def _render_metrics_panel(metrics: dict, policy: str = "", meta: dict = None) -> html.Div:
     """
     Render the satisfaction metrics as a Dash component panel.
 
@@ -642,6 +642,17 @@ def _render_metrics_panel(metrics: dict, policy: str = "") -> html.Div:
                     style={"fontSize": "0.9rem"},
                 )
             ]
+
+    # Structural deficit badge (Adaptive LL only)
+    if meta and meta.get("structural_deficit"):
+        overflow_badge.append(
+            dbc.Badge(
+                "✗ Structural deficit — some labs unfillable even at full-list caps",
+                color="danger",
+                className="mb-2 me-2",
+                style={"fontSize": "0.9rem"},
+            )
+        )
 
     # Per-tier breakdown table
     tier_rows = []
@@ -1575,18 +1586,40 @@ def cb_run(n_phase0, n_full, loaded):
     faculty  = _app_state["faculty"]
 
     def _phase0_status_msg(students, faculty, meta):
+        tier_c = sum(1 for s in students if s.tier == "C")
+        S, F_count = len(students), len(faculty)
+
         if meta.get("mode") == "quartile":
-            return (f"Phase 0 complete — report saved to {OUTPUT_DIR}/. "
+            base = (f"Phase 0 complete — "
                     f"Tier A={sum(1 for s in students if s.tier=='A')} "
                     f"B1={sum(1 for s in students if s.tier=='B1')} "
                     f"B2={sum(1 for s in students if s.tier=='B2')} "
-                    f"C={sum(1 for s in students if s.tier=='C')} "
+                    f"C={tier_c} "
                     f"| N_A={meta['N_A']} N_B={meta['N_B']}")
-        return (f"Phase 0 complete — report saved to {OUTPUT_DIR}/. "
-                f"Tier A={sum(1 for s in students if s.tier=='A')} "
-                f"B={sum(1 for s in students if s.tier=='B')} "
-                f"C={sum(1 for s in students if s.tier=='C')} "
-                f"| N_A={meta['N_A']} N_B={meta['N_B']}")
+        else:
+            base = (f"Phase 0 complete — "
+                    f"Tier A={sum(1 for s in students if s.tier=='A')} "
+                    f"B={sum(1 for s in students if s.tier=='B')} "
+                    f"C={tier_c} "
+                    f"| N_A={meta['N_A']} N_B={meta['N_B']}")
+
+        if S < F_count:
+            return base + f" | ⚠ S < F: {F_count - S} lab(s) guaranteed empty"
+
+        if meta.get("structural_deficit"):
+            risk = check_empty_lab_risk(students, faculty, meta)
+            count = risk[1] if risk else "?"
+            return base + f" | ✗ Structural deficit: {count} lab(s) cannot be filled even at full caps"
+
+        if meta.get("caps_optimized"):
+            return (base +
+                    f" | ✓ Caps optimized (N_A {meta.get('N_A_baseline')}→{meta.get('N_A')}, "
+                    f"N_B {meta.get('N_B_baseline')}→{meta.get('N_B')}): empty-lab check passed")
+
+        risk = check_empty_lab_risk(students, faculty, meta)
+        if risk is None:
+            return base + " | ✓ Empty-lab check passed"
+        return base + f" | ⚠ {risk[1]} lab(s) predicted empty after Tiers A+B"
 
     def _build_risk_data(students, faculty, meta):
         """Return risk dict for store-risk, or None if no risk."""
@@ -2664,11 +2697,13 @@ def cb_autorun_main(n_clicks):
 
     N_A = meta["N_A"]
     N_B = meta["N_B"]
+    # adaptive_ll uses the same LL assignment rule; main_allocation only knows ll/nonempty
+    _alloc_policy = "least_loaded" if ALLOCATION_POLICY == "adaptive_ll" else ALLOCATION_POLICY
 
     try:
         assignments, snaps = main_allocation(
             students, faculty, assignments, faculty_loads, snaps, N_A, N_B,
-            policy=ALLOCATION_POLICY,
+            policy=_alloc_policy,
         )
     except Exception as e:
         return (
@@ -2834,7 +2869,8 @@ def _build_completion_panel(
                    color="link", size="sm", className="p-0 text-muted fw-bold"),
         summary_badges,
         dbc.Collapse(
-            _render_metrics_panel(metrics, policy=ALLOCATION_POLICY),
+            _render_metrics_panel(metrics, policy=ALLOCATION_POLICY,
+                                  meta=_app_state.get("meta")),
             id="collapse-metrics",
             is_open=False,
         ),
