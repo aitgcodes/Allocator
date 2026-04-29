@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import copy
 import math
+from collections import defaultdict
 from typing import Dict, List, Optional, Set, Tuple
 
 import numpy as np
@@ -171,6 +172,7 @@ def phase0(
     students: List[Student],
     faculty: List[Faculty],
     out_dir: Optional[str] = None,
+    optimize: bool = False,
 ) -> Tuple[List[Student], List[Faculty], dict, SnapshotList]:
     """
     Phase 0: Compute tiers, N_tier, max_load per faculty.
@@ -216,6 +218,10 @@ def phase0(
             s.n_tier = 2
         meta = _build_meta(S, F, ratio, "tiny-cohort", None, None, None, None, None, 0.1,
                            3, 5, common_max_load)
+        meta.update({
+            "N_A_baseline": 3, "N_B_baseline": 5,
+            "caps_optimized": False, "structural_deficit": False, "E_after_B": None,
+        })
         snaps = SnapshotList()
         assignments = {s.id: None for s in students}
         unassigned  = {s.id for s in students}
@@ -308,6 +314,31 @@ def phase0(
     snaps = SnapshotList()
     snaps.append(_snap([0], "Phase0", event, assignments, faculty_loads, unassigned))
 
+    # --- baseline cap fields (always present in meta) ---
+    meta.update({
+        "N_A_baseline":     N_A,
+        "N_B_baseline":     N_B,
+        "caps_optimized":   False,
+        "structural_deficit": False,
+        "E_after_B":        None,
+    })
+
+    # --- Adaptive LL: optimize caps if requested ---
+    if optimize:
+        risk = check_empty_lab_risk(students, faculty, meta)
+        if risk and risk[0] == "e_gt_c":
+            N_A_opt, N_B_opt, E_opt, structural = phase0_optimize_caps(students, faculty, meta)
+            meta["N_A"] = N_A_opt
+            meta["N_B"] = N_B_opt
+            meta["caps_optimized"] = (N_A_opt != N_A or N_B_opt != N_B)
+            meta["structural_deficit"] = structural
+            meta["E_after_B"] = E_opt
+            for s in students:
+                if s.tier == "A":
+                    s.n_tier = min(N_A_opt, len(s.preferences)) or N_A_opt
+                elif s.tier in ("B", "B1", "B2"):
+                    s.n_tier = min(N_B_opt, len(s.preferences)) or N_B_opt
+
     if out_dir:
         save_phase0_report(students, meta, out_dir)
 
@@ -330,6 +361,114 @@ def _build_meta(S, F, ratio, mode, p_low, p_mid, p_high, p_low_pct, p_high_pct, 
         "N_B":              N_B,
         "common_max_load":  common_max_load,
     }
+
+
+# ---------------------------------------------------------------------------
+# Empty-lab risk analysis (used by LL and Adaptive LL)
+# ---------------------------------------------------------------------------
+
+def simulate_tiers_ab(
+    students: List[Student],
+    faculty: List[Faculty],
+    N_A: int,
+    N_B: int,
+) -> int:
+    """
+    Cheap deterministic dry-run of Round 1 + Tiers A+B under the LL rule.
+    No snapshots, no mutations to students or faculty objects.
+    Requires students to have .tier set (call after phase0 tier classification).
+
+    Returns E_after_B: number of faculty with zero assigned students after the
+    simulated Round 1 + Tier A + Tier B passes.
+    """
+    faculty_map   = {f.id: f for f in faculty}
+    faculty_loads = {f.id: 0 for f in faculty}
+    assigned: Set[str] = set()
+    fac_ids = {f.id for f in faculty}
+
+    # Round 1: highest-CPI first-choice student wins each faculty's single pick
+    buckets: Dict[str, List[Student]] = defaultdict(list)
+    for s in students:
+        if s.preferences and s.preferences[0] in fac_ids:
+            buckets[s.preferences[0]].append(s)
+    for fid, applicants in buckets.items():
+        picked = _sorted_by_cpi(applicants)[0]
+        assigned.add(picked.id)
+        faculty_loads[fid] += 1
+
+    def _run_dry(pool: List[Student], cap: int) -> None:
+        for s in _sorted_by_cpi(pool):
+            if s.id in assigned:
+                continue
+            result = _least_loaded_choice(s, s.preferences[:cap], faculty_map, faculty_loads)
+            if result:
+                fid, _ = result
+                assigned.add(s.id)
+                faculty_loads[fid] += 1
+
+    quartile_mode = any(s.tier in ("B1", "B2") for s in students)
+    _run_dry([s for s in students if s.tier == "A"], N_A)
+    if quartile_mode:
+        _run_dry([s for s in students if s.tier in ("A", "B1")], N_B)
+        _run_dry([s for s in students if s.tier in ("A", "B1", "B2")], N_B)
+    else:
+        _run_dry([s for s in students if s.tier in ("A", "B")], N_B)
+
+    return sum(1 for load in faculty_loads.values() if load == 0)
+
+
+def check_empty_lab_risk(
+    students: List[Student],
+    faculty: List[Faculty],
+    meta: dict,
+) -> Optional[Tuple[str, int]]:
+    """
+    Check for empty-lab risk after Phase 0a tier classification.
+
+    Returns None (no risk), or (level, count) where:
+      "s_lt_f"  S < F; count = guaranteed empty labs (F − S).
+      "e_gt_c"  E_after_B > |C|; count = guaranteed empty labs (E_after_B − |C|).
+
+    Prerequisite: students have .tier set and meta contains N_A, N_B.
+    """
+    S, F = len(students), len(faculty)
+    if S < F:
+        return ("s_lt_f", F - S)
+    tier_c = sum(1 for s in students if s.tier == "C")
+    E = simulate_tiers_ab(students, faculty, meta["N_A"], meta["N_B"])
+    if E > tier_c:
+        return ("e_gt_c", E - tier_c)
+    return None
+
+
+def phase0_optimize_caps(
+    students: List[Student],
+    faculty: List[Faculty],
+    meta: dict,
+) -> Tuple[int, int, int, bool]:
+    """
+    Find the minimum N_A, N_B caps such that E_after_B <= |C| (Adaptive LL).
+
+    Invariant: N_A <= N_B <= F (Tier A always at least as protected as Tier B).
+    N_B expands first; N_A expands only after N_B reaches F.
+
+    Returns (N_A_opt, N_B_opt, E_after_B, structural) where
+    structural=True means no window adjustment can resolve the empty-lab deficit.
+    """
+    F = len(faculty)
+    tier_c = sum(1 for s in students if s.tier == "C")
+    N_A, N_B = meta["N_A"], meta["N_B"]
+
+    while True:
+        E = simulate_tiers_ab(students, faculty, N_A, N_B)
+        if E <= tier_c:
+            return N_A, N_B, E, False
+        if N_B < F:
+            N_B += 1
+        elif N_A < N_B:
+            N_A += 1
+        else:                    # N_A = N_B = F, still E > |C|
+            return N_A, N_B, E, True
 
 
 # ---------------------------------------------------------------------------
@@ -1348,7 +1487,7 @@ def run_full_allocation(
                       (keys: "npss", "overflow_count", "mean_psi",
                        "per_tier", "per_student")
     """
-    _POLICIES = {"least_loaded", "nonempty", "cpi_fill", "tiered_rounds"}
+    _POLICIES = {"least_loaded", "nonempty", "cpi_fill", "tiered_rounds", "adaptive_ll"}
     if policy not in _POLICIES:
         raise ValueError(f"Unknown policy {policy!r}. Choose from {_POLICIES}.")
     if policy == "tiered_rounds":
@@ -1358,7 +1497,9 @@ def run_full_allocation(
             "tiered_rounds_start() / tiered_rounds_resume() directly."
         )
 
-    students, faculty, meta, snaps = phase0(students, faculty, out_dir=out_dir)
+    students, faculty, meta, snaps = phase0(
+        students, faculty, out_dir=out_dir, optimize=(policy == "adaptive_ll")
+    )
     N_A = meta["N_A"]
     N_B = meta["N_B"]
     if policy == "cpi_fill":
@@ -1370,9 +1511,11 @@ def run_full_allocation(
         )
     else:
         assignments, faculty_loads, snaps = round1(students, faculty, snaps, r1_picks)
+        # adaptive_ll uses the same LL assignment rule with optimized caps
+        main_policy = "least_loaded" if policy == "adaptive_ll" else policy
         assignments, snaps = main_allocation(
             students, faculty, assignments, faculty_loads, snaps, N_A, N_B,
-            policy=policy,
+            policy=main_policy,
         )
     metrics = compute_metrics(
         students, assignments,

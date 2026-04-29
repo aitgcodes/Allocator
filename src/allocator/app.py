@@ -93,6 +93,7 @@ import plotly.graph_objects as go
 
 from .allocation import (
     _least_loaded_choice,
+    check_empty_lab_risk,
     cpi_fill_phase1,
     cpi_fill_phase2,
     _nonempty_choice,
@@ -938,6 +939,7 @@ def _control_card() -> dbc.Card:
                 dbc.Button("Run full allocation", id="btn-full",        color="primary", className="me-2"),
                 dbc.Button("Export HTML",         id="btn-html",        color="secondary", className="me-2"),
                 dbc.Button("View Phase 0 data",   id="btn-view-phase0", color="light",   outline=True, className="me-2"),
+                dbc.Button("Save Phase 0 CSV",    id="btn-save-phase0", color="light",   outline=True, className="me-2"),
                 dbc.Button("↺ Reset to Round 1",  id="btn-reset-r1",   color="warning", outline=True),
             ]),
             html.Div(id="run-status", className="mt-2 text-muted small"),
@@ -980,6 +982,8 @@ def _landing_layout() -> dbc.Container:
                             options=[
                                 {"label": "Least-loaded · highest preferred",
                                  "value": "least_loaded"},
+                                {"label": "Adaptive LL (auto-tuned caps, no empty labs)",
+                                 "value": "adaptive_ll"},
                                 {"label": "Highest preferred with vacancy",
                                  "value": "nonempty"},
                                 {"label": "CPI-Fill (two-phase)",
@@ -1158,6 +1162,22 @@ app.layout = dbc.Container([
             dbc.Button("Close", id="btn-close-phase0-modal", className="ms-auto", n_clicks=0)
         ),
     ], id="modal-phase0", size="xl", scrollable=True, is_open=False),
+
+    # Empty-lab risk warning modal (LL and Adaptive LL)
+    dcc.Store(id="store-risk", data=None),
+    dcc.Download(id="download-phase0"),
+    dbc.Modal([
+        dbc.ModalHeader(dbc.ModalTitle(id="modal-risk-title")),
+        dbc.ModalBody(id="modal-risk-body"),
+        dbc.ModalFooter([
+            dbc.Button("Proceed", id="btn-proceed-at-risk",
+                       color="warning", className="me-2",
+                       style={"display": "none"}),
+            dbc.Button("← Switch policy", id="btn-switch-from-risk",
+                       color="secondary", outline=True,
+                       style={"display": "none"}),
+        ]),
+    ], id="modal-risk-warning", is_open=False, centered=True, size="lg"),
 ], fluid=True)
 
 
@@ -1170,6 +1190,12 @@ app.layout = dbc.Container([
     Input("landing-policy-dropdown", "value"),
 )
 def cb_landing_policy_desc(value):
+    if value == "adaptive_ll":
+        return ("Adaptive variant of Least-loaded: Phase 0 auto-tunes the tier-cap "
+                "windows (N_A, N_B) to guarantee no empty labs when S ≥ F. If the "
+                "baseline caps leave empty labs inevitable, an optimized set of caps is "
+                "found before allocation proceeds. A warning is shown if no window "
+                "adjustment can resolve the deficit (structural issue).")
     if value == "nonempty":
         return ("Prioritises the highest-preferred advisor with no students yet assigned. "
                 "Falls back to the highest-preferred advisor with remaining capacity "
@@ -1532,6 +1558,7 @@ def cb_toggle_load_buttons(s, f):
     Output("step-slider",      "marks"),
     Output("step-slider",      "value"),
     Output("main-alloc-panel", "children", allow_duplicate=True),
+    Output("store-risk",       "data"),
     Input("btn-phase0", "n_clicks"),
     Input("btn-full",   "n_clicks"),
     State("store-loaded", "data"),
@@ -1540,28 +1567,58 @@ def cb_toggle_load_buttons(s, f):
 def cb_run(n_phase0, n_full, loaded):
     # Also accept preloaded data that was set before any upload callback fired
     if not loaded and not (_app_state["students"] and _app_state["faculty"]):
-        return "⚠ Please load student and faculty files first.", "idle", 0, {}, 0, dash.no_update
+        return "⚠ Please load student and faculty files first.", "idle", 0, {}, 0, dash.no_update, dash.no_update
 
     triggered = ctx.triggered_id
 
     students = _app_state["students"]
     faculty  = _app_state["faculty"]
 
+    def _phase0_status_msg(students, faculty, meta):
+        if meta.get("mode") == "quartile":
+            return (f"Phase 0 complete — report saved to {OUTPUT_DIR}/. "
+                    f"Tier A={sum(1 for s in students if s.tier=='A')} "
+                    f"B1={sum(1 for s in students if s.tier=='B1')} "
+                    f"B2={sum(1 for s in students if s.tier=='B2')} "
+                    f"C={sum(1 for s in students if s.tier=='C')} "
+                    f"| N_A={meta['N_A']} N_B={meta['N_B']}")
+        return (f"Phase 0 complete — report saved to {OUTPUT_DIR}/. "
+                f"Tier A={sum(1 for s in students if s.tier=='A')} "
+                f"B={sum(1 for s in students if s.tier=='B')} "
+                f"C={sum(1 for s in students if s.tier=='C')} "
+                f"| N_A={meta['N_A']} N_B={meta['N_B']}")
+
+    def _build_risk_data(students, faculty, meta):
+        """Return risk dict for store-risk, or None if no risk."""
+        S, F_count = len(students), len(faculty)
+        if S < F_count:
+            return {"type": "s_lt_f", "count": F_count - S, "policy": ALLOCATION_POLICY,
+                    "structural": False}
+        risk = check_empty_lab_risk(students, faculty, meta)
+        if risk:
+            structural = meta.get("structural_deficit", False)
+            return {"type": risk[0], "count": risk[1], "policy": ALLOCATION_POLICY,
+                    "structural": structural,
+                    "N_A_baseline": meta.get("N_A_baseline"), "N_B_baseline": meta.get("N_B_baseline"),
+                    "N_A_opt": meta.get("N_A"), "N_B_opt": meta.get("N_B"),
+                    "caps_optimized": meta.get("caps_optimized", False)}
+        return None
+
     if triggered == "btn-phase0":
         # Phase-0 only
         if _app_state["phase"] != "phase0_done":
             try:
+                _optimize = ALLOCATION_POLICY == "adaptive_ll"
                 students, faculty, meta, snaps = phase0(
-                    students, faculty, out_dir=OUTPUT_DIR
+                    students, faculty, out_dir=OUTPUT_DIR, optimize=_optimize
                 )
                 _app_state.update({
                     "students":         students,
                     "faculty":          faculty,
                     "meta":             meta,
                     "snapshots":        snaps,
-                    "phase0_snapshots": _copy_snaps(snaps),   # separate object — never mutated by R1
+                    "phase0_snapshots": _copy_snaps(snaps),
                     "phase":            "phase0_done",
-                    # reset any stale allocation state from a prior run
                     "r1_assignments":        {},
                     "r1_faculty_loads":      {},
                     "r1_picks":              {},
@@ -1577,41 +1634,33 @@ def cb_run(n_phase0, n_full, loaded):
                     "cpi_p2_queue_idx":      0,
                     "cpi_phase1_stats":      {},
                 })
-                if meta.get("mode") == "quartile":
-                    msg = (f"Phase 0 complete — report saved to {OUTPUT_DIR}/. "
-                           f"Tier A={sum(1 for s in students if s.tier=='A')} "
-                           f"B1={sum(1 for s in students if s.tier=='B1')} "
-                           f"B2={sum(1 for s in students if s.tier=='B2')} "
-                           f"C={sum(1 for s in students if s.tier=='C')} "
-                           f"| N_A={meta['N_A']} N_B={meta['N_B']}")
-                else:
-                    msg = (f"Phase 0 complete — report saved to {OUTPUT_DIR}/. "
-                           f"Tier A={sum(1 for s in students if s.tier=='A')} "
-                           f"B={sum(1 for s in students if s.tier=='B')} "
-                           f"C={sum(1 for s in students if s.tier=='C')} "
-                           f"| N_A={meta['N_A']} N_B={meta['N_B']}")
+                msg = _phase0_status_msg(students, faculty, meta)
             except Exception as e:
-                return f"✗ Phase 0 error: {e}", "idle", 0, {}, 0, dash.no_update
+                return f"✗ Phase 0 error: {e}", "idle", 0, {}, 0, dash.no_update, dash.no_update
         else:
+            students = _app_state["students"]
+            faculty  = _app_state["faculty"]
+            meta     = _app_state["meta"]
             msg = "Phase-0 already computed (loaded from report)."
         snaps = _app_state["snapshots"]
+        risk_data = _build_risk_data(students, faculty, _app_state["meta"])
         if not snaps:
-            return msg, "phase0_done", 0, {}, 0, dash.no_update
+            return msg, "phase0_done", 0, {}, 0, dash.no_update, risk_data
         marks = {i: str(snaps[i].step) for i in range(0, len(snaps), max(1, len(snaps)//10))}
-        return msg, "phase0_done", len(snaps)-1, marks, len(snaps)-1, dash.no_update
+        return msg, "phase0_done", len(snaps)-1, marks, len(snaps)-1, dash.no_update, risk_data
 
     if triggered == "btn-full":
         # Run Phase 0 if not already done
         if _app_state["phase"] not in ("phase0_done",):
             try:
-                students, faculty, meta, snaps = phase0(students, faculty)
+                _optimize = ALLOCATION_POLICY == "adaptive_ll"
+                students, faculty, meta, snaps = phase0(students, faculty, optimize=_optimize)
                 _app_state.update({
                     "students":         students,
                     "faculty":          faculty,
                     "meta":             meta,
                     "snapshots":        snaps,
-                    "phase0_snapshots": _copy_snaps(snaps),   # separate object — never mutated by R1
-                    # reset any stale allocation state from a prior run
+                    "phase0_snapshots": _copy_snaps(snaps),
                     "r1_assignments":        {},
                     "r1_faculty_loads":      {},
                     "r1_picks":              {},
@@ -1628,22 +1677,42 @@ def cb_run(n_phase0, n_full, loaded):
                     "cpi_phase1_stats":      {},
                 })
             except Exception as e:
-                return f"✗ Phase 0 error: {e}", "idle", 0, {}, 0, dash.no_update
+                return f"✗ Phase 0 error: {e}", "idle", 0, {}, 0, dash.no_update, dash.no_update
         else:
+            students = _app_state["students"]
+            faculty  = _app_state["faculty"]
             snaps = _app_state["snapshots"]
             meta  = _app_state["meta"]
-            # snapshots may be None if phase0 was loaded from a report rather than run fresh
             if snaps is None:
                 from .state import SnapshotList
                 snaps = SnapshotList()
                 _app_state["snapshots"] = snaps
+
+        # Check for empty-lab risk on LL and Adaptive LL (before starting Round 1)
+        if ALLOCATION_POLICY in ("least_loaded", "adaptive_ll"):
+            risk_data = _build_risk_data(students, faculty, _app_state["meta"])
+            if risk_data:
+                _app_state["phase"] = "risk_warning"
+                n = len(snaps)
+                marks = {i: str(snaps[i].step) for i in range(0, n, max(1, n // 10))} if n else {}
+                count = risk_data["count"]
+                if risk_data["type"] == "s_lt_f":
+                    warn_msg = (f"⚠ S < F: {count} lab(s) will be empty under any policy. "
+                                "Review the risk warning before proceeding.")
+                elif risk_data.get("structural"):
+                    warn_msg = (f"⚠ Structural deficit: {count} lab(s) cannot be filled even "
+                                "with full-list caps. Switch policy recommended.")
+                else:
+                    warn_msg = (f"⚠ {count} lab(s) will be empty. "
+                                "Review the risk warning to proceed or switch policy.")
+                return warn_msg, "risk_warning", max(0, n-1), marks, max(0, n-1), dash.no_update, risk_data
 
         # tiered_rounds: Phase 0 → start engine immediately (no Round 1)
         if ALLOCATION_POLICY == "tiered_rounds":
             try:
                 tr_state = tiered_rounds_start(students, faculty, snaps)
             except Exception as e:
-                return f"✗ Tiered-rounds error: {e}", "idle", 0, {}, 0, dash.no_update
+                return f"✗ Tiered-rounds error: {e}", "idle", 0, {}, 0, dash.no_update, dash.no_update
             _app_state["tr_state"]  = tr_state
             _app_state["snapshots"] = tr_state.snapshots
             snaps = tr_state.snapshots
@@ -1659,7 +1728,7 @@ def cb_run(n_phase0, n_full, loaded):
                     + "."
                 )
                 _app_state["phase"] = "tr_tie_pending"
-                return msg, "tr_tie_pending", n - 1, marks, n - 1, dash.no_update
+                return msg, "tr_tie_pending", n - 1, marks, n - 1, dash.no_update, dash.no_update
             if tr_state.status == "complete":
                 _app_state["phase"] = "complete"
                 _app_state["current_assignments"]   = dict(tr_state.assignments)
@@ -1675,6 +1744,7 @@ def cb_run(n_phase0, n_full, loaded):
                     f"Preference rounds complete — all {assigned} students assigned.",
                     "complete", n - 1, marks, n - 1,
                     _finalize_prompt(dict(tr_state.assignments), dict(tr_state.faculty_loads), tr_state.faculty),
+                    dash.no_update,
                 )
             if tr_state.status == "stalled":
                 _app_state["phase"] = "complete"
@@ -1694,8 +1764,9 @@ def cb_run(n_phase0, n_full, loaded):
                     f"⚠ Allocation stalled — could not assign: {', '.join(stall_names)}.",
                     "complete", n - 1, marks, n - 1,
                     _finalize_prompt(dict(tr_state.assignments), dict(tr_state.faculty_loads), tr_state.faculty),
+                    dash.no_update,
                 )
-            return "⚠ Unexpected engine state.", "idle", 0, {}, 0, dash.no_update
+            return "⚠ Unexpected engine state.", "idle", 0, {}, 0, dash.no_update, dash.no_update
 
         # CPI-Fill skips Round 1 — initialise empty assignments and wait for operator.
         if ALLOCATION_POLICY == "cpi_fill":
@@ -1709,9 +1780,9 @@ def cb_run(n_phase0, n_full, loaded):
             n = len(snaps)
             marks = {i: str(snaps[i].step) for i in range(0, n, max(1, n // 10))}
             return (f"Phase 0 complete — {len(students)} students ready for Phase 1."), \
-                   "r1_done", n - 1, marks, n - 1, dash.no_update
+                   "r1_done", n - 1, marks, n - 1, dash.no_update, dash.no_update
 
-        # For least_loaded / nonempty: populate Round-1 candidate lists;
+        # For least_loaded / adaptive_ll / nonempty: populate Round-1 candidate lists;
         # pause for operator picks.
         r1_candidates = build_r1_candidate_lists(students, faculty)
         _app_state["r1_pending"] = r1_candidates
@@ -1723,9 +1794,172 @@ def cb_run(n_phase0, n_full, loaded):
         msg = (f"Phase 0 done. Round 1: {len(r1_candidates)} faculties have "
                "1st-choice applicants — please make picks below, then click "
                "'Confirm Round-1 picks'.")
-        return msg, "r1", n-1, marks, n-1, dash.no_update
+        return msg, "r1", n-1, marks, n-1, dash.no_update, dash.no_update
 
-    return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
+    return (dash.no_update, dash.no_update, dash.no_update, dash.no_update,
+            dash.no_update, dash.no_update, dash.no_update)
+
+
+# ---------------------------------------------------------------------------
+# Callbacks — empty-lab risk warning modal
+# ---------------------------------------------------------------------------
+
+_SHOW = {"display": "inline-block"}
+_HIDE = {"display": "none"}
+
+
+@app.callback(
+    Output("modal-risk-warning",    "is_open"),
+    Output("modal-risk-title",      "children"),
+    Output("modal-risk-body",       "children"),
+    Output("btn-proceed-at-risk",   "children"),
+    Output("btn-proceed-at-risk",   "color"),
+    Output("btn-proceed-at-risk",   "style"),
+    Output("btn-switch-from-risk",  "style"),
+    Input("store-risk", "data"),
+    prevent_initial_call=True,
+)
+def cb_risk_modal(risk_data):
+    _no = dash.no_update
+    if not risk_data:
+        return False, _no, _no, _no, _no, _HIDE, _HIDE
+
+    rtype      = risk_data.get("type")
+    count      = risk_data.get("count", 0)
+    policy     = risk_data.get("policy", "least_loaded")
+    structural = risk_data.get("structural", False)
+    S          = len(_app_state.get("students", []))
+    F_count    = len(_app_state.get("faculty", []))
+    meta       = _app_state.get("meta", {})
+    tier_c     = sum(1 for s in _app_state.get("students", []) if s.tier == "C")
+
+    if rtype == "s_lt_f":
+        title = "⚠ Fewer Students Than Faculty"
+        body  = dbc.Alert([
+            html.P(f"S = {S}, F = {F_count}. At least {count} lab(s) will be empty "
+                   "under any policy regardless of tier caps or assignment rule."),
+            html.P("Proceeding will produce an incomplete allocation. "
+                   "Consider switching to a policy that handles this case, "
+                   "or adjusting the cohort data."),
+        ], color="warning")
+        return True, title, body, "Proceed anyway", "warning", _SHOW, _SHOW
+
+    if structural:
+        title = "✗ Structural Empty-Lab Deficit"
+        body  = dbc.Alert([
+            html.P(f"|C| = {tier_c}. Even with full-list preference caps for all tiers, "
+                   f"{count} lab(s) cannot be filled. No window adjustment can resolve this."),
+            html.P("This is a structural issue with the cohort's preference distribution. "
+                   "Switching to a different policy (e.g. CPI-Fill or nonempty) is recommended."),
+        ], color="danger")
+        return True, title, body, _no, _no, _HIDE, _SHOW
+
+    if policy == "adaptive_ll":
+        N_A_b = risk_data.get("N_A_baseline")
+        N_B_b = risk_data.get("N_B_baseline")
+        N_A_o = risk_data.get("N_A_opt")
+        N_B_o = risk_data.get("N_B_opt")
+        cap_parts = [
+            html.P(f"With baseline caps (N_A={N_A_b}, N_B={N_B_b}), "
+                   f"{count} empty lab(s) cannot be covered by |C| = {tier_c} Class-C students."),
+        ]
+        if meta.get("caps_optimized"):
+            cap_parts.append(
+                html.P(f"Optimized caps found: N_A {N_A_b}→{N_A_o}, N_B {N_B_b}→{N_B_o}. "
+                       "Proceeding will use these optimized caps.")
+            )
+        cap_parts.append(html.P("Proceed to allocate with the optimized caps, or switch to another policy."))
+        title = "⚠ Empty Labs After Tiers A+B (Adaptive LL)"
+        body  = dbc.Alert(cap_parts, color="warning")
+        return True, title, body, "Proceed with optimized caps", "success", _SHOW, _SHOW
+
+    # Standard LL
+    title = "⚠ Empty Labs Predicted (Standard LL)"
+    body  = dbc.Alert([
+        html.P(f"After Round 1 and Tiers A+B, {count} lab(s) will be empty. "
+               f"|C| = {tier_c} Class-C students can fill empty labs, "
+               f"but {count} more empty lab(s) than |C| can cover."),
+        html.P("Proceed at risk (empty labs will appear in results) or switch to "
+               "Adaptive LL / another policy."),
+    ], color="warning")
+    return True, title, body, "Proceed at risk", "warning", _SHOW, _SHOW
+
+
+@app.callback(
+    Output("run-status",        "children",  allow_duplicate=True),
+    Output("store-phase",       "data",      allow_duplicate=True),
+    Output("step-slider",       "max",       allow_duplicate=True),
+    Output("step-slider",       "marks",     allow_duplicate=True),
+    Output("step-slider",       "value",     allow_duplicate=True),
+    Output("modal-risk-warning","is_open",   allow_duplicate=True),
+    Output("store-risk",        "data",      allow_duplicate=True),
+    Input("btn-proceed-at-risk", "n_clicks"),
+    prevent_initial_call=True,
+)
+def cb_proceed_at_risk(n):
+    if not n:
+        raise PreventUpdate
+    students = _app_state.get("students", [])
+    faculty  = _app_state.get("faculty", [])
+    snaps    = _app_state.get("snapshots")
+    if snaps is None:
+        from .state import SnapshotList
+        snaps = SnapshotList()
+        _app_state["snapshots"] = snaps
+
+    r1_candidates = build_r1_candidate_lists(students, faculty)
+    _app_state["r1_pending"] = r1_candidates
+    _app_state["r1_picks"]   = {}
+    _app_state["phase"]      = "r1"
+
+    n_snaps = len(snaps)
+    marks = {i: str(snaps[i].step) for i in range(0, n_snaps, max(1, n_snaps // 10))} if n_snaps else {}
+    msg = (f"Proceeding. Round 1: {len(r1_candidates)} faculties have "
+           "1st-choice applicants — please make picks below, then click "
+           "'Confirm Round-1 picks'.")
+    return msg, "r1", max(0, n_snaps - 1), marks, max(0, n_snaps - 1), False, None
+
+
+@app.callback(
+    Output("url", "pathname", allow_duplicate=True),
+    Output("modal-risk-warning", "is_open", allow_duplicate=True),
+    Input("btn-switch-from-risk", "n_clicks"),
+    prevent_initial_call=True,
+)
+def cb_switch_from_risk(n):
+    if not n:
+        raise PreventUpdate
+    return "/", False
+
+
+# ---------------------------------------------------------------------------
+# Callback — Save Phase 0 CSV
+# ---------------------------------------------------------------------------
+
+@app.callback(
+    Output("download-phase0", "data"),
+    Input("btn-save-phase0",  "n_clicks"),
+    prevent_initial_call=True,
+)
+def cb_save_phase0(n_clicks):
+    if not n_clicks:
+        raise PreventUpdate
+    meta     = _app_state.get("meta", {})
+    students = _app_state.get("students", [])
+    if not meta or not students:
+        raise PreventUpdate
+
+    rows = []
+    for s in sorted(students, key=lambda x: -x.cpi):
+        rows.append({
+            "student_id": s.id,
+            "name":       s.name,
+            "cpi":        f"{s.cpi:.2f}",
+            "tier":       s.tier,
+            "n_tier":     s.n_tier,
+        })
+    df = pd.DataFrame(rows)
+    return dcc.send_data_frame(df.to_csv, "phase0_students.csv", index=False)
 
 
 # ---------------------------------------------------------------------------
@@ -3694,6 +3928,24 @@ def cb_phase0_modal(open_clicks, close_clicks, is_open):
     if not meta or not students:
         return True, html.Span("No Phase-0 data yet — run Phase 0 first.", className="text-muted")
 
+    # Build cap display strings (show baseline → optimized if adjusted)
+    def _cap_display(opt_key, base_key):
+        opt_val  = meta.get(opt_key)
+        base_val = meta.get(base_key)
+        if opt_val is None:
+            return str(meta.get(opt_key[2:] if opt_key.startswith("N_") else opt_key, "—"))
+        if base_val is not None and base_val != opt_val:
+            return f"{base_val} → {opt_val} (optimized)"
+        return str(opt_val)
+
+    n_a_display = _cap_display("N_A", "N_A_baseline")
+    n_b_display = _cap_display("N_B", "N_B_baseline")
+
+    structural_badge = (
+        dbc.Badge("Structural deficit", color="danger", className="ms-2")
+        if meta.get("structural_deficit") else None
+    )
+
     # Meta summary table (mode-aware labels)
     if meta.get("mode") == "quartile":
         meta_rows = [
@@ -3704,8 +3956,8 @@ def cb_phase0_modal(open_clicks, close_clicks, is_open):
             ("p50 (B2 / B1 cutoff)",    meta.get("p_mid", "—")),
             (f"p{meta.get('p_high_pct', '?')} (B1 / A cutoff)", meta.get("p_high", "—")),
             ("Grace ±",                 meta.get("grace", "—")),
-            ("N_A",                     meta.get("N_A", "—")),
-            ("N_B (B1 & B2)",           meta.get("N_B", "—")),
+            ("N_A",                     n_a_display),
+            ("N_B (B1 & B2)",           n_b_display),
             ("max_load",                meta.get("common_max_load", "—")),
         ]
     else:
@@ -3716,8 +3968,8 @@ def cb_phase0_modal(open_clicks, close_clicks, is_open):
             (f"p{meta.get('p_low_pct', '?')} (B cutoff)", meta.get("p_low", "—")),
             (f"p{meta.get('p_high_pct', '?')} (A cutoff)", meta.get("p_high", "—")),
             ("Grace ±",        meta.get("grace", "—")),
-            ("N_A",            meta.get("N_A", "—")),
-            ("N_B",            meta.get("N_B", "—")),
+            ("N_A",            n_a_display),
+            ("N_B",            n_b_display),
             ("max_load",       meta.get("common_max_load", "—")),
         ]
     meta_table = dbc.Table([
@@ -3747,8 +3999,12 @@ def cb_phase0_modal(open_clicks, close_clicks, is_open):
         html.Tbody(tier_rows),
     ], bordered=True, hover=True, striped=True, size="sm")
 
+    header_row = html.Div([
+        html.H6("Cohort Parameters", className="fw-bold d-inline"),
+        structural_badge,
+    ], className="mb-2")
     body = [
-        html.H6("Cohort Parameters", className="fw-bold"),
+        header_row,
         meta_table,
         html.H6("Student Tier Assignments", className="fw-bold"),
         student_table,
