@@ -1635,6 +1635,21 @@ def cb_run(n_phase0, n_full, loaded):
                     "N_A_baseline": meta.get("N_A_baseline"), "N_B_baseline": meta.get("N_B_baseline"),
                     "N_A_opt": meta.get("N_A"), "N_B_opt": meta.get("N_B"),
                     "caps_optimized": meta.get("caps_optimized", False)}
+        # Adaptive LL: always surface simulation result even when check passed
+        if ALLOCATION_POLICY == "adaptive_ll":
+            if meta.get("caps_optimized"):
+                # Optimization ran and resolved the deficit — show the before/after
+                return {"type": "e_gt_c", "count": meta.get("E_baseline_excess", 0),
+                        "policy": "adaptive_ll", "structural": False,
+                        "N_A_baseline": meta.get("N_A_baseline"), "N_B_baseline": meta.get("N_B_baseline"),
+                        "N_A_opt": meta.get("N_A"), "N_B_opt": meta.get("N_B"),
+                        "caps_optimized": True}
+            # No deficit even at baseline caps
+            return {"type": "adaptive_checked", "count": 0,
+                    "policy": "adaptive_ll", "structural": False,
+                    "N_A_baseline": meta.get("N_A_baseline"), "N_B_baseline": meta.get("N_B_baseline"),
+                    "N_A_opt": meta.get("N_A"), "N_B_opt": meta.get("N_B"),
+                    "caps_optimized": False}
         return None
 
     if triggered == "btn-phase0":
@@ -1735,6 +1750,14 @@ def cb_run(n_phase0, n_full, loaded):
                 elif risk_data.get("structural"):
                     warn_msg = (f"⚠ Structural deficit: {count} lab(s) cannot be filled even "
                                 "with full-list caps. Switch policy recommended.")
+                elif risk_data.get("type") == "adaptive_checked":
+                    warn_msg = ("✓ Adaptive LL: empty-lab check passed with baseline caps — "
+                                "review simulation and proceed.")
+                elif risk_data.get("caps_optimized") and risk_data.get("policy") == "adaptive_ll":
+                    warn_msg = (f"✓ Adaptive LL: caps optimized "
+                                f"(N_A {risk_data.get('N_A_baseline')}→{risk_data.get('N_A_opt')}, "
+                                f"N_B {risk_data.get('N_B_baseline')}→{risk_data.get('N_B_opt')}) "
+                                "— review simulation and proceed.")
                 else:
                     warn_msg = (f"⚠ {count} lab(s) will be empty. "
                                 "Review the risk warning to proceed or switch policy.")
@@ -1892,11 +1915,22 @@ def cb_risk_modal(risk_data):
         N_B_b = risk_data.get("N_B_baseline")
         N_A_o = risk_data.get("N_A_opt")
         N_B_o = risk_data.get("N_B_opt")
+
+        if rtype == "adaptive_checked":
+            title = "✓ Empty-Lab Check Passed (Adaptive LL)"
+            body  = dbc.Alert([
+                html.P(f"With baseline caps (N_A={N_A_b}, N_B={N_B_b}), "
+                       f"|C| = {tier_c} Class-C students are sufficient to cover "
+                       "all empty labs after Tiers A+B — no cap expansion needed."),
+                html.P("Proceeding with baseline caps."),
+            ], color="success")
+            return True, title, body, "Proceed", "success", _SHOW, _HIDE
+
         cap_parts = [
             html.P(f"With baseline caps (N_A={N_A_b}, N_B={N_B_b}), "
                    f"{count} empty lab(s) cannot be covered by |C| = {tier_c} Class-C students."),
         ]
-        if meta.get("caps_optimized"):
+        if risk_data.get("caps_optimized"):
             cap_parts.append(
                 html.P(f"Optimized caps found: N_A {N_A_b}→{N_A_o}, N_B {N_B_b}→{N_B_o}. "
                        "Proceeding will use these optimized caps.")
