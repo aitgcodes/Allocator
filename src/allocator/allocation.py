@@ -1639,8 +1639,7 @@ def tiered_ll_backfill(
         remaining_prefs = s.preferences[k:]
         result = _least_loaded_choice(s, remaining_prefs, faculty_map, faculty_loads)
         if result:
-            fid, local_rank = result
-            global_rank = k + local_rank
+            fid, rank = result   # rank is already global 1-based in s.preferences
             assignments[s.id] = fid
             faculty_loads[fid] += 1
             step += 1
@@ -1650,12 +1649,12 @@ def tiered_ll_backfill(
                 event=(
                     f"Backfill | {s.name} ({s.id}, CPI {s.cpi:.2f}) → "
                     f"{faculty_map[fid].name} ({fid}) | "
-                    f"pref rank {global_rank} | load now {faculty_loads[fid]}"
+                    f"pref rank {rank} | load now {faculty_loads[fid]}"
                 ),
                 assignments=copy.copy(assignments),
                 faculty_loads=copy.copy(faculty_loads),
                 unassigned={sid for sid, fid2 in assignments.items() if fid2 is None},
-                preference_rank={s.id: global_rank},
+                preference_rank={s.id: rank},
             ))
 
     overflow = [s.id for s in unassigned_students if assignments[s.id] is None]

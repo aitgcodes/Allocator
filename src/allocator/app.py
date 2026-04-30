@@ -2453,20 +2453,20 @@ def cb_tr_resolve(n_clicks, chosen_sid):
     panel = _render_tiered_rounds_panel(tr_state)
 
     if tr_state.status == "switch_to_backfill":
-        _, msg, phase, sl_max, sl_marks, sl_val, fin = _run_tiered_ll_backfill_and_finalize(
+        msg, phase, sl_max, sl_marks, sl_val, fin, _ = _run_tiered_ll_backfill_and_finalize(
             tr_state, k_crit, snaps, marks
         )
         return panel, msg, phase, sl_max, sl_marks, sl_val, fin
 
     if tr_state.status == "complete":
-        _, msg, phase, sl_max, sl_marks, sl_val, fin = _finalize_tr_complete(
+        msg, phase, sl_max, sl_marks, sl_val, fin, _ = _finalize_tr_complete(
             tr_state, snaps, marks,
             k_crit=k_crit, backfill_ran=(ALLOCATION_POLICY == "tiered_ll"),
         )
         return panel, msg, phase, sl_max, sl_marks, sl_val, fin
 
     if tr_state.status == "stalled":
-        _, msg, phase, sl_max, sl_marks, sl_val, fin = _finalize_tr_stalled(tr_state, snaps, marks)
+        msg, phase, sl_max, sl_marks, sl_val, fin, _ = _finalize_tr_stalled(tr_state, snaps, marks)
         return panel, msg, phase, sl_max, sl_marks, sl_val, fin
 
     if tr_state.status == "awaiting_tie":
