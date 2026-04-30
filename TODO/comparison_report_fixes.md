@@ -54,7 +54,10 @@ See discussion notes at the bottom of this file.
 
 ## Fixes
 
-### Fix A — `scripts/anonymize_test_data.py`, `process_year()` (~lines 87–97)
+> **Status:** All four fixes are complete (verified 2026-04-30).
+> Fix A applied in this session; Fixes B, C, D were already in the codebase.
+
+### Fix A — `scripts/anonymize_test_data.py`, `process_year()` (~lines 87–97) ✓
 
 Deduplicate preferences while building the `prefs` list. Treat any duplicate label as an
 empty slot so the column structure is preserved.

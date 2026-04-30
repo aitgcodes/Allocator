@@ -220,7 +220,8 @@ def phase0(
                            3, 5, common_max_load)
         meta.update({
             "N_A_baseline": 3, "N_B_baseline": 5,
-            "caps_optimized": False, "structural_deficit": False, "E_after_B": None,
+            "caps_optimized": False, "structural_deficit": False,
+            "E_after_B": None, "E_baseline_excess": 0,
         })
         snaps = SnapshotList()
         assignments = {s.id: None for s in students}

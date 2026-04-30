@@ -428,6 +428,19 @@ class TestAdaptiveLLEndToEnd:
         actual_empty = len(faculty) - len(assigned_fids)
         assert actual_empty == predicted_empty
 
+    def test_e_baseline_excess_set_when_optimization_runs(self):
+        """E_baseline_excess reflects the pre-optimization deficit when caps are expanded."""
+        import copy
+        students, faculty = self._build_problematic_cohort()
+        s_copy = copy.deepcopy(students)
+        f_copy = copy.deepcopy(faculty)
+        _, _, meta, _ = phase0(s_copy, f_copy, optimize=True)
+        if meta.get("caps_optimized"):
+            # E_baseline_excess must be positive — baseline had a real deficit
+            assert meta["E_baseline_excess"] > 0
+            # Optimized caps must now pass the check (E ≤ tier_c_remaining)
+            assert not check_empty_lab_risk(s_copy, f_copy, meta)
+
 
 # ---------------------------------------------------------------------------
 # Group 6 — Regression: existing LL behaviour unchanged
@@ -468,5 +481,21 @@ class TestRegression:
                    Faculty(id="F02", name="Prof02", max_load=2)]
         _, _, meta, _ = phase0(copy.deepcopy(students), copy.deepcopy(faculty))
         for key in ("N_A_baseline", "N_B_baseline", "caps_optimized",
-                    "structural_deficit", "E_after_B"):
+                    "structural_deficit", "E_after_B", "E_baseline_excess"):
             assert key in meta, f"meta missing key: {key}"
+
+    def test_e_baseline_excess_zero_when_no_optimization(self):
+        """E_baseline_excess is 0 when baseline caps already pass the empty-lab check."""
+        import copy
+        fids = ["F01", "F02", "F03", "F04"]
+        students = [
+            _s(1, 9.5, fids),
+            _s(2, 9.3, fids),
+            _s(3, 8.5, fids),
+            _s(4, 8.3, fids),
+            _s(5, 7.0, fids),
+        ]
+        faculty = [Faculty(id=f"F0{i}", name=f"Prof0{i}", max_load=2) for i in range(1, 5)]
+        _, _, meta, _ = phase0(copy.deepcopy(students), copy.deepcopy(faculty), optimize=True)
+        assert meta["E_baseline_excess"] == 0
+        assert meta["caps_optimized"] is False
