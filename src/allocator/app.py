@@ -103,6 +103,7 @@ from .allocation import (
     phase0,
     round1,
     run_full_allocation,
+    simulate_tiers_ab,
     tiered_rounds_resume,
     tiered_rounds_start,
 )
@@ -1622,8 +1623,15 @@ def cb_run(n_phase0, n_full, loaded):
         return base + f" | ⚠ {risk[1]} lab(s) predicted empty after Tiers A+B"
 
     def _build_risk_data(students, faculty, meta):
-        """Return risk dict for store-risk, or None if no risk."""
+        """Return risk dict for store-risk, or None if no risk.
+
+        For adaptive_ll this always returns a dict (never None) so the UI
+        can display the simulation result regardless of whether optimization
+        was needed.
+        """
         S, F_count = len(students), len(faculty)
+        # C_remaining at Phase-0 time (r1_ids still empty — no Round 1 yet)
+        tier_c_remaining = sum(1 for s in students if s.tier == "C")
         if S < F_count:
             return {"type": "s_lt_f", "count": F_count - S, "policy": ALLOCATION_POLICY,
                     "structural": False}
@@ -1632,21 +1640,30 @@ def cb_run(n_phase0, n_full, loaded):
             structural = meta.get("structural_deficit", False)
             return {"type": risk[0], "count": risk[1], "policy": ALLOCATION_POLICY,
                     "structural": structural,
+                    "C_remaining": tier_c_remaining,
                     "N_A_baseline": meta.get("N_A_baseline"), "N_B_baseline": meta.get("N_B_baseline"),
                     "N_A_opt": meta.get("N_A"), "N_B_opt": meta.get("N_B"),
                     "caps_optimized": meta.get("caps_optimized", False)}
         # Adaptive LL: always surface simulation result even when check passed
         if ALLOCATION_POLICY == "adaptive_ll":
             if meta.get("caps_optimized"):
-                # Optimization ran and resolved the deficit — show the before/after
-                return {"type": "e_gt_c", "count": meta.get("E_baseline_excess", 0),
+                excess = meta.get("E_baseline_excess", 0)
+                if excess == 0:
+                    # Older meta (pre-dating E_baseline_excess): recompute without mutating
+                    E_base = simulate_tiers_ab(students, faculty,
+                                               meta.get("N_A_baseline", meta["N_A"]),
+                                               meta.get("N_B_baseline", meta["N_B"]))
+                    excess = max(0, E_base - tier_c_remaining)
+                return {"type": "e_gt_c", "count": excess,
                         "policy": "adaptive_ll", "structural": False,
+                        "C_remaining": tier_c_remaining,
                         "N_A_baseline": meta.get("N_A_baseline"), "N_B_baseline": meta.get("N_B_baseline"),
                         "N_A_opt": meta.get("N_A"), "N_B_opt": meta.get("N_B"),
                         "caps_optimized": True}
             # No deficit even at baseline caps
             return {"type": "adaptive_checked", "count": 0,
                     "policy": "adaptive_ll", "structural": False,
+                    "C_remaining": tier_c_remaining,
                     "N_A_baseline": meta.get("N_A_baseline"), "N_B_baseline": meta.get("N_B_baseline"),
                     "N_A_opt": meta.get("N_A"), "N_B_opt": meta.get("N_B"),
                     "caps_optimized": False}
@@ -1886,8 +1903,9 @@ def cb_risk_modal(risk_data):
     structural = risk_data.get("structural", False)
     S          = len(_app_state.get("students", []))
     F_count    = len(_app_state.get("faculty", []))
-    meta       = _app_state.get("meta", {})
     tier_c     = sum(1 for s in _app_state.get("students", []) if s.tier == "C")
+    # Use C_remaining from risk_data (computed at Phase-0 call time); fall back to tier_c
+    c_remaining = risk_data.get("C_remaining", tier_c)
 
     if rtype == "s_lt_f":
         title = "⚠ Fewer Students Than Faculty"
@@ -1903,7 +1921,7 @@ def cb_risk_modal(risk_data):
     if structural:
         title = "✗ Structural Empty-Lab Deficit"
         body  = dbc.Alert([
-            html.P(f"|C| = {tier_c}. Even with full-list preference caps for all tiers, "
+            html.P(f"|C_remaining| = {c_remaining}. Even with full-list preference caps for all tiers, "
                    f"{count} lab(s) cannot be filled. No window adjustment can resolve this."),
             html.P("This is a structural issue with the cohort's preference distribution. "
                    "Switching to a different policy (e.g. CPI-Fill or nonempty) is recommended."),
@@ -1920,7 +1938,7 @@ def cb_risk_modal(risk_data):
             title = "✓ Empty-Lab Check Passed (Adaptive LL)"
             body  = dbc.Alert([
                 html.P(f"With baseline caps (N_A={N_A_b}, N_B={N_B_b}), "
-                       f"|C| = {tier_c} Class-C students are sufficient to cover "
+                       f"|C_remaining| = {c_remaining} Class-C students are sufficient to cover "
                        "all empty labs after Tiers A+B — no cap expansion needed."),
                 html.P("Proceeding with baseline caps."),
             ], color="success")
@@ -1928,7 +1946,7 @@ def cb_risk_modal(risk_data):
 
         cap_parts = [
             html.P(f"With baseline caps (N_A={N_A_b}, N_B={N_B_b}), "
-                   f"{count} empty lab(s) cannot be covered by |C| = {tier_c} Class-C students."),
+                   f"{count} empty lab(s) cannot be covered by |C_remaining| = {c_remaining} Class-C students."),
         ]
         if risk_data.get("caps_optimized"):
             cap_parts.append(
