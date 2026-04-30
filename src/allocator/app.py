@@ -93,6 +93,7 @@ import plotly.graph_objects as go
 
 from .allocation import (
     _least_loaded_choice,
+    _r1_assigned_ids,
     check_empty_lab_risk,
     cpi_fill_phase1,
     cpi_fill_phase2,
@@ -1642,9 +1643,9 @@ def cb_run(n_phase0, n_full, loaded):
             )
 
         S, F_count = len(students), len(faculty)
-        # Mirror check_empty_lab_risk: exclude any Tier-C students already placed
-        # in the simulated Round 1 for this run.
-        r1_ids = _simulated_r1_assigned_ids(meta)
+        # Mirror check_empty_lab_risk exactly: exclude Tier-C students who win a
+        # simulated Round-1 slot (highest-CPI wins each faculty's first-choice bucket).
+        r1_ids = _r1_assigned_ids(students, faculty)
         tier_c_remaining = sum(1 for s in students if s.tier == "C" and s.id not in r1_ids)
         if S < F_count:
             return {"type": "s_lt_f", "count": F_count - S, "policy": ALLOCATION_POLICY,
@@ -1663,10 +1664,13 @@ def cb_run(n_phase0, n_full, loaded):
             if meta.get("caps_optimized"):
                 excess = meta.get("E_baseline_excess", 0)
                 if excess == 0:
-                    # Older meta (pre-dating E_baseline_excess): recompute without mutating
-                    E_base = simulate_tiers_ab(students, faculty,
-                                               meta.get("N_A_baseline", meta["N_A"]),
-                                               meta.get("N_B_baseline", meta["N_B"]))
+                    # Older meta (pre-dating E_baseline_excess): derive baseline caps
+                    # from ratio (same 3/5 vs 4/6 logic as phase0) rather than
+                    # falling back to the already-optimized N_A/N_B which would yield ~0.
+                    ratio = meta.get("ratio", 0)
+                    N_A_base = meta.get("N_A_baseline", 4 if ratio > 4 else 3)
+                    N_B_base = meta.get("N_B_baseline", 6 if ratio > 4 else 5)
+                    E_base = simulate_tiers_ab(students, faculty, N_A_base, N_B_base)
                     excess = max(0, E_base - tier_c_remaining)
                 return {"type": "e_gt_c", "count": excess,
                         "policy": "adaptive_ll", "structural": False,
@@ -1975,9 +1979,9 @@ def cb_risk_modal(risk_data):
     # Standard LL
     title = "⚠ Empty Labs Predicted (Standard LL)"
     body  = dbc.Alert([
-        html.P(f"After Round 1 and Tiers A+B, {count} lab(s) will be empty. "
-               f"|C| = {tier_c} Class-C students can fill empty labs, "
-               f"but {count} more empty lab(s) than |C| can cover."),
+        html.P(f"|C_remaining| = {c_remaining} Class-C students can fill empty labs "
+               f"after Round 1 and Tiers A+B, but {count} more empty lab(s) than "
+               "|C_remaining| can cover (excess, not total empty labs)."),
         html.P("Proceed at risk (empty labs will appear in results) or switch to "
                "Adaptive LL / another policy."),
     ], color="warning")
