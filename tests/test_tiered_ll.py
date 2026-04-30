@@ -162,7 +162,6 @@ class TestFindCriticalRound:
 class TestTieredRoundsDryRun:
     def _clean_cohort(self):
         """8 students, 4 faculty, well-distributed preferences."""
-        fids = _fids(4)
         students = [
             _s(1, 9.5, ["F01", "F02", "F03", "F04"]),
             _s(2, 9.2, ["F02", "F01", "F03", "F04"]),

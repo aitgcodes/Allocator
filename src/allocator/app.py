@@ -1230,10 +1230,11 @@ def cb_landing_policy_desc(value):
                 "per round (highest CPI wins); CPI ties require a manual pick before the "
                 "round advances.")
     if value == "tiered_ll":
-        return ("Hybrid two-phase policy: Phase 0 + dry-run determines critical round k; "
-                "Phase 1 runs interactive tiered rounds 1..k (manual tie-picks); "
-                "Phase 2 auto-runs LL-HP backfill over remaining preferences "
-                "for any unassigned students, guaranteeing no empty labs when feasible.")
+        return ("Multi-phase hybrid policy: Phase 0a classifies tiers; Phase 0b dry-run "
+                "determines critical round k; Phase 1 runs interactive tiered rounds 1..k "
+                "(manual tie-picks); Phase 2 auto-runs LL-HP backfill over remaining "
+                "preferences for any unassigned students, guaranteeing no empty labs when "
+                "feasible.")
     return ("Three-phase pipeline: Phase 0 tiers students by CPI; Round 1 gives each "
             "faculty their top first-choice student; main allocation processes students "
             "class-by-class (A → B → C) within an N_tier preference window, assigning "
@@ -1702,16 +1703,15 @@ def cb_run(n_phase0, n_full, loaded):
         stall_rd = next(
             (e["round_no"] for e in dry_run_states if e["is_stall"]), None
         )
-        # Count empty labs predicted by dry-run (faculty with 0 assigned after backfill)
-        # Approximate: unassigned count at round k vs faculty with capacity
-        empty_pred = next(
+        # Advisors with remaining capacity unreachable by any unassigned student at round k.
+        unreachable_at_k = next(
             (e["unreachable_faculty_count"] for e in dry_run_states
              if e["round_no"] == k), 0
         )
-        meta["k_crit_static"]      = k
-        meta["dry_run_rounds_total"] = total_rounds
-        meta["dry_run_stall_round"]  = stall_rd
-        meta["dry_run_empty_labs"]   = empty_pred
+        meta["k_crit_static"]           = k
+        meta["dry_run_rounds_total"]    = total_rounds
+        meta["dry_run_stall_round"]     = stall_rd
+        meta["dry_run_unreachable_at_k"] = unreachable_at_k
 
     def _phase0_status_msg(students, faculty, meta):
         tier_c = sum(1 for s in students if s.tier == "C")
@@ -1747,14 +1747,16 @@ def cb_run(n_phase0, n_full, loaded):
         if ALLOCATION_POLICY == "tiered_ll":
             k = meta.get("k_crit_static")
             if k is not None:
-                stall_rd = meta.get("dry_run_stall_round")
-                empty    = meta.get("dry_run_empty_labs", "?")
+                stall_rd    = meta.get("dry_run_stall_round")
+                unreachable = meta.get("dry_run_unreachable_at_k", "?")
                 if stall_rd:
                     return (base +
                             f" | k_crit={k} | dry-run: stall at round {stall_rd}, "
-                            f"{empty} empty lab(s) predicted — switching to LL-HP backfill after round {k}")
+                            f"{unreachable} advisor(s) unreachable at round {k} — "
+                            f"switching to LL-HP backfill after round {k}")
                 return (base +
-                        f" | k_crit={k} | dry-run: {empty} empty lab(s), switch after round {k}")
+                        f" | k_crit={k} | dry-run: {unreachable} advisor(s) unreachable "
+                        f"at round {k}, switch after round {k}")
             return base + " | (dry-run pending)"
 
         risk = check_empty_lab_risk(students, faculty, meta)
@@ -2461,7 +2463,7 @@ def cb_tr_resolve(n_clicks, chosen_sid):
     if tr_state.status == "complete":
         msg, phase, sl_max, sl_marks, sl_val, fin, _ = _finalize_tr_complete(
             tr_state, snaps, marks,
-            k_crit=k_crit, backfill_ran=(ALLOCATION_POLICY == "tiered_ll"),
+            k_crit=k_crit, backfill_ran=False,
         )
         return panel, msg, phase, sl_max, sl_marks, sl_val, fin
 

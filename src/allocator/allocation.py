@@ -1310,13 +1310,18 @@ def tiered_rounds_start(
 
     Parameters
     ----------
-    students  : students list with .tier set by phase0()
-    faculty   : faculty list with .max_load set by phase0()
-    snapshots : SnapshotList already containing the Phase-0 snapshot
+    students     : students list with .tier set by phase0()
+    faculty      : faculty list with .max_load set by phase0()
+    snapshots    : SnapshotList already containing the Phase-0 snapshot
+    stop_at_round: if given, stop *before* executing this round number and
+                   return status ``"switch_to_backfill"`` instead of continuing.
+                   Useful for ``tiered_ll`` which hands off to LL-HP backfill
+                   at round k_crit.
 
     Returns
     -------
-    TieredRoundsState with status in {"awaiting_tie", "complete", "stalled"}
+    TieredRoundsState with status in
+    {"awaiting_tie", "complete", "stalled", "switch_to_backfill"}
     """
     faculty_ids = {f.id for f in faculty}
     faculty_map = {f.id: f for f in faculty}
