@@ -1351,6 +1351,10 @@ def cb_policy_badge(policy):
         label, color = "CPI-Fill (two-phase)", "warning"
     elif policy == "tiered_rounds":
         label, color = "CPI-tiered preference rounds (manual tie-pick)", "primary"
+    elif policy == "adaptive_ll":
+        label, color = "Adaptive LL (cap-optimized)", "success"
+    elif policy == "tiered_ll":
+        label, color = "Tiered rounds → LL-HP backfill", "success"
     else:
         label, color = "Least-loaded · highest preferred", "secondary"
     return dbc.Badge(f"Policy: {label}", color=color, className="mb-2")
@@ -1586,12 +1590,21 @@ def _finalize_tr_complete(tr_state, snaps, marks, k_crit=None, backfill_ran=Fals
         faculty_ids=[f.id for f in tr_state.faculty],
         faculty=tr_state.faculty,
     )
-    assigned = sum(1 for fid in tr_state.assignments.values() if fid is not None)
+    assigned   = sum(1 for fid in tr_state.assignments.values() if fid is not None)
+    empty_labs = sum(1 for f in tr_state.faculty
+                     if tr_state.faculty_loads.get(f.id, 0) == 0)
     if backfill_ran and k_crit is not None:
         msg = (f"Tiered LL complete — {assigned} students assigned "
                f"(rounds 1..{k_crit} + LL-HP backfill).")
+    elif k_crit is not None:
+        # All students assigned within k rounds; backfill had no one left to place.
+        msg = (f"Tiered LL complete — all {assigned} students assigned within "
+               f"rounds 1..{k_crit} (LL-HP backfill not needed).")
     else:
         msg = f"Preference rounds complete — all {assigned} students assigned."
+    if empty_labs:
+        msg += (f" ⚠ {empty_labs} lab(s) remain empty — all students assigned but "
+                f"these advisor(s) were not reached by any remaining preference.")
     n = len(snaps)
     return (
         msg, "complete", n - 1, marks, n - 1,
@@ -1651,6 +1664,7 @@ def _run_tiered_ll_backfill_and_finalize(tr_state, k_crit, snaps, marks):
         faculty=tr_state.faculty,
     )
     assigned_count = sum(1 for fid in assignments.values() if fid is not None)
+    empty_labs     = sum(1 for f in tr_state.faculty if faculty_loads.get(f.id, 0) == 0)
     if overflow:
         overflow_names = [
             next((s.name for s in tr_state.students if s.id == sid), sid)
@@ -1658,9 +1672,14 @@ def _run_tiered_ll_backfill_and_finalize(tr_state, k_crit, snaps, marks):
         ]
         msg = (f"Tiered LL complete — {assigned_count} assigned, "
                f"{len(overflow)} overflow: {', '.join(overflow_names)}.")
+        if empty_labs:
+            msg += f" ⚠ {empty_labs} lab(s) empty (overflow students had no reachable advisor)."
     else:
         msg = (f"Tiered LL complete — all {assigned_count} students assigned "
                f"(rounds 1..{k_crit} + LL-HP backfill).")
+        if empty_labs:
+            msg += (f" ⚠ {empty_labs} lab(s) remain empty — these advisors were not "
+                    f"reachable from any student's remaining preferences (structural infeasibility).")
     return (
         msg, "complete", n - 1, marks, n - 1,
         _finalize_prompt(assignments, faculty_loads, tr_state.faculty),
@@ -1751,11 +1770,13 @@ def cb_run(n_phase0, n_full, loaded):
                 unreachable = meta.get("dry_run_unreachable_at_k", "?")
                 if stall_rd:
                     return (base +
-                            f" | k_crit={k} | dry-run: stall at round {stall_rd}, "
+                            f" | k_crit={k} (static, dynamic: disabled) | "
+                            f"dry-run: stall at round {stall_rd}, "
                             f"{unreachable} advisor(s) unreachable at round {k} — "
                             f"switching to LL-HP backfill after round {k}")
                 return (base +
-                        f" | k_crit={k} | dry-run: {unreachable} advisor(s) unreachable "
+                        f" | k_crit={k} (static, dynamic: disabled) | "
+                        f"dry-run: {unreachable} advisor(s) unreachable "
                         f"at round {k}, switch after round {k}")
             return base + " | (dry-run pending)"
 
@@ -1770,7 +1791,12 @@ def cb_run(n_phase0, n_full, loaded):
         For adaptive_ll this always returns a dict (never None) so the UI
         can display the simulation result regardless of whether optimization
         was needed.
+
+        For tiered_ll the LL-HP backfill handles empty labs; the LL-style
+        C_remaining risk check is not applicable — return None always.
         """
+        if ALLOCATION_POLICY == "tiered_ll":
+            return None
         S, F_count = len(students), len(faculty)
         # Mirror check_empty_lab_risk exactly: exclude Tier-C students who win a
         # simulated Round-1 slot (highest-CPI wins each faculty's first-choice bucket).
