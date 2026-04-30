@@ -5,8 +5,6 @@ Run with:
     conda run -n allocator python -m pytest tests/test_tiered_ll.py -v
 """
 
-import pytest
-
 from src.allocator.state import Faculty, Student, SnapshotList
 from src.allocator.allocation import (
     _reachability,
