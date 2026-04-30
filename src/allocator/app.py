@@ -1629,11 +1629,22 @@ def cb_run(n_phase0, n_full, loaded):
         can display the simulation result regardless of whether optimization
         was needed.
         """
+        def _simulated_r1_assigned_ids(meta):
+            # Prefer the Round 1 IDs produced by the current simulation so
+            # C_remaining matches check_empty_lab_risk during Phase 0, where
+            # persisted app-state assignments may still be empty.
+            for key in ("r1_assigned_ids", "_r1_assigned_ids"):
+                ids = meta.get(key)
+                if ids is not None:
+                    return frozenset(ids)
+            return frozenset(
+                sid for sid, fid in _app_state.get("r1_assignments", {}).items() if fid is not None
+            )
+
         S, F_count = len(students), len(faculty)
-        # Mirror check_empty_lab_risk: exclude any Tier-C students already placed in Round 1
-        r1_ids = frozenset(
-            sid for sid, fid in _app_state.get("r1_assignments", {}).items() if fid is not None
-        )
+        # Mirror check_empty_lab_risk: exclude any Tier-C students already placed
+        # in the simulated Round 1 for this run.
+        r1_ids = _simulated_r1_assigned_ids(meta)
         tier_c_remaining = sum(1 for s in students if s.tier == "C" and s.id not in r1_ids)
         if S < F_count:
             return {"type": "s_lt_f", "count": F_count - S, "policy": ALLOCATION_POLICY,
