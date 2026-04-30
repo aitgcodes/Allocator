@@ -431,7 +431,6 @@ class TestAdaptiveLLEndToEnd:
     def test_e_baseline_excess_set_when_optimization_runs(self):
         """E_baseline_excess reflects the pre-optimization deficit when caps are expanded."""
         import copy
-        from allocator.allocation import check_empty_lab_risk
         students, faculty = self._build_problematic_cohort()
         s_copy = copy.deepcopy(students)
         f_copy = copy.deepcopy(faculty)

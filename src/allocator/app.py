@@ -1630,8 +1630,11 @@ def cb_run(n_phase0, n_full, loaded):
         was needed.
         """
         S, F_count = len(students), len(faculty)
-        # C_remaining at Phase-0 time (r1_ids still empty — no Round 1 yet)
-        tier_c_remaining = sum(1 for s in students if s.tier == "C")
+        # Mirror check_empty_lab_risk: exclude any Tier-C students already placed in Round 1
+        r1_ids = frozenset(
+            sid for sid, fid in _app_state.get("r1_assignments", {}).items() if fid is not None
+        )
+        tier_c_remaining = sum(1 for s in students if s.tier == "C" and s.id not in r1_ids)
         if S < F_count:
             return {"type": "s_lt_f", "count": F_count - S, "policy": ALLOCATION_POLICY,
                     "structural": False}
