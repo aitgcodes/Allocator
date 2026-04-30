@@ -1268,10 +1268,21 @@ def _tr_execute_round(state: TieredRoundsState) -> TieredRoundsState:
     )
 
 
-def _tr_run_to_pause(state: TieredRoundsState) -> TieredRoundsState:
-    """Loop _tr_execute_round until a tie, completion, or stall."""
+def _tr_run_to_pause(
+    state: TieredRoundsState,
+    stop_at_round: Optional[int] = None,
+) -> TieredRoundsState:
+    """Loop _tr_execute_round until a tie, completion, stall, or stop_at_round.
+
+    If stop_at_round is set and state.round_no reaches that value, returns
+    immediately with status="switch_to_backfill" without executing that round.
+    Used by tiered_ll to hand off to LL-HP backfill at the critical round.
+    """
+    from dataclasses import replace as _dc_replace
     F = len(state.faculty)
     while state.status == "running":
+        if stop_at_round is not None and state.round_no >= stop_at_round:
+            return _dc_replace(state, status="switch_to_backfill")
         if state.round_no > F:
             # All preference positions exhausted — genuine stall
             stall_ids = [sid for sid, fid in state.assignments.items() if fid is None]
@@ -1280,7 +1291,6 @@ def _tr_run_to_pause(state: TieredRoundsState) -> TieredRoundsState:
                 f"all {F} preference positions exhausted with "
                 f"{len(stall_ids)} student(s) still unassigned",
             )
-            from dataclasses import replace as _dc_replace
             return _dc_replace(state, status="stalled", stall_unassigned=stall_ids)
         state = _tr_execute_round(state)
     return state
@@ -1290,6 +1300,7 @@ def tiered_rounds_start(
     students: List[Student],
     faculty: List[Faculty],
     snapshots: SnapshotList,
+    stop_at_round: Optional[int] = None,
 ) -> TieredRoundsState:
     """
     Initialise and start the CPI-tiered preference rounds engine after Phase 0.
@@ -1361,12 +1372,13 @@ def tiered_rounds_start(
         status="running",
         stall_unassigned=[],
     )
-    return _tr_run_to_pause(initial)
+    return _tr_run_to_pause(initial, stop_at_round=stop_at_round)
 
 
 def tiered_rounds_resume(
     state: TieredRoundsState,
     chosen_student_id: str,
+    stop_at_round: Optional[int] = None,
 ) -> TieredRoundsState:
     """
     Resolve the current pending tie by allocating chosen_student_id to the
@@ -1376,10 +1388,13 @@ def tiered_rounds_resume(
     ----------
     state              : TieredRoundsState with status == "awaiting_tie"
     chosen_student_id  : must be in state.pending_tie.tied_ids
+    stop_at_round      : if set, stop before executing that round number
+                         (returns status="switch_to_backfill"); used by tiered_ll
 
     Returns
     -------
-    Updated TieredRoundsState with status in {"awaiting_tie", "complete", "stalled"}
+    Updated TieredRoundsState with status in
+    {"awaiting_tie", "complete", "stalled", "switch_to_backfill"}
     """
     if state.status != "awaiting_tie":
         raise ValueError(
@@ -1472,7 +1487,193 @@ def tiered_rounds_resume(
         pending_tie=None, pending_tie_queue=[],
         trace_log=new_trace, status="running", stall_unassigned=[],
     )
-    return _tr_run_to_pause(next_state)
+    return _tr_run_to_pause(next_state, stop_at_round=stop_at_round)
+
+
+# ---------------------------------------------------------------------------
+# Tiered-LL: reachability check, dry-run, critical-round finder, backfill
+# ---------------------------------------------------------------------------
+
+def _reachability(
+    unassigned_ids: Set[str],
+    faculty: List[Faculty],
+    faculty_loads: Dict[str, int],
+    student_map: Dict[str, "Student"],
+    completed_round_no: int,
+) -> Tuple[int, int]:
+    """
+    After completing round completed_round_no, count faculty with remaining
+    capacity that are reachable / unreachable by unassigned students.
+
+    A faculty is "reachable" if it has remaining capacity AND at least one
+    unassigned student still lists it in prefs[completed_round_no:].
+
+    Returns (reachable_count, unreachable_count).
+    """
+    faculty_with_cap = {
+        f.id for f in faculty if faculty_loads.get(f.id, 0) < f.max_load
+    }
+    reachable: Set[str] = set()
+    for sid in unassigned_ids:
+        s = student_map[sid]
+        for fid in s.preferences[completed_round_no:]:
+            if fid in faculty_with_cap:
+                reachable.add(fid)
+    unreachable = len(faculty_with_cap) - len(reachable)
+    return len(reachable), max(0, unreachable)
+
+
+def tiered_rounds_dry_run(
+    students: List[Student],
+    faculty: List[Faculty],
+) -> List[Dict]:
+    """
+    Deterministic dry-run of tiered rounds with auto CPI tie-breaking.
+
+    Deep-copies students/faculty so originals are not mutated.
+    Ties are resolved by highest CPI (tie-broken by student ID for determinism).
+    Returns a list of per-round stat dicts for use by find_critical_round.
+
+    Each dict contains:
+        round_no, unassigned_count, unreachable_faculty_count,
+        assignments_made, is_stall
+    """
+    students_copy = copy.deepcopy(students)
+    faculty_copy  = copy.deepcopy(faculty)
+    dummy_snaps   = SnapshotList()
+    dummy_snaps.append(AllocationSnapshot(
+        step=0, phase="Phase0", event="dry-run init",
+        assignments={s.id: None for s in students_copy},
+        faculty_loads={f.id: 0 for f in faculty_copy},
+        unassigned={s.id for s in students_copy},
+    ))
+
+    student_map = {s.id: s for s in students_copy}
+
+    state = tiered_rounds_start(students_copy, faculty_copy, dummy_snaps)
+
+    # Auto-resolve all ties by highest CPI (lowest id for true CPI tie)
+    while state.status == "awaiting_tie":
+        tie = state.pending_tie
+        chosen = min(
+            tie.tied_ids,
+            key=lambda sid: (-student_map[sid].cpi, sid),
+        )
+        state = tiered_rounds_resume(state, chosen)
+
+    # Build per-round stats from the trace_log
+    round_stats: List[Dict] = []
+    for trace in state.trace_log:
+        round_no       = trace["round_no"]
+        unassigned_ids = set(trace["forwarded_to_next_round"])
+        loads_after    = trace["advisor_loads_after"]
+        assigned_count = len(trace["assigned_this_round"])
+
+        _, unreachable = _reachability(
+            unassigned_ids, faculty_copy, loads_after, student_map, round_no
+        )
+        round_stats.append({
+            "round_no":                 round_no,
+            "unassigned_count":         len(unassigned_ids),
+            "unreachable_faculty_count": unreachable,
+            "assignments_made":         assigned_count,
+            "is_stall":                 (assigned_count == 0 and len(unassigned_ids) > 0),
+        })
+
+    return round_stats
+
+
+def find_critical_round(dry_run_states: List[Dict]) -> int:
+    """
+    Return the last round k where the stopping criterion has NOT yet fired.
+
+    Stopping criterion fires when:
+      - unreachable_faculty_count > 0 (some advisor with capacity is unreachable), OR
+      - is_stall is True (zero new assignments with students remaining).
+
+    If the criterion never fires, k = total rounds (tiered rounds run to completion
+    and backfill will have no work to do).
+    If the criterion fires immediately at round 1, k = 1 (minimum).
+    """
+    if not dry_run_states:
+        return 1
+    k = 1
+    for entry in dry_run_states:
+        if entry["unreachable_faculty_count"] > 0 or entry["is_stall"]:
+            break
+        k = entry["round_no"]
+    return k
+
+
+def tiered_ll_backfill(
+    unassigned_students: List[Student],
+    faculty: List[Faculty],
+    assignments: Dict[str, Optional[str]],
+    faculty_loads: Dict[str, int],
+    k: int,
+    snapshots: SnapshotList,
+) -> Tuple[Dict[str, Optional[str]], Dict[str, int], List[str]]:
+    """
+    LL-HP backfill phase for tiered_ll: assign unassigned students using
+    prefs[k:] (preferences beyond the k completed tiered rounds) in CPI order.
+
+    Appends snapshots. Returns (assignments, faculty_loads, overflow_ids) where
+    overflow_ids lists students whose remaining preferences were all exhausted.
+    """
+    faculty_map = {f.id: f for f in faculty}
+    step = snapshots.last().step if snapshots.last() else 0
+    step += 1
+    snapshots.append(AllocationSnapshot(
+        step=step,
+        phase="TieredLL_Backfill",
+        event=(
+            f"LL-HP backfill begins | {len(unassigned_students)} students | "
+            f"prefs[{k}:] (rounds {k+1}… onward)"
+        ),
+        assignments=copy.copy(assignments),
+        faculty_loads=copy.copy(faculty_loads),
+        unassigned={s.id for s in unassigned_students},
+    ))
+
+    for s in _sorted_by_cpi(unassigned_students):
+        remaining_prefs = s.preferences[k:]
+        result = _least_loaded_choice(s, remaining_prefs, faculty_map, faculty_loads)
+        if result:
+            fid, local_rank = result
+            global_rank = k + local_rank
+            assignments[s.id] = fid
+            faculty_loads[fid] += 1
+            step += 1
+            snapshots.append(AllocationSnapshot(
+                step=step,
+                phase="TieredLL_Backfill",
+                event=(
+                    f"Backfill | {s.name} ({s.id}, CPI {s.cpi:.2f}) → "
+                    f"{faculty_map[fid].name} ({fid}) | "
+                    f"pref rank {global_rank} | load now {faculty_loads[fid]}"
+                ),
+                assignments=copy.copy(assignments),
+                faculty_loads=copy.copy(faculty_loads),
+                unassigned={sid for sid, fid2 in assignments.items() if fid2 is None},
+                preference_rank={s.id: global_rank},
+            ))
+
+    overflow = [s.id for s in unassigned_students if assignments[s.id] is None]
+    step += 1
+    snapshots.append(AllocationSnapshot(
+        step=step,
+        phase="TieredLL_Backfill",
+        event=(
+            f"LL-HP backfill complete | "
+            f"{len(unassigned_students) - len(overflow)} assigned | "
+            f"{len(overflow)} overflow"
+        ),
+        assignments=copy.copy(assignments),
+        faculty_loads=copy.copy(faculty_loads),
+        unassigned=set(overflow),
+    ))
+
+    return assignments, faculty_loads, overflow
 
 
 # ---------------------------------------------------------------------------

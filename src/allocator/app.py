@@ -100,11 +100,14 @@ from .allocation import (
     _nonempty_choice,
     build_r1_candidate_lists,
     cpi_fill_allocation,
+    find_critical_round,
     main_allocation,
     phase0,
     round1,
     run_full_allocation,
     simulate_tiers_ab,
+    tiered_ll_backfill,
+    tiered_rounds_dry_run,
     tiered_rounds_resume,
     tiered_rounds_start,
 )
@@ -317,9 +320,9 @@ def _state_to_json() -> dict:
     """Serialise the current finalised _app_state to a JSON-compatible dict."""
     students = _app_state.get("students", [])
     faculty  = _app_state.get("faculty",  [])
-    # For tiered_rounds, the live assignments live in tr_state, not current_assignments
+    # For tiered_rounds/tiered_ll, the live assignments live in tr_state
     tr_state = _app_state.get("tr_state")
-    if ALLOCATION_POLICY == "tiered_rounds" and tr_state is not None:
+    if ALLOCATION_POLICY in ("tiered_rounds", "tiered_ll") and tr_state is not None:
         assignments   = dict(tr_state.assignments)
         faculty_loads = dict(tr_state.faculty_loads)
     else:
@@ -626,7 +629,7 @@ def _render_metrics_panel(metrics: dict, policy: str = "", meta: dict = None) ->
     # Overflow badge
     overflow_badge = []
     if overflow_count > 0:
-        if policy == "tiered_rounds":
+        if policy in ("tiered_rounds", "tiered_ll"):
             overflow_badge = [
                 dbc.Badge(
                     f"ℹ {overflow_count} outside N-tier window — expected for tiered rounds (Phase 0 tiers are diagnostic only)",
@@ -1003,6 +1006,8 @@ def _landing_layout() -> dbc.Container:
                                  "value": "cpi_fill"},
                                 {"label": "CPI-tiered preference rounds (manual tie-pick)",
                                  "value": "tiered_rounds"},
+                                {"label": "Tiered LL — tiered rounds then LL-HP backfill",
+                                 "value": "tiered_ll"},
                             ],
                             value="least_loaded",
                             clearable=False,
@@ -1224,6 +1229,11 @@ def cb_landing_policy_desc(value):
                 "offers their n-th preference. Each advisor allocates at most one student "
                 "per round (highest CPI wins); CPI ties require a manual pick before the "
                 "round advances.")
+    if value == "tiered_ll":
+        return ("Hybrid two-phase policy: Phase 0 + dry-run determines critical round k; "
+                "Phase 1 runs interactive tiered rounds 1..k (manual tie-picks); "
+                "Phase 2 auto-runs LL-HP backfill over remaining preferences "
+                "for any unassigned students, guaranteeing no empty labs when feasible.")
     return ("Three-phase pipeline: Phase 0 tiers students by CPI; Round 1 gives each "
             "faculty their top first-choice student; main allocation processes students "
             "class-by-class (A → B → C) within an N_tier preference window, assigning "
@@ -1252,7 +1262,7 @@ def cb_landing_continue(n_clicks, policy):
 def cb_update_section_headers(policy):
     if policy == "cpi_fill":
         return "3 — Phase 1", "4 — Phase 2"
-    if policy == "tiered_rounds":
+    if policy in ("tiered_rounds", "tiered_ll"):
         return "3 — Preference Rounds", "4 — (not used)"
     return "3 — Round 1: faculty picks", "4 — Main Allocation"
 
@@ -1561,6 +1571,103 @@ def cb_toggle_load_buttons(s, f):
 
 
 # ---------------------------------------------------------------------------
+# Helpers shared by cb_run and cb_tr_resolve (tiered_rounds / tiered_ll)
+# ---------------------------------------------------------------------------
+
+def _finalize_tr_complete(tr_state, snaps, marks, k_crit=None, backfill_ran=False):
+    """Finalise a complete tiered-rounds / tiered_ll run (7-tuple return value)."""
+    _app_state["phase"] = "complete"
+    _app_state["current_assignments"]   = dict(tr_state.assignments)
+    _app_state["current_faculty_loads"] = dict(tr_state.faculty_loads)
+    _app_state["metrics"] = compute_metrics(
+        tr_state.students, tr_state.assignments,
+        F=len(tr_state.faculty),
+        faculty_ids=[f.id for f in tr_state.faculty],
+        faculty=tr_state.faculty,
+    )
+    assigned = sum(1 for fid in tr_state.assignments.values() if fid is not None)
+    if backfill_ran and k_crit is not None:
+        msg = (f"Tiered LL complete — {assigned} students assigned "
+               f"(rounds 1..{k_crit} + LL-HP backfill).")
+    else:
+        msg = f"Preference rounds complete — all {assigned} students assigned."
+    n = len(snaps)
+    return (
+        msg, "complete", n - 1, marks, n - 1,
+        _finalize_prompt(dict(tr_state.assignments), dict(tr_state.faculty_loads), tr_state.faculty),
+        dash.no_update,
+    )
+
+
+def _finalize_tr_stalled(tr_state, snaps, marks):
+    """Finalise a stalled tiered-rounds / tiered_ll run (7-tuple return value)."""
+    _app_state["phase"] = "complete"
+    _app_state["current_assignments"]   = dict(tr_state.assignments)
+    _app_state["current_faculty_loads"] = dict(tr_state.faculty_loads)
+    _app_state["metrics"] = compute_metrics(
+        tr_state.students, tr_state.assignments,
+        F=len(tr_state.faculty),
+        faculty_ids=[f.id for f in tr_state.faculty],
+        faculty=tr_state.faculty,
+    )
+    stall_names = [
+        next((s.name for s in tr_state.students if s.id == sid), sid)
+        for sid in tr_state.stall_unassigned
+    ]
+    n = len(snaps)
+    return (
+        f"⚠ Allocation stalled — could not assign: {', '.join(stall_names)}.",
+        "complete", n - 1, marks, n - 1,
+        _finalize_prompt(dict(tr_state.assignments), dict(tr_state.faculty_loads), tr_state.faculty),
+        dash.no_update,
+    )
+
+
+def _run_tiered_ll_backfill_and_finalize(tr_state, k_crit, snaps, marks):
+    """Run LL-HP backfill for tiered_ll and return the 7-tuple callback result."""
+    unassigned_students = [
+        s for s in tr_state.students if tr_state.assignments.get(s.id) is None
+    ]
+    assignments   = dict(tr_state.assignments)
+    faculty_loads = dict(tr_state.faculty_loads)
+    try:
+        assignments, faculty_loads, overflow = tiered_ll_backfill(
+            unassigned_students, tr_state.faculty,
+            assignments, faculty_loads, k_crit, snaps,
+        )
+    except Exception as e:
+        return f"✗ Backfill error: {e}", "idle", 0, {}, 0, dash.no_update, dash.no_update
+    _app_state["snapshots"] = snaps
+    n = len(snaps)
+    marks = {i: str(snaps[i].step) for i in range(0, n, max(1, n // 10))}
+    _app_state["phase"] = "complete"
+    _app_state["current_assignments"]   = assignments
+    _app_state["current_faculty_loads"] = faculty_loads
+    _app_state["metrics"] = compute_metrics(
+        tr_state.students, assignments,
+        F=len(tr_state.faculty),
+        faculty_ids=[f.id for f in tr_state.faculty],
+        faculty=tr_state.faculty,
+    )
+    assigned_count = sum(1 for fid in assignments.values() if fid is not None)
+    if overflow:
+        overflow_names = [
+            next((s.name for s in tr_state.students if s.id == sid), sid)
+            for sid in overflow
+        ]
+        msg = (f"Tiered LL complete — {assigned_count} assigned, "
+               f"{len(overflow)} overflow: {', '.join(overflow_names)}.")
+    else:
+        msg = (f"Tiered LL complete — all {assigned_count} students assigned "
+               f"(rounds 1..{k_crit} + LL-HP backfill).")
+    return (
+        msg, "complete", n - 1, marks, n - 1,
+        _finalize_prompt(assignments, faculty_loads, tr_state.faculty),
+        dash.no_update,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Callbacks — run buttons
 # ---------------------------------------------------------------------------
 
@@ -1586,6 +1693,25 @@ def cb_run(n_phase0, n_full, loaded):
 
     students = _app_state["students"]
     faculty  = _app_state["faculty"]
+
+    def _run_tiered_ll_dry_run(students, faculty, meta):
+        """Run tiered-rounds dry-run and store k_crit_static + summary into meta."""
+        dry_run_states = tiered_rounds_dry_run(students, faculty)
+        k = find_critical_round(dry_run_states)
+        total_rounds = dry_run_states[-1]["round_no"] if dry_run_states else 0
+        stall_rd = next(
+            (e["round_no"] for e in dry_run_states if e["is_stall"]), None
+        )
+        # Count empty labs predicted by dry-run (faculty with 0 assigned after backfill)
+        # Approximate: unassigned count at round k vs faculty with capacity
+        empty_pred = next(
+            (e["unreachable_faculty_count"] for e in dry_run_states
+             if e["round_no"] == k), 0
+        )
+        meta["k_crit_static"]      = k
+        meta["dry_run_rounds_total"] = total_rounds
+        meta["dry_run_stall_round"]  = stall_rd
+        meta["dry_run_empty_labs"]   = empty_pred
 
     def _phase0_status_msg(students, faculty, meta):
         tier_c = sum(1 for s in students if s.tier == "C")
@@ -1617,6 +1743,19 @@ def cb_run(n_phase0, n_full, loaded):
             return (base +
                     f" | ✓ Caps optimized (N_A {meta.get('N_A_baseline')}→{meta.get('N_A')}, "
                     f"N_B {meta.get('N_B_baseline')}→{meta.get('N_B')}): empty-lab check passed")
+
+        if ALLOCATION_POLICY == "tiered_ll":
+            k = meta.get("k_crit_static")
+            if k is not None:
+                stall_rd = meta.get("dry_run_stall_round")
+                empty    = meta.get("dry_run_empty_labs", "?")
+                if stall_rd:
+                    return (base +
+                            f" | k_crit={k} | dry-run: stall at round {stall_rd}, "
+                            f"{empty} empty lab(s) predicted — switching to LL-HP backfill after round {k}")
+                return (base +
+                        f" | k_crit={k} | dry-run: {empty} empty lab(s), switch after round {k}")
+            return base + " | (dry-run pending)"
 
         risk = check_empty_lab_risk(students, faculty, meta)
         if risk is None:
@@ -1705,6 +1844,8 @@ def cb_run(n_phase0, n_full, loaded):
                     "cpi_p2_queue_idx":      0,
                     "cpi_phase1_stats":      {},
                 })
+                if ALLOCATION_POLICY == "tiered_ll":
+                    _run_tiered_ll_dry_run(students, faculty, meta)
                 msg = _phase0_status_msg(students, faculty, meta)
             except Exception as e:
                 return f"✗ Phase 0 error: {e}", "idle", 0, {}, 0, dash.no_update, dash.no_update
@@ -1712,6 +1853,8 @@ def cb_run(n_phase0, n_full, loaded):
             students = _app_state["students"]
             faculty  = _app_state["faculty"]
             meta     = _app_state["meta"]
+            if ALLOCATION_POLICY == "tiered_ll" and "k_crit_static" not in meta:
+                _run_tiered_ll_dry_run(students, faculty, meta)
             msg = "Phase-0 already computed (loaded from report)."
         snaps = _app_state["snapshots"]
         risk_data = _build_risk_data(students, faculty, _app_state["meta"])
@@ -1809,43 +1952,49 @@ def cb_run(n_phase0, n_full, loaded):
                 _app_state["phase"] = "tr_tie_pending"
                 return msg, "tr_tie_pending", n - 1, marks, n - 1, dash.no_update, dash.no_update
             if tr_state.status == "complete":
-                _app_state["phase"] = "complete"
-                _app_state["current_assignments"]   = dict(tr_state.assignments)
-                _app_state["current_faculty_loads"] = dict(tr_state.faculty_loads)
-                _app_state["metrics"] = compute_metrics(
-                    tr_state.students, tr_state.assignments,
-                    F=len(tr_state.faculty),
-                    faculty_ids=[f.id for f in tr_state.faculty],
-                    faculty=tr_state.faculty,
-                )
-                assigned = sum(1 for fid in tr_state.assignments.values() if fid is not None)
-                return (
-                    f"Preference rounds complete — all {assigned} students assigned.",
-                    "complete", n - 1, marks, n - 1,
-                    _finalize_prompt(dict(tr_state.assignments), dict(tr_state.faculty_loads), tr_state.faculty),
-                    dash.no_update,
-                )
+                return _finalize_tr_complete(tr_state, snaps, marks)
             if tr_state.status == "stalled":
-                _app_state["phase"] = "complete"
-                _app_state["current_assignments"]   = dict(tr_state.assignments)
-                _app_state["current_faculty_loads"] = dict(tr_state.faculty_loads)
-                _app_state["metrics"] = compute_metrics(
-                    tr_state.students, tr_state.assignments,
-                    F=len(tr_state.faculty),
-                    faculty_ids=[f.id for f in tr_state.faculty],
-                    faculty=tr_state.faculty,
-                )
-                stall_names = [
-                    next((s.name for s in tr_state.students if s.id == sid), sid)
-                    for sid in tr_state.stall_unassigned
-                ]
-                return (
-                    f"⚠ Allocation stalled — could not assign: {', '.join(stall_names)}.",
-                    "complete", n - 1, marks, n - 1,
-                    _finalize_prompt(dict(tr_state.assignments), dict(tr_state.faculty_loads), tr_state.faculty),
-                    dash.no_update,
-                )
+                return _finalize_tr_stalled(tr_state, snaps, marks)
             return "⚠ Unexpected engine state.", "idle", 0, {}, 0, dash.no_update, dash.no_update
+
+        # tiered_ll: Phase 0 → dry-run → tiered rounds 1..k_crit → auto backfill
+        if ALLOCATION_POLICY == "tiered_ll":
+            meta = _app_state["meta"]
+            if "k_crit_static" not in meta:
+                try:
+                    _run_tiered_ll_dry_run(students, faculty, meta)
+                except Exception as e:
+                    return f"✗ Dry-run error: {e}", "idle", 0, {}, 0, dash.no_update, dash.no_update
+            k_crit = meta["k_crit_static"]
+            try:
+                tr_state = tiered_rounds_start(students, faculty, snaps,
+                                               stop_at_round=k_crit + 1)
+            except Exception as e:
+                return f"✗ Tiered-rounds error: {e}", "idle", 0, {}, 0, dash.no_update, dash.no_update
+            _app_state["tr_state"]  = tr_state
+            _app_state["snapshots"] = tr_state.snapshots
+            snaps = tr_state.snapshots
+            n = len(snaps)
+            marks = {i: str(snaps[i].step) for i in range(0, n, max(1, n // 10))}
+
+            if tr_state.status == "switch_to_backfill":
+                return _run_tiered_ll_backfill_and_finalize(tr_state, k_crit, snaps, marks)
+            if tr_state.status == "awaiting_tie":
+                tie = tr_state.pending_tie
+                remaining = len(tr_state.pending_tie_queue)
+                msg = (
+                    f"k_crit={k_crit} | Round {tie.round_no}/{k_crit}: "
+                    f"tie-break required for {tie.advisor_name}"
+                    + (f" ({remaining} more tie(s) in this round)" if remaining else "")
+                    + "."
+                )
+                _app_state["phase"] = "tr_tie_pending"
+                return msg, "tr_tie_pending", n - 1, marks, n - 1, dash.no_update, dash.no_update
+            if tr_state.status == "complete":
+                return _finalize_tr_complete(tr_state, snaps, marks, k_crit, backfill_ran=False)
+            if tr_state.status == "stalled":
+                return _finalize_tr_stalled(tr_state, snaps, marks)
+            return "⚠ Unexpected tiered_ll engine state.", "idle", 0, {}, 0, dash.no_update, dash.no_update
 
         # CPI-Fill skips Round 1 — initialise empty assignments and wait for operator.
         if ALLOCATION_POLICY == "cpi_fill":
@@ -2174,8 +2323,8 @@ def cb_r1_panel(phase):
             html.Div(buttons, className="d-flex"),
         ]
 
-    # ---- tiered_rounds phases ----
-    if ALLOCATION_POLICY == "tiered_rounds":
+    # ---- tiered_rounds / tiered_ll phases ----
+    if ALLOCATION_POLICY in ("tiered_rounds", "tiered_ll"):
         if phase == "tr_tie_pending":
             tr_state = _app_state.get("tr_state")
             if tr_state and tr_state.status == "awaiting_tie":
@@ -2284,8 +2433,10 @@ def cb_tr_resolve(n_clicks, chosen_sid):
             dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update,
         )
 
+    k_crit = _app_state.get("meta", {}).get("k_crit_static") if ALLOCATION_POLICY == "tiered_ll" else None
+    stop_at = (k_crit + 1) if k_crit is not None else None
     try:
-        tr_state = tiered_rounds_resume(tr_state, chosen_sid)
+        tr_state = tiered_rounds_resume(tr_state, chosen_sid, stop_at_round=stop_at)
     except Exception as e:
         return (
             dash.no_update,
@@ -2301,55 +2452,41 @@ def cb_tr_resolve(n_clicks, chosen_sid):
 
     panel = _render_tiered_rounds_panel(tr_state)
 
+    if tr_state.status == "switch_to_backfill":
+        _, msg, phase, sl_max, sl_marks, sl_val, fin = _run_tiered_ll_backfill_and_finalize(
+            tr_state, k_crit, snaps, marks
+        )
+        return panel, msg, phase, sl_max, sl_marks, sl_val, fin
+
     if tr_state.status == "complete":
-        _app_state["phase"] = "complete"
-        _app_state["current_assignments"]   = dict(tr_state.assignments)
-        _app_state["current_faculty_loads"] = dict(tr_state.faculty_loads)
-        _app_state["metrics"] = compute_metrics(
-            tr_state.students, tr_state.assignments,
-            F=len(tr_state.faculty),
-            faculty_ids=[f.id for f in tr_state.faculty],
-            faculty=tr_state.faculty,
+        _, msg, phase, sl_max, sl_marks, sl_val, fin = _finalize_tr_complete(
+            tr_state, snaps, marks,
+            k_crit=k_crit, backfill_ran=(ALLOCATION_POLICY == "tiered_ll"),
         )
-        assigned = sum(1 for fid in tr_state.assignments.values() if fid is not None)
-        return (
-            panel,
-            f"Preference rounds complete — all {assigned} students assigned.",
-            "complete", n - 1, marks, n - 1,
-            _finalize_prompt(dict(tr_state.assignments), dict(tr_state.faculty_loads), tr_state.faculty),
-        )
+        return panel, msg, phase, sl_max, sl_marks, sl_val, fin
 
     if tr_state.status == "stalled":
-        _app_state["phase"] = "complete"
-        _app_state["current_assignments"]   = dict(tr_state.assignments)
-        _app_state["current_faculty_loads"] = dict(tr_state.faculty_loads)
-        _app_state["metrics"] = compute_metrics(
-            tr_state.students, tr_state.assignments,
-            F=len(tr_state.faculty),
-            faculty_ids=[f.id for f in tr_state.faculty],
-            faculty=tr_state.faculty,
-        )
-        stall_names = [
-            next((s.name for s in tr_state.students if s.id == sid), sid)
-            for sid in tr_state.stall_unassigned
-        ]
-        return (
-            panel,
-            f"⚠ Allocation stalled — could not assign: {', '.join(stall_names)}.",
-            "complete", n - 1, marks, n - 1,
-            _finalize_prompt(dict(tr_state.assignments), dict(tr_state.faculty_loads), tr_state.faculty),
-        )
+        _, msg, phase, sl_max, sl_marks, sl_val, fin = _finalize_tr_stalled(tr_state, snaps, marks)
+        return panel, msg, phase, sl_max, sl_marks, sl_val, fin
 
     if tr_state.status == "awaiting_tie":
         _app_state["phase"] = "tr_tie_pending"
         tie = tr_state.pending_tie
         remaining = len(tr_state.pending_tie_queue)
-        msg = (
-            f"Round {tie.round_no}: manual tie-break required "
-            f"for {tie.advisor_name}"
-            + (f" ({remaining} more tie(s) in this round)" if remaining else "")
-            + "."
-        )
+        if ALLOCATION_POLICY == "tiered_ll" and k_crit is not None:
+            msg = (
+                f"k_crit={k_crit} | Round {tie.round_no}/{k_crit}: "
+                f"tie-break required for {tie.advisor_name}"
+                + (f" ({remaining} more tie(s) in this round)" if remaining else "")
+                + "."
+            )
+        else:
+            msg = (
+                f"Round {tie.round_no}: manual tie-break required "
+                f"for {tie.advisor_name}"
+                + (f" ({remaining} more tie(s) in this round)" if remaining else "")
+                + "."
+            )
         return panel, msg, "tr_tie_pending", n - 1, marks, n - 1, dash.no_update
 
     return no_up7

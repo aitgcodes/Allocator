@@ -83,6 +83,7 @@ Load CSVs → Phase 0 (tier + N_tier + max_load)
 - **`nonempty`** — Phase 0 → Round 1 → class-wise assignment preferring the highest-preferred **empty lab** (load = 0) first; falls back to highest-preferred advisor with remaining capacity. See `docs/policy_nonempty.md`.
 - **`cpi_fill`** — Phase 0 → CPI-Fill Phase 1 (students processed in descending CPI order, assigned to highest-preferred advisor with capacity, stops when `unassigned == empty_labs`) → Phase 2 (each remaining student goes to their highest-preferred empty lab). Round 1 is **skipped**. See `docs/policy_cpi_fill.md`.
 - **`tiered_rounds`** — Phase 0 (tier classification, diagnostic only) → Preference Rounds: in round *n* every unassigned student offers their *n*-th preference; each advisor picks at most one student per round (highest CPI wins; ties require a manual pick). Runs until all students assigned or a stall is detected. See `docs/policy_tiered_rounds.md`.
+- **`tiered_ll`** — Hybrid two-phase policy: Phase 0a (tier classification) → Phase 0b (dry-run determines critical round k, stored as `k_crit_static` in meta) → Phase 1 (interactive tiered rounds 1..k, same tie-break UI as `tiered_rounds`) → Phase 2 (automatic LL-HP backfill over `prefs[k:]` for any remaining unassigned students). Guarantees no empty labs when S ≥ F and the preference structure is feasible. See `TODO/tiered_ll_policy.md` (documentation forthcoming).
 
 ### NPSS formula
 
