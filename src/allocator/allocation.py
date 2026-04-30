@@ -316,17 +316,19 @@ def phase0(
 
     # --- baseline cap fields (always present in meta) ---
     meta.update({
-        "N_A_baseline":     N_A,
-        "N_B_baseline":     N_B,
-        "caps_optimized":   False,
+        "N_A_baseline":       N_A,
+        "N_B_baseline":       N_B,
+        "caps_optimized":     False,
         "structural_deficit": False,
-        "E_after_B":        None,
+        "E_after_B":          None,
+        "E_baseline_excess":  0,    # excess empty labs at baseline caps (before optimization)
     })
 
     # --- Adaptive LL: optimize caps if requested ---
     if optimize:
         risk = check_empty_lab_risk(students, faculty, meta)
         if risk and risk[0] == "e_gt_c":
+            meta["E_baseline_excess"] = risk[1]   # store before overwriting caps
             N_A_opt, N_B_opt, E_opt, structural = phase0_optimize_caps(students, faculty, meta)
             meta["N_A"] = N_A_opt
             meta["N_B"] = N_B_opt
