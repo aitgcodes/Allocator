@@ -41,14 +41,48 @@ PYTHONPATH=src python -m allocator.allocation --phase0-only \
 PYTHONPATH=src python -m allocator.allocation \
   --students data/sample_students.csv \
   --faculty data/sample_faculty.csv \
-  --policy least_loaded   # or: nonempty | cpi_fill  (tiered_rounds requires the GUI)
+  --policy least_loaded   # or: adaptive_ll | nonempty | cpi_fill
+  --out reports/
+
+# tiered_rounds and tiered_ll require --auto-tiebreak for CLI use:
+PYTHONPATH=src python -m allocator.allocation \
+  --students data/sample_students.csv \
+  --faculty data/sample_faculty.csv \
+  --policy tiered_ll \
+  --auto-tiebreak \
   --out reports/
 ```
 
-**Policy comparison study (stats folder):**
+**Post-allocation analysis and cross-policy comparison:**
+```bash
+# Recompute metrics from an existing allocation_result.csv:
+PYTHONPATH=src python -m allocator.analyze metrics \
+  --students data/sample_students.csv \
+  --faculty data/sample_faculty.csv \
+  --result reports/allocation_result.csv \
+  --out reports/
+
+# Compare multiple policies on the same cohort:
+PYTHONPATH=src python -m allocator.analyze compare \
+  --students data/sample_students.csv \
+  --faculty data/sample_faculty.csv \
+  --policies least_loaded cpi_fill tiered_ll \
+  --auto-tiebreak \
+  --out reports/
+
+# Full policy study (real + synthetic datasets):
+PYTHONPATH=src python -m allocator.analyze study \
+  --students data/sample_students.csv \
+  --faculty data/sample_faculty.csv \
+  --out stats/
+# → generates synthetic CSVs + runs policies on all datasets
+# → writes stats/policy_report.md
+```
+
+**Policy comparison study (stats folder, legacy wrapper):**
 ```bash
 PYTHONPATH=src python stats/run_study.py
-# → generates 4 synthetic datasets + runs both policies on all 5 datasets
+# → thin wrapper around: python -m allocator.analyze study
 # → writes stats/policy_report.md
 ```
 

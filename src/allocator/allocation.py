@@ -1690,6 +1690,7 @@ def run_full_allocation(
     r1_picks: Optional[Dict[str, str]] = None,
     out_dir: Optional[str] = None,
     policy: str = "least_loaded",
+    auto_tiebreak: bool = False,
 ) -> Tuple[Dict[str, Optional[str]], SnapshotList, dict, dict]:
     """
     Run Phase 0 → (Round 1 →) Main allocation end-to-end.
@@ -1698,18 +1699,27 @@ def run_full_allocation(
 
     Parameters
     ----------
-    students  : raw Student list (tier/n_tier not yet set)
-    faculty   : raw Faculty list (max_load=-1 where not specified)
-    r1_picks  : optional Round-1 picks dict (see round1()); ignored for cpi_fill
-    out_dir   : if provided, Phase-0 report CSVs are written here
-    policy    : assignment policy.
-                "least_loaded" (default) — Phase 0 → Round 1 → assign to the
-                least-loaded eligible faculty, tie-broken by preference rank.
-                "nonempty" — Phase 0 → Round 1 → prefer the highest-preferred
-                empty lab; fall back to highest-preferred with remaining capacity.
-                "cpi_fill" — Phase 0 → Phase 1 (CPI order, highest-preferred
-                with capacity, stopping condition) → Phase 2 (highest-preferred
-                empty lab). Round 1 is not run.
+    students      : raw Student list (tier/n_tier not yet set)
+    faculty       : raw Faculty list (max_load=-1 where not specified)
+    r1_picks      : optional Round-1 picks dict (see round1()); ignored for cpi_fill
+    out_dir       : if provided, Phase-0 report CSVs are written here
+    policy        : assignment policy.
+                    "least_loaded" (default) — Phase 0 → Round 1 → assign to the
+                    least-loaded eligible faculty, tie-broken by preference rank.
+                    "adaptive_ll" — Adaptive variant of least_loaded with optimized
+                    N_A/N_B caps.
+                    "nonempty" — Phase 0 → Round 1 → prefer the highest-preferred
+                    empty lab; fall back to highest-preferred with remaining capacity.
+                    "cpi_fill" — Phase 0 → Phase 1 (CPI order, highest-preferred
+                    with capacity, stopping condition) → Phase 2 (highest-preferred
+                    empty lab). Round 1 is not run.
+                    "tiered_rounds" — Preference rounds until all assigned or stall.
+                    Requires auto_tiebreak=True for non-interactive use.
+                    "tiered_ll" — Tiered rounds 1..k then LL-HP backfill.
+                    Requires auto_tiebreak=True for non-interactive use.
+    auto_tiebreak : if True, automatically resolve ties in tiered_rounds/tiered_ll
+                    by highest CPI (ties broken by student_id). Required for CLI
+                    use of tiered_rounds and tiered_ll policies.
 
     Returns
     -------
@@ -1717,18 +1727,21 @@ def run_full_allocation(
         assignments : {student_id: faculty_id | None}
         snapshots   : SnapshotList of all allocation steps
         meta        : cohort-level parameters dict from Phase 0
+                      (includes "k_crit_static" key when policy="tiered_ll")
         metrics     : satisfaction metrics dict from compute_metrics
                       (keys: "npss", "overflow_count", "mean_psi",
-                       "per_tier", "per_student")
+                       "per_tier", "per_student", "advisor")
     """
-    _POLICIES = {"least_loaded", "nonempty", "cpi_fill", "tiered_rounds", "adaptive_ll"}
+    _POLICIES = {"least_loaded", "nonempty", "cpi_fill", "tiered_rounds", "adaptive_ll",
+                 "tiered_ll"}
     if policy not in _POLICIES:
         raise ValueError(f"Unknown policy {policy!r}. Choose from {_POLICIES}.")
-    if policy == "tiered_rounds":
-        raise NotImplementedError(
-            "The 'tiered_rounds' policy requires interactive tie-breaking and "
-            "cannot be run via run_full_allocation(). Use the Dash UI or call "
-            "tiered_rounds_start() / tiered_rounds_resume() directly."
+
+    if policy in ("tiered_rounds", "tiered_ll") and not auto_tiebreak:
+        raise ValueError(
+            f"The {policy!r} policy requires interactive tie-breaking. "
+            "Pass auto_tiebreak=True to auto-resolve ties by highest CPI, "
+            "or use the Dash UI for manual tie-breaking."
         )
 
     students, faculty, meta, snaps = phase0(
@@ -1736,6 +1749,9 @@ def run_full_allocation(
     )
     N_A = meta["N_A"]
     N_B = meta["N_B"]
+
+    student_map = {s.id: s for s in students}
+
     if policy == "cpi_fill":
         # Round 1 is skipped — CPI-Fill goes directly Phase 0 → Phase 1 → Phase 2.
         assignments   = {s.id: None for s in students}
@@ -1743,6 +1759,42 @@ def run_full_allocation(
         assignments, snaps, _ = cpi_fill_allocation(
             students, faculty, assignments, faculty_loads, snaps,
         )
+    elif policy == "tiered_rounds":
+        # Auto-resolve all ties; handle stall by marking stalled students as None.
+        state = tiered_rounds_start(students, faculty, snaps)
+        while state.status == "awaiting_tie":
+            tie = state.pending_tie
+            chosen = min(tie.tied_ids, key=lambda sid: (-student_map[sid].cpi, sid))
+            state = tiered_rounds_resume(state, chosen)
+        assignments = state.assignments
+        if state.status == "stalled":
+            # Mark stall_unassigned students as None (already None but be explicit)
+            for sid in state.stall_unassigned:
+                assignments[sid] = None
+        snaps = state.snapshots
+    elif policy == "tiered_ll":
+        # Phase 0b: dry-run to find k_crit.
+        dry_run_stats = tiered_rounds_dry_run(students, faculty)
+        k_crit = find_critical_round(dry_run_stats)
+        meta["k_crit_static"] = k_crit
+        stop_at = k_crit + 1
+
+        state = tiered_rounds_start(students, faculty, snaps, stop_at_round=stop_at)
+        while state.status == "awaiting_tie":
+            tie = state.pending_tie
+            chosen = min(tie.tied_ids, key=lambda sid: (-student_map[sid].cpi, sid))
+            state = tiered_rounds_resume(state, chosen, stop_at_round=stop_at)
+
+        assignments = state.assignments
+        faculty_loads = state.faculty_loads
+        snaps = state.snapshots
+
+        if state.status == "switch_to_backfill":
+            unassigned_students = [s for s in students if assignments.get(s.id) is None]
+            assignments, faculty_loads, _ = tiered_ll_backfill(
+                unassigned_students, faculty, assignments, faculty_loads, k_crit, snaps
+            )
+        # status "complete" means all assigned in k rounds — nothing more to do.
     else:
         assignments, faculty_loads, snaps = round1(students, faculty, snaps, r1_picks)
         # adaptive_ll uses the same LL assignment rule with optimized caps
@@ -1785,20 +1837,49 @@ def _cli():
     parser.add_argument(
         "--policy",
         default="least_loaded",
-        choices=["least_loaded", "nonempty", "cpi_fill"],
+        choices=["least_loaded", "nonempty", "cpi_fill", "adaptive_ll",
+                 "tiered_rounds", "tiered_ll"],
         help=(
             "Assignment policy for the main allocation round.\n"
-            "  least_loaded : assign to the least-loaded eligible faculty,\n"
-            "                 tie-broken by preference rank (default).\n"
-            "  nonempty     : prefer the highest-preferred empty lab;\n"
-            "                 if none are empty, assign the highest-preferred\n"
-            "                 faculty with remaining capacity.\n"
-            "  cpi_fill     : two-phase procedure — Phase 1 processes students\n"
-            "                 in CPI order (N_tier cap) until unassigned count\n"
-            "                 equals empty-lab count; Phase 2 assigns each\n"
-            "                 remaining student to their highest-preferred\n"
-            "                 empty lab (full preference list, no cap)."
+            "  least_loaded  : assign to the least-loaded eligible faculty,\n"
+            "                  tie-broken by preference rank (default).\n"
+            "  adaptive_ll   : adaptive variant of least_loaded with optimized\n"
+            "                  N_A/N_B caps to minimise empty labs.\n"
+            "  nonempty      : prefer the highest-preferred empty lab;\n"
+            "                  if none are empty, assign the highest-preferred\n"
+            "                  faculty with remaining capacity.\n"
+            "  cpi_fill      : two-phase procedure — Phase 1 processes students\n"
+            "                  in CPI order (N_tier cap) until unassigned count\n"
+            "                  equals empty-lab count; Phase 2 assigns each\n"
+            "                  remaining student to their highest-preferred\n"
+            "                  empty lab (full preference list, no cap).\n"
+            "  tiered_rounds : preference rounds until all assigned or stall.\n"
+            "                  Requires --auto-tiebreak for CLI use.\n"
+            "  tiered_ll     : tiered rounds 1..k then LL-HP backfill.\n"
+            "                  Requires --auto-tiebreak for CLI use."
         ),
+    )
+    parser.add_argument(
+        "--auto-tiebreak",
+        action="store_true",
+        help=(
+            "Auto-resolve tiered_rounds/tiered_ll tie-breaks by highest CPI.\n"
+            "Required for CLI use of these policies."
+        ),
+    )
+    parser.add_argument(
+        "--dynamic-k",
+        action="store_true",
+        help=(
+            "(tiered_ll only) Enable per-round dynamic stopping criterion.\n"
+            "Not yet implemented; reserved for future use."
+        ),
+    )
+    parser.add_argument(
+        "--format",
+        choices=["csv", "json"],
+        default="csv",
+        help="Output format for allocation_result (default: csv).",
     )
     parser.add_argument(
         "--from-report",
@@ -1856,24 +1937,44 @@ def _cli():
                 print(f"  Class {tier}: {counts.get(tier, 0)} students")
             return
 
+    # Validate: tiered policies require --auto-tiebreak
+    if args.policy in ("tiered_rounds", "tiered_ll") and not args.auto_tiebreak:
+        print(
+            f"Error: policy '{args.policy}' requires --auto-tiebreak for CLI use.\n"
+            "Add --auto-tiebreak to auto-resolve ties by highest CPI, or use "
+            "the Dash UI for manual tie-breaking."
+        )
+        import sys
+        sys.exit(1)
+
     # full allocation
     assignments, snaps, meta, metrics = run_full_allocation(
-        students, faculty, policy=args.policy
+        students, faculty, policy=args.policy, auto_tiebreak=args.auto_tiebreak
     )
     final = snaps.last()
-    assigned = sum(1 for v in final.assignments.values() if v is not None)
-    print(f"\nAllocation complete: {assigned}/{len(students)} assigned")
-    print(f"Total steps recorded: {len(snaps)}")
+    assigned = sum(1 for v in assignments.values() if v is not None)
 
-    # ---- Satisfaction Metrics ----
+    # ---- Concise summary table ----
     npss          = metrics["npss"]
     mean_psi      = metrics["mean_psi"]
     overflow_count = metrics["overflow_count"]
     per_tier      = metrics["per_tier"]
     per_student   = metrics["per_student"]
     advisor       = metrics.get("advisor", {})
+    empty_labs    = advisor.get("empty_labs", "N/A")
 
-    print("\nSatisfaction Metrics Report")
+    print()
+    print(f"{'Policy':<14}: {args.policy}")
+    print(f"{'Assigned':<14}: {assigned} / {len(students)}")
+    print(f"{'Empty labs':<14}: {empty_labs}")
+    print(f"{'NPSS':<14}: {npss:.3f}")
+    print(f"{'PSI':<14}: {mean_psi:.3f}")
+    if args.policy == "tiered_ll" and "k_crit_static" in meta:
+        print(f"{'k_crit':<14}: {meta['k_crit_static']}")
+    print()
+
+    # ---- Detailed metrics ----
+    print("Satisfaction Metrics Report")
     print("===========================")
 
     print("\n-- Student Satisfaction --")
@@ -1899,27 +2000,54 @@ def _cli():
         )
 
     if advisor:
-        qmode          = advisor.get("quartile_mode", False)
-        tier_map_note  = "A=1,B1=2,B2=3,C=4" if qmode else "A=1,B=2,C=3"
-        mean_bt        = advisor.get("mean_best_tier", 0.0)
-        worst_bt       = advisor.get("worst_best_tier", 0)
-        frac_a         = advisor.get("fraction_with_A", 0.0)
-        adv_a          = advisor.get("advisors_with_A", 0)
-        total_adv      = advisor.get("total_advisors", 0)
         adv_assigned   = advisor.get("advisors_assigned", 0)
+        avg_mses       = advisor.get("avg_mses")
+        avg_lur        = advisor.get("avg_lur")
+        err            = advisor.get("equity_retention", 0.0)
+        cpi_skew       = advisor.get("cpi_skewness")
         print()
-        print("-- Advisor Satisfaction --")
-        print(f"Tier mapping        : {tier_map_note}")
-        print(f"Mean best-tier      : {mean_bt:.4f}   [lower = better; avg over {adv_assigned} advisors with ≥1 student]")
-        print(f"Worst best-tier     : {worst_bt}        [highest value across advisors with ≥1 student]")
-        print(f"Fraction with ≥1 A  : {frac_a:.4f}   [{adv_a}/{total_adv} advisors]")
+        print("-- Advisor Metrics --")
+        print(f"Advisors assigned   : {adv_assigned}")
+        print(f"Empty labs          : {empty_labs}")
+        if avg_mses is not None:
+            print(f"Avg MSES            : {avg_mses:.4f}")
+        if avg_lur is not None:
+            print(f"Avg LUR             : {avg_lur*100:.1f}%")
+        print(f"Equity Retention    : {err:.1f}%")
+        if cpi_skew is not None:
+            print(f"CPI Skewness        : {cpi_skew:.4f}")
 
-    # ---- Write metrics_report.csv ----
+    # ---- Write allocation_result.csv ----
     import csv
+    import json
     import os
     student_map = {s.id: s for s in students}
+    faculty_map = {f.id: f for f in faculty}
     out_dir_path = args.out
     os.makedirs(out_dir_path, exist_ok=True)
+
+    result_path = os.path.join(out_dir_path, "allocation_result.csv")
+    with open(result_path, "w", newline="", encoding="utf-8") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(["student_id", "name", "assigned_faculty_id", "assigned_faculty_name"])
+        for s in students:
+            fid = assignments.get(s.id)
+            fac = faculty_map.get(fid) if fid else None
+            writer.writerow([
+                s.id,
+                s.name,
+                fid if fid else "",
+                fac.name if fac else "",
+            ])
+    print(f"\nAllocation result written to: {result_path}")
+
+    # ---- Write metrics.json ----
+    metrics_json_path = os.path.join(out_dir_path, "metrics.json")
+    with open(metrics_json_path, "w", encoding="utf-8") as fh:
+        json.dump(metrics, fh, default=str, indent=2)
+    print(f"Metrics JSON written to: {metrics_json_path}")
+
+    # ---- Write metrics_report.csv (legacy) ----
     report_path = os.path.join(out_dir_path, "metrics_report.csv")
     with open(report_path, "w", newline="", encoding="utf-8") as fh:
         writer = csv.writer(fh)
@@ -1945,7 +2073,7 @@ def _cli():
                 f"{sd['cpi_weight']:.6f}",
                 f"{sd['psi_score']:.6f}",
             ])
-    print(f"\nMetrics report written to: {report_path}")
+    print(f"Metrics report written to: {report_path}")
 
 
 if __name__ == "__main__":
