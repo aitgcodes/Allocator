@@ -92,15 +92,19 @@ def process_year(
         seq = student_offset + i + 1          # global sequential label
 
         anon_prefs: dict[str, str] = {}
+        seen_prefs: set[str] = set()
         for col in pref_cols:
             cell = row[col]
             if pd.isna(cell) or str(cell).strip() == "":
                 anon_prefs[col] = ""
             else:
                 anon_name = faculty_map.get(canonical(cell), "")
-                anon_prefs[col] = anon_name
-                if anon_name:
+                if anon_name and anon_name not in seen_prefs:
+                    seen_prefs.add(anon_name)
+                    anon_prefs[col] = anon_name
                     year_faculty.add(anon_name)
+                else:
+                    anon_prefs[col] = ""  # duplicate or unknown → blank slot
 
         out_row: dict[str, str] = {
             "Name":             f"student{seq:02d}",
