@@ -392,8 +392,9 @@ class TestEndToEnd:
         assert overflow == [], f"Expected 0 overflow, got: {overflow}"
         empty_labs = [
             f.id for f in faculty
-            if (assignments.get(s.id) != f.id for s in students)
+            if all(assignments.get(s.id) != f.id for s in students)
         ]
+        assert empty_labs == [], f"Expected 0 empty labs, got: {empty_labs}"
         # All students assigned
         assert all(v is not None for v in assignments.values()), "Some students unassigned"
 
