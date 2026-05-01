@@ -60,36 +60,42 @@ After each round completes, the app checks whether the round number has reached 
 
 ## Phase 2 — Backfill (Automatic)
 
-The backfill phase runs non-interactively immediately after round *k* completes. It operates on each student's preferences from position *k+1* onward (`prefs[k:]`). The algorithm is identical between GUI and CLI modes (GUI: `tiered_ll_backfill`; CLI: `tiered_ll_cpi_backfill` wrapping the same two-phase logic).
+The backfill phase runs non-interactively immediately after round *k* completes. **GUI and CLI implementations differ** — see below.
 
-### Phase 2a — Highest-preferred with capacity (while U > E)
+### Phase 2a — One-per-advisor, CPI-ordered (while total\_unassigned > E)
 
-While the number of remaining unassigned students exceeds the number of empty labs:
+*GUI only (`tiered_ll_backfill`).* Consistent with Phase 1's one-student-per-advisor-per-round rule.
 
-1. Take the highest-CPI remaining student.
-2. Scan their `prefs[k:]` and assign them to the **first advisor with remaining capacity** (highest preference, any load level).
-3. If no advisor in `prefs[k:]` has capacity, defer the student to Phase 2b.
-4. Recount empty labs and repeat.
+If `total_unassigned ≤ empty_labs` before Phase 2a begins, Phase 2a is skipped entirely and control passes directly to Phase 2b.
 
-Phase 2a stops when `unassigned == empty_labs`.
+Otherwise, students are processed in **descending CPI order** (ties broken by student ID ascending). For each student:
 
-### Phase 2b — Highest-preferred empty lab (when U == E)
+1. Scan `prefs[k:]` in preference order.
+2. Assign to the **first advisor** that (a) has remaining capacity and (b) has **not already received a student in Phase 2a** (`used_advisors` set).
+3. Mark that advisor as used. Immediately re-evaluate `total_unassigned > empty_labs`; if false, stop Phase 2a.
+4. If no eligible advisor is found, defer the student to Phase 2b.
 
-When unassigned students equal empty labs exactly:
+The stop condition is re-evaluated after **every individual assignment**, using `total_unassigned = len(remaining_queue) + len(deferred)`. Because a single assignment changes `total_unassigned − empty_labs` by at most 1 (−1 if non-empty advisor, 0 if empty advisor), the condition can never jump from `> 0` to `< 0` in one step — overshoot is structurally impossible.
 
-- Each remaining student (in CPI order) is assigned to their **highest-preferred empty lab** in `prefs[k:]`.
-- One student per lab; once a lab is filled it is removed from the candidate set.
+### Phase 2b — Highest-preferred empty lab (when total\_unassigned ≤ E)
+
+*GUI only (`tiered_ll_backfill`).* Operates on `prefs[k:]`.
+
+The combined queue of `remaining + deferred` students is re-sorted by **descending CPI** (ties broken by student ID ascending), then processed in order:
+
+- Each student is assigned to their **highest-preferred empty lab** in `prefs[k:]`.
+- One student per lab; once filled, the lab is removed from the candidate set.
 - Students whose `prefs[k:]` contains no empty lab become **overflow**.
 
-### Both phases
+### Both phases (GUI)
 
 - Faculty `max_load` constraints from Phase 0 are enforced throughout.
-- Snapshot `phase` labels distinguish `TieredLL_Backfill_P2a` and `TieredLL_Backfill_P2b` so the two-phase trace is visible in the replay slider.
-- If any students remain unassigned after Phase 2b (no empty lab in their `prefs[k:]`), they are flagged as **overflow** — same treatment as a `tiered_rounds` stall.
+- Snapshot `phase` labels distinguish `TieredLL_Backfill_P2a` and `TieredLL_Backfill_P2b` for replay clarity.
+- Overflow is treated identically to a `tiered_rounds` stall.
 
-### CLI (auto) mode
+### CLI (auto) mode (`tiered_ll_cpi_backfill`)
 
-Uses `cpi_fill_phase1` on `prefs[k:]` for Phase 2a and `cpi_fill_phase2` (scanning the full preference list) for Phase 2b, with automatic CPI tie-breaking throughout.
+The CLI path uses `cpi_fill_phase1` on `prefs[k:]` for Phase 2a (greedy CPI-order, no `used_advisors` constraint) and `cpi_fill_phase2` scanning the **full preference list** for Phase 2b — not `prefs[k:]`. Tie-breaking is automatic CPI throughout. The CLI Phase 2b therefore has more options available than the GUI Phase 2b and may produce different assignments for borderline students.
 
 ---
 

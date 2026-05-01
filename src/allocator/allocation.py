@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import copy
 import math
-from collections import defaultdict
+from collections import defaultdict, deque
 from typing import Dict, List, Optional, Set, Tuple
 
 import numpy as np
@@ -1996,18 +1996,25 @@ def tiered_ll_backfill(
     snapshots: SnapshotList,
 ) -> Tuple[Dict[str, Optional[str]], Dict[str, int], List[str]]:
     """
-    Two-phase CPI-Fill backfill for tiered_ll GUI mode, operating on prefs[k:].
+    Two-phase backfill for tiered_ll GUI mode, operating on prefs[k:].
 
-    Phase 2a: while unassigned > empty_labs, take the highest-CPI remaining student
-              and assign them to their highest-preferred advisor with remaining capacity
-              in prefs[k:].
-    Phase 2b: when unassigned == empty_labs, assign each remaining student to their
-              highest-preferred empty lab in prefs[k:] (one student per lab).
+    Phase 2a (while total_unassigned > empty_labs):
+        Students are processed in descending CPI order (ties broken by student ID
+        ascending). Each student is assigned to their highest-preferred advisor in
+        prefs[k:] that (a) has remaining capacity and (b) has not already received
+        a student in this phase (one-per-advisor discipline, consistent with Phase 1).
+        If no such advisor exists, the student is deferred to Phase 2b.
+        The stop condition is re-evaluated after every assignment using
+        total_unassigned = len(remaining_queue) + len(deferred).
 
-    Students with no eligible advisor in Phase 2a are deferred to Phase 2b.
-    Students with no empty lab in Phase 2b become overflow.
+    Phase 2b (when total_unassigned <= empty_labs):
+        The combined queue of remaining + deferred students, re-sorted by descending
+        CPI (ties by student ID ascending), is processed in order. Each student is
+        assigned to their highest-preferred empty lab in prefs[k:]. Once a lab is
+        filled it leaves the empty set. Students with no empty lab in prefs[k:]
+        become overflow.
 
-    Appends snapshots. Returns (assignments, faculty_loads, overflow_ids).
+    Returns (assignments, faculty_loads, overflow_ids).
     """
     faculty_map = {f.id: f for f in faculty}
     step = snapshots.last().step if snapshots.last() else 0
@@ -2028,22 +2035,29 @@ def tiered_ll_backfill(
         unassigned={s.id for s in unassigned_students},
     ))
 
-    remaining    = list(_sorted_by_cpi(unassigned_students))
-    overflow_p2a = []
-    p2a_assigned = 0
+    remaining     = deque(_sorted_by_cpi(unassigned_students))
+    deferred      = []
+    used_advisors = set()
+    p2a_assigned  = 0
 
-    # ── Phase 2a: highest-preferred with capacity while U > E ────────────────
+    # ── Phase 2a: one-per-advisor, CPI-ordered, while total_unassigned > empty ─
     while True:
-        empty_count = sum(1 for f in faculty if faculty_loads[f.id] == 0)
-        if not remaining or len(remaining) == empty_count:
+        empty_count      = sum(1 for f in faculty if faculty_loads[f.id] == 0)
+        total_unassigned = len(remaining) + len(deferred)
+        if total_unassigned <= empty_count:
             break
-        s = remaining.pop(0)  # highest CPI
+        if not remaining:
+            break  # all non-deferred processed; hand everything to Phase 2b
+        s = remaining.popleft()  # highest CPI first (deque is O(1))
         preferred = next(
             (fid for fid in s.preferences[k:]
-             if fid in faculty_map and faculty_loads[fid] < faculty_map[fid].max_load),
+             if fid in faculty_map
+             and fid not in used_advisors
+             and faculty_loads[fid] < faculty_map[fid].max_load),
             None,
         )
         if preferred is not None:
+            used_advisors.add(preferred)
             rank = s.preferences.index(preferred) + 1
             assignments[s.id] = preferred
             faculty_loads[preferred] += 1
@@ -2063,11 +2077,16 @@ def tiered_ll_backfill(
                 preference_rank={s.id: rank},
             ))
         else:
-            overflow_p2a.append(s)
+            deferred.append(s)
 
-    # ── Phase 2b: highest-preferred empty lab when U == E ────────────────────
-    phase2b_students = remaining + overflow_p2a
-    empty_lab_ids    = {f.id for f in faculty if faculty_loads[f.id] == 0}
+    # ── Phase 2b: highest-preferred empty lab, CPI-ordered ───────────────────
+    # Re-sort the combined queue so deferred high-CPI students are not pushed behind
+    # lower-CPI students who happened to exhaust the Phase 2a queue last.
+    phase2b_students = sorted(
+        list(remaining) + deferred,
+        key=lambda s: (-s.cpi, s.id),
+    )
+    empty_lab_ids = {f.id for f in faculty if faculty_loads[f.id] == 0}
 
     step += 1
     snapshots.append(AllocationSnapshot(

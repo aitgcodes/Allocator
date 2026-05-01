@@ -333,9 +333,10 @@ class TestTieredLLBackfill:
         assert len(snaps) > snap_count_before
 
     def test_phase2a_assigns_while_u_gt_e(self):
-        """Phase 2a runs while unassigned > empty_labs; Phase 2b fills empty labs."""
+        """Phase 2a runs while total_unassigned > empty_labs; Phase 2b fills remaining."""
         # 3 students, 3 faculty (max_load=1). 1 already assigned.
-        # Unassigned: 2 students, 1 empty lab → U=2 > E=1, so Phase 2a fires once.
+        # Unassigned: 2 students (s2, s3). Empty labs: F02, F03 → U=2, E=2 → skip 2a.
+        # Phase 2b: s2(8.5, [F02,F01,F03]) → F02; s3(7.5, [F03,F01,F02]) → F03.
         faculty = [_f(i, 1) for i in range(1, 4)]
         students = [
             _s(1, 9.5, ["F01", "F02", "F03"]),
@@ -354,41 +355,122 @@ class TestTieredLLBackfill:
         )
         assert overflow == []
         assert all(assignments[s.id] is not None for s in students)
-        # F01 full, F02 and F03 each get 1 student
         assert sum(1 for v in assignments.values() if v is not None) == 3
 
-    def test_phase2b_uses_highest_preferred_empty_lab(self):
-        """Phase 2b assigns student to their highest-ranked empty lab in prefs[k:]."""
-        # 2 students, 2 faculty. Both already assigned → test 1 unassigned with U==E.
-        faculty = [_f(1, 1), _f(2, 1), _f(3, 1)]
+    def test_phase2a_fires_when_u_strictly_gt_e(self):
+        """Phase 2a fires once when U > E; stops when total_unassigned drops to E."""
+        # 4 students, 3 faculty (max_load=2). 1 assigned to F01.
+        # Unassigned: s2(8.5), s3(7.5), s4(7.0). Empty: F02, F03 → U=3 > E=2.
+        # Phase 2a: s2(8.5, [F01,F02,F03]): F01 non-empty, cap=1, not used → s2→F01.
+        #   used={F01}. U=2, E=2 → stop Phase 2a.
+        # Phase 2b: [s3,s4] sorted by CPI. s3 prefs[0:]=[F02,F01,F03] → F02.
+        #   s4 prefs[0:]=[F03,F01,F02] → F03.
+        faculty = [_f(i, 2) for i in range(1, 4)]
         students = [
             _s(1, 9.5, ["F01", "F02", "F03"]),
-            _s(2, 8.5, ["F03", "F02", "F01"]),  # unassigned; prefers F02 over F01 in prefs[1:]
+            _s(2, 8.5, ["F01", "F02", "F03"]),
+            _s(3, 7.5, ["F02", "F01", "F03"]),
+            _s(4, 7.0, ["F03", "F01", "F02"]),
         ]
         students, faculty, _ = _phase0_cohort(students, faculty)
         assignments   = {s.id: None for s in students}
         faculty_loads = {"F01": 1, "F02": 0, "F03": 0}
         assignments["1"] = "F01"
-        unassigned = [students[1]]  # s2 only
+        unassigned = [s for s in students if assignments[s.id] is None]
 
         snaps = _dummy_snaps(students, faculty)
-        # k=1: prefs[1:] for s2 = ["F02","F01"]; empty labs = {F02, F03}
-        # Phase 2a: U=1, E=2 → U < E, skip Phase 2a immediately
-        # Phase 2b: first empty in prefs[1:]=["F02","F01"] is F02 → s2→F02
+        assignments, faculty_loads, overflow = tiered_ll_backfill(
+            unassigned, faculty, assignments, faculty_loads, k=0, snapshots=snaps
+        )
+        assert overflow == []
+        assert assignments["2"] == "F01"   # Phase 2a: s2 → F01 (non-empty, highest pref)
+        assert assignments["3"] == "F02"   # Phase 2b: s3 → F02 (empty, highest pref)
+        assert assignments["4"] == "F03"   # Phase 2b: s4 → F03 (empty, highest pref)
+
+    def test_phase2a_one_per_advisor_prevents_load_concentration(self):
+        """Phase 2a one-per-advisor: advisor with extra capacity still gets only one student."""
+        # F01: max_load=4, load=1 (non-empty, cap=3). F02: max_load=2, load=0 (empty).
+        # F03: max_load=2, load=1 (non-empty, cap=1).
+        # Unassigned: s3(8.5,[F01,F02,F03]), s4(7.5,[F01,F02,F03]). U=2, E=1.
+        # Phase 2a: s3 → F01 (not used, cap). used={F01}. U=1, E=1 → stop.
+        # Phase 2b: [s4]. empty={F02}. s4 prefs=[F01,F02,F03] → F02.
+        # F01 receives only 1 new student despite cap=3 (one-per-advisor enforced).
+        faculty = [_f(1, 4), _f(2, 2), _f(3, 2)]
+        students = [
+            _s(1, 9.5, ["F01", "F02", "F03"]),
+            _s(2, 9.0, ["F03", "F01", "F02"]),
+            _s(3, 8.5, ["F01", "F02", "F03"]),
+            _s(4, 7.5, ["F01", "F02", "F03"]),
+        ]
+        students, faculty, _ = _phase0_cohort(students, faculty)
+        assignments   = {s.id: None for s in students}
+        faculty_loads = {"F01": 1, "F02": 0, "F03": 1}
+        assignments["1"] = "F01"
+        assignments["2"] = "F03"
+        unassigned = [s for s in students if assignments[s.id] is None]
+
+        snaps = _dummy_snaps(students, faculty)
+        assignments, faculty_loads, overflow = tiered_ll_backfill(
+            unassigned, faculty, assignments, faculty_loads, k=0, snapshots=snaps
+        )
+        assert overflow == []
+        assert assignments["3"] == "F01"   # Phase 2a: s3 (higher CPI) gets F01
+        assert assignments["4"] == "F02"   # Phase 2b: s4 gets empty F02
+        assert faculty_loads["F01"] == 2   # was 1, gets exactly 1 new (not 2+)
+
+    def test_phase2a_skipped_when_u_equals_e_at_start(self):
+        """Phase 2a is skipped when total_unassigned == empty_labs from the outset."""
+        # U=2, E=2. Phase 2a condition (U > E) false immediately → go to Phase 2b.
+        faculty = [_f(i, 1) for i in range(1, 4)]
+        students = [
+            _s(1, 9.5, ["F01", "F02", "F03"]),
+            _s(2, 8.5, ["F02", "F03", "F01"]),
+            _s(3, 7.5, ["F03", "F01", "F02"]),
+        ]
+        students, faculty, _ = _phase0_cohort(students, faculty)
+        assignments   = {s.id: None for s in students}
+        faculty_loads = {"F01": 1, "F02": 0, "F03": 0}
+        assignments["1"] = "F01"
+        unassigned = [s for s in students if assignments[s.id] is None]
+
+        snaps = _dummy_snaps(students, faculty)
+        assignments, faculty_loads, overflow = tiered_ll_backfill(
+            unassigned, faculty, assignments, faculty_loads, k=0, snapshots=snaps
+        )
+        assert overflow == []
+        assert assignments["2"] == "F02"   # Phase 2b: highest-pref empty for s2
+        assert assignments["3"] == "F03"   # Phase 2b: highest-pref empty for s3
+
+    def test_phase2b_uses_highest_preferred_empty_lab(self):
+        """Phase 2b assigns student to their highest-ranked empty lab in prefs[k:]."""
+        faculty = [_f(1, 1), _f(2, 1), _f(3, 1)]
+        students = [
+            _s(1, 9.5, ["F01", "F02", "F03"]),
+            _s(2, 8.5, ["F03", "F02", "F01"]),  # prefs[1:]= ["F02","F01"]; F02 ranked higher
+        ]
+        students, faculty, _ = _phase0_cohort(students, faculty)
+        assignments   = {s.id: None for s in students}
+        faculty_loads = {"F01": 1, "F02": 0, "F03": 0}
+        assignments["1"] = "F01"
+        unassigned = [students[1]]
+
+        snaps = _dummy_snaps(students, faculty)
+        # k=1: U=1, E=2 → skip Phase 2a; Phase 2b: prefs[1:]=[F02,F01] → F02 (first empty)
         assignments, faculty_loads, overflow = tiered_ll_backfill(
             unassigned, faculty, assignments, faculty_loads, k=1, snapshots=snaps
         )
         assert overflow == []
         assert assignments["2"] == "F02"
 
-    def test_phase2a_overflow_deferred_to_phase2b(self):
-        """Student with no capacity in prefs[k:] is deferred to Phase 2b."""
-        # s2 has only F01 in prefs[1:], which is full. F02 is empty.
-        # Phase 2a can't place s2; Phase 2b picks up s2 via F02 if it's in prefs[k:].
+    def test_phase2a_deferred_student_placed_in_phase2b(self):
+        """Student deferred from Phase 2a (advisor used) reaches Phase 2b for empty lab."""
+        # s2 has only F01 in prefs[1:], which is full. F02 is empty but not in prefs[1:].
+        # Phase 2a: U=1, E=1 at start → skip Phase 2a.
+        # Phase 2b: prefs[1:]=[F01]; empty_labs={F02}; F01 not empty → overflow.
         faculty = [_f(1, 1), _f(2, 1)]
         students = [
             _s(1, 9.5, ["F01", "F02"]),
-            _s(2, 8.0, ["F02", "F01"]),  # unassigned; prefs[1:]=["F01"]; F01 full
+            _s(2, 8.0, ["F02", "F01"]),  # prefs[1:]=["F01"]; F01 full; F02 not in prefs[1:]
         ]
         students, faculty, _ = _phase0_cohort(students, faculty)
         assignments   = {s.id: None for s in students}
@@ -397,26 +479,43 @@ class TestTieredLLBackfill:
         unassigned = [students[1]]
 
         snaps = _dummy_snaps(students, faculty)
-        # k=1: prefs[1:] for s2 = ["F01"]; F01 full → overflow_p2a
-        # U=1, E=1 → Phase 2a terminates immediately (U==E), goes to Phase 2b
-        # Phase 2b: prefs[1:] = ["F01"]; empty_labs = {F02}; F01 not empty → overflow
-        # So s2 overflows (F02 not in prefs[1:])
         assignments, faculty_loads, overflow = tiered_ll_backfill(
             unassigned, faculty, assignments, faculty_loads, k=1, snapshots=snaps
         )
-        assert "2" in overflow
+        assert "2" in overflow   # F02 not reachable from prefs[1:]
 
-    def test_phase2a_overflow_reaches_phase2b_empty_lab(self):
-        """Phase 2a overflow student is placed in Phase 2b if empty lab in prefs[k:]."""
-        # 3 students, 3 faculty (max_load=1).
-        # After 1 tiered round: s1→F01. Unassigned: s2, s3. U=2, E=2.
-        # s2 prefs[1:]=["F03","F02"]; s3 prefs[1:]=["F02","F03"].
-        # U==E at start → Phase 2a skipped; Phase 2b: s2→F03, s3→F02.
+    def test_phase2b_cpi_order_respected_for_empty_lab_contention(self):
+        """Phase 2b assigns contended empty lab to higher-CPI student regardless of queue origin."""
+        # U=2, E=2 → Phase 2a skipped. Both s2 and s3 prefer F03 first in prefs[1:].
+        # s2 (higher CPI) should get F03; s3 falls back to F02.
         faculty = [_f(i, 1) for i in range(1, 4)]
         students = [
             _s(1, 9.5, ["F01", "F02", "F03"]),
-            _s(2, 8.5, ["F01", "F03", "F02"]),
-            _s(3, 7.5, ["F01", "F02", "F03"]),
+            _s(2, 8.5, ["F01", "F03", "F02"]),   # prefs[1:]=[F03,F02]
+            _s(3, 7.5, ["F01", "F03", "F02"]),   # prefs[1:]=[F03,F02]
+        ]
+        students, faculty, _ = _phase0_cohort(students, faculty)
+        assignments   = {s.id: None for s in students}
+        faculty_loads = {"F01": 1, "F02": 0, "F03": 0}
+        assignments["1"] = "F01"
+        unassigned = [s for s in students if assignments[s.id] is None]
+
+        snaps = _dummy_snaps(students, faculty)
+        assignments, faculty_loads, overflow = tiered_ll_backfill(
+            unassigned, faculty, assignments, faculty_loads, k=1, snapshots=snaps
+        )
+        assert overflow == []
+        assert assignments["2"] == "F03"   # higher CPI wins F03
+        assert assignments["3"] == "F02"   # lower CPI falls back to F02
+
+    def test_phase2a_overflow_reaches_phase2b_empty_lab(self):
+        """Phase 2a overflow student is placed in Phase 2b if empty lab in prefs[k:]."""
+        # U==E at start → Phase 2a skipped; Phase 2b places both students.
+        faculty = [_f(i, 1) for i in range(1, 4)]
+        students = [
+            _s(1, 9.5, ["F01", "F02", "F03"]),
+            _s(2, 8.5, ["F01", "F03", "F02"]),   # prefs[1:]=[F03,F02]
+            _s(3, 7.5, ["F01", "F02", "F03"]),   # prefs[1:]=[F02,F03]
         ]
         students, faculty, _ = _phase0_cohort(students, faculty)
         assignments   = {s.id: None for s in students}
