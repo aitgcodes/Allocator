@@ -1341,7 +1341,11 @@ def cb_policy_badge(policy):
     if policy == "cpi_fill":
         label, color = "CPI-Fill (two-phase)", "warning"
     elif policy == "tiered_rounds":
-        label, color = "CPI-tiered preference rounds (manual tie-pick)", "primary"
+        label, color = "CPI-tiered preference rounds", "primary"
+    elif policy == "tiered_ll":
+        label, color = "Tiered LL (tiered rounds + LL-HP backfill)", "primary"
+    elif policy == "adaptive_ll":
+        label, color = "Adaptive LL (auto-tuned caps)", "secondary"
     else:
         label, color = "Least-loaded · highest preferred", "secondary"
     return dbc.Badge(f"Policy: {label}", color=color, className="mb-2")

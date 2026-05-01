@@ -131,7 +131,7 @@ story += [
                         "that faculty as their first choice (highest CPI wins if there is a tie). "
                         "Skipped when the cpi_fill policy is active."],
             ["Main allocation", "All remaining students are assigned following the active policy "
-                                "(least_loaded, nonempty, or cpi_fill — see Section 9). "
+                                "(least_loaded, adaptive_ll, cpi_fill, tiered_rounds, or tiered_ll — see Section 9). "
                                 "The app recommends an advisor for each student; "
                                 "you can accept or override."],
         ],
@@ -444,13 +444,12 @@ story += [
              "Assign to the least-loaded eligible advisor within the student's "
              "N_tier preference window. Ties broken by preference rank.",
              "Balanced advisor loads; robust general-purpose default."],
-            ["nonempty",
-             "Phase 0 → Round 1 → Class A→B→C",
-             "Prefer the highest-preferred advisor with zero current students "
-             "(empty lab). If none are empty, fall back to highest-preferred "
-             "with remaining capacity.",
-             "Departments that require every advisor to receive at least one "
-             "student as early as possible."],
+            ["adaptive_ll",
+             "Phase 0a+0b → Round 1 → Class A→B→C",
+             "Adaptive variant of least_loaded: Phase 0b iteratively expands "
+             "N_A/N_B caps until the post-A+B empty-lab count ≤ |C|, "
+             "guaranteeing no empty labs when S ≥ F.",
+             "Balanced loads with a structural guarantee of no empty labs."],
             ["cpi_fill",
              "Phase 0 → CPI-Fill Phase 1 → Phase 2",
              "Phase 1: process students in descending CPI order; assign to "
@@ -458,13 +457,27 @@ story += [
              "count equals empty-lab count. Phase 2: each remaining student "
              "fills their preferred empty lab. Round 1 is skipped.",
              "Merit-first access to top advisors; guaranteed no empty labs."],
+            ["tiered_rounds",
+             "Phase 0 → Preference Rounds",
+             "In round n every unassigned student offers their n-th preference; "
+             "each advisor picks at most one student per round (highest CPI wins; "
+             "ties require a manual pick). Runs until all students are assigned "
+             "or a stall is detected.",
+             "Transparent, preference-driven process; suitable for small cohorts."],
+            ["tiered_ll",
+             "Phase 0a+0b → Tiered Rounds 1..k → LL-HP Backfill",
+             "Hybrid: interactive tiered rounds up to the critical round k, then "
+             "automatic LL-HP backfill for remaining unassigned students. "
+             "Guarantees no empty labs when S ≥ F.",
+             "Best of both worlds: transparent early rounds + guaranteed coverage."],
         ],
         col_widths=[2.8*cm, 3.8*cm, 5.5*cm, 3.6*cm],
     ),
     Spacer(1, 8),
     note("Full technical specifications for each policy are in "
-         "docs/policy_least_loaded.md, docs/policy_nonempty.md, and "
-         "docs/policy_cpi_fill.md."),
+         "docs/policy_least_loaded.md, docs/policy_adaptive_ll.md, "
+         "docs/policy_cpi_fill.md, docs/policy_tiered_rounds.md, and "
+         "docs/policy_tiered_ll.md (forthcoming)."),
     Spacer(1, 10),
 ]
 
