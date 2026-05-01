@@ -465,9 +465,9 @@ story += [
              "or a stall is detected.",
              "Transparent, preference-driven process; suitable for small cohorts."],
             ["tiered_ll",
-             "Phase 0a+0b → Tiered Rounds 1..k → LL-HP Backfill",
+             "Phase 0a+0b → Tiered Rounds 1..k → Backfill (GUI: LL-HP; CLI: CPI-Fill)",
              "Hybrid: interactive tiered rounds up to the critical round k, then "
-             "automatic LL-HP backfill for remaining unassigned students. "
+             "automatic backfill for remaining unassigned students. "
              "Guarantees no empty labs when S ≥ F.",
              "Best of both worlds: transparent early rounds + guaranteed coverage."],
         ],

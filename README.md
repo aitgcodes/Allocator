@@ -20,7 +20,7 @@ Five policies are available, selected by setting `ALLOCATION_POLICY` in `app.py`
 | `adaptive_ll` | Phase 0a+0b → Round 1 → Class A→B→C | Adaptive caps guarantee no empty labs when S ≥ F | Balanced loads with structural empty-lab guarantee |
 | `cpi_fill` | Phase 0 → CPI-Fill Phase 1 → Phase 2 | Process students in strict descending CPI order; Phase 2 guarantees no empty labs | Merit-first access; guaranteed no empty labs |
 | `tiered_rounds` | Phase 0 → Preference Rounds | Each advisor picks one student per round; highest CPI wins; ties require manual pick | Transparent preference-driven process |
-| `tiered_ll` | Phase 0a+0b → Tiered Rounds 1..k → LL-HP Backfill | Hybrid: interactive rounds up to critical round k, then automatic backfill | Transparent early rounds + guaranteed no empty labs |
+| `tiered_ll` | Phase 0a+0b → Tiered Rounds 1..k → Backfill (GUI: LL-HP; CLI: CPI-Fill) | Hybrid: interactive rounds up to critical round k, then automatic backfill | Transparent early rounds + guaranteed no empty labs |
 
 Full descriptions: [`docs/policy_least_loaded.md`](docs/policy_least_loaded.md) · [`docs/policy_adaptive_ll.md`](docs/policy_adaptive_ll.md) · [`docs/policy_cpi_fill.md`](docs/policy_cpi_fill.md) · [`docs/policy_tiered_rounds.md`](docs/policy_tiered_rounds.md) · [`docs/policy_tiered_ll.md`](docs/policy_tiered_ll.md)
 
