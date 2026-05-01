@@ -802,6 +802,7 @@ def cpi_fill_phase1(
     assignments: Dict[str, Optional[str]],
     faculty_loads: Dict[str, int],
     snapshots: SnapshotList,
+    pref_offset: int = 0,
 ) -> Tuple[Dict[str, Optional[str]], Dict[str, int], SnapshotList, dict]:
     """
     Run Phase 1 of the CPI-Fill policy.
@@ -842,7 +843,7 @@ def cpi_fill_phase1(
     def _phase1_choice(student: Student) -> Optional[Tuple[str, int]]:
         for rank, fid in enumerate(student.preferences, start=1):
             if fid in faculty_map and faculty_loads[fid] < faculty_map[fid].max_load:
-                return fid, rank
+                return fid, rank + pref_offset
         return None
 
     def _phase1_assign(s: Student) -> None:
@@ -1930,12 +1931,12 @@ def tiered_rounds_dry_run(
         _, unreachable = _reachability(
             unassigned_ids, faculty_copy, loads_after, student_map, round_no
         )
-        empty_labs = sum(1 for f in faculty_copy if loads_after.get(f.id, 0) == 0)
+        empty_labs_count = sum(1 for f in faculty_copy if loads_after.get(f.id, 0) == 0)
         round_stats.append({
             "round_no":                 round_no,
             "unassigned_count":         len(unassigned_ids),
             "unreachable_faculty_count": unreachable,
-            "empty_labs_count":         empty_labs,
+            "empty_labs_count":         empty_labs_count,
             "assignments_made":         assigned_count,
             "is_stall":                 (assigned_count == 0 and len(unassigned_ids) > 0),
         })
@@ -1947,27 +1948,29 @@ def find_critical_round(dry_run_states: List[Dict]) -> int:
     """
     Return the last round k where the stopping criterion has NOT yet fired.
 
-    Stopping criterion fires when any of the following hold after a round:
-      - unreachable_faculty_count > 0: some advisor with remaining capacity
-        cannot be reached by any unassigned student via prefs[k:].
-      - is_stall is True: zero new assignments with students still remaining.
-      - unassigned_count <= empty_labs_count: unassigned students have reached
-        parity with (or dropped below) empty labs — switch to LL-HP backfill
-        so it can exactly (or as fully as possible) fill the remaining empty labs.
+    Stopping criterion fires when ANY of:
+      - unreachable_faculty_count > 0  (some advisor with capacity is unreachable), OR
+      - is_stall is True               (zero new assignments with students remaining), OR
+      - unassigned_count <= empty_labs_count and unassigned_count > 0
+          (remaining students ≤ remaining empty labs — backfill can handle them
+           one-to-one, and continuing rounds risks leaving labs unfillable).
 
     If the criterion never fires, k = total rounds (tiered rounds run to
-    completion and backfill will have no work to do).
+    completion and backfill will have no students to process).
     If the criterion fires immediately at round 1, k = 1 (minimum).
     """
     if not dry_run_states:
         return 1
     k = 1
     for entry in dry_run_states:
-        empty_labs = entry.get("empty_labs_count", 0)
-        unassigned = entry["unassigned_count"]
-        if (entry["unreachable_faculty_count"] > 0
-                or entry["is_stall"]
-                or (unassigned > 0 and unassigned <= empty_labs)):
+        unassigned   = entry["unassigned_count"]
+        empty_labs   = entry.get("empty_labs_count", 0)
+        fires = (
+            entry["unreachable_faculty_count"] > 0
+            or entry["is_stall"]
+            or (unassigned > 0 and unassigned <= empty_labs)
+        )
+        if fires:
             break
         k = entry["round_no"]
     return k
@@ -2107,9 +2110,10 @@ def tiered_ll_cpi_backfill(
         unassigned=unassigned_ids,
     ))
 
-    # Phase 1: CPI-order on prefs[k:], stop at unassigned == empty_labs
+    # Phase 1: CPI-order on prefs[k:], stop at unassigned == empty_labs.
+    # pref_offset=k so snapshot ranks are global (k+1, k+2, …) not local (1, 2, …).
     assignments, faculty_loads, snapshots, _ = cpi_fill_phase1(
-        trimmed, faculty, assignments, faculty_loads, snapshots,
+        trimmed, faculty, assignments, faculty_loads, snapshots, pref_offset=k,
     )
 
     # Phase 2: highest-preferred empty lab, scanning full pref list
