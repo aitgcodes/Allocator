@@ -58,15 +58,31 @@ After each round completes, the app checks whether the round number has reached 
 
 ---
 
-## Phase 2 — LL-HP Backfill (Automatic)
+## Phase 2 — Backfill (Automatic)
 
-The backfill phase runs non-interactively over the remaining unassigned students, using preferences from position *k+1* onward (the preferences already offered in rounds 1..k are exhausted).
+The backfill phase runs non-interactively. The algorithm differs between GUI and CLI modes, but in both modes the switch happens automatically without operator confirmation.
 
-**Assignment rule:** for each unassigned student (processed in descending CPI order, ties broken by student ID), scan their remaining preferences and assign to the **least-loaded advisor with remaining capacity** (LL rule). Ties between equally-loaded advisors are broken by preference rank (highest preferred wins).
+### GUI mode — LL-HP Backfill
+
+Processes unassigned students in descending CPI order using preferences from position *k+1* onward (preferences 1..k are exhausted).
+
+**Assignment rule:** scan remaining preferences and assign to the **least-loaded advisor with remaining capacity** (LL rule). Ties between equally-loaded advisors are broken by preference rank (highest preferred wins).
+
+### CLI (auto) mode — CPI-Fill Backfill
+
+Uses CPI-Fill Phase 1 + Phase 2 semantics on the remaining unassigned students:
+
+**Phase 2a (CPI-Fill Phase 1 on `prefs[k:]`):** process unassigned students in descending CPI order; assign each to their highest-preferred advisor with remaining capacity (scanning from position *k+1* onward). Stop when `unassigned == empty_labs`. Because the switch criterion fires at `unassigned ≤ empty_labs`, Phase 2a typically has zero or very few assignments to make.
+
+**Phase 2b (CPI-Fill Phase 2 on full preference list):** each remaining student is assigned to their highest-preferred **empty lab**, scanning their *full* preference list (advisors in positions 1..k that are still empty are eligible). This guarantees all empty labs are filled when S_remaining ≥ E_remaining.
+
+Snapshot ranks recorded during Phase 2a are global (e.g., rank *k+1* for the first preference in `prefs[k:]`), keeping the trace consistent with Phase 1.
+
+### Both modes
 
 - Faculty `max_load` constraints from Phase 0 are enforced.
-- Backfill snapshots are appended to the shared snapshot list, so the full two-phase trace is visible in the replay slider.
-- If any students remain unassigned after backfill (all remaining preferences are full), they are flagged as **overflow** — same treatment as a `tiered_rounds` stall.
+- Backfill snapshots are appended to the shared snapshot list so the full two-phase trace is visible in the replay slider.
+- If any students remain unassigned after backfill (all remaining preferences are at capacity), they are flagged as **overflow** — same treatment as a `tiered_rounds` stall.
 
 ---
 

@@ -10,6 +10,7 @@ from src.allocator.allocation import (
     _reachability,
     find_critical_round,
     phase0,
+    run_full_allocation,
     tiered_ll_backfill,
     tiered_rounds_dry_run,
     tiered_rounds_resume,
@@ -107,12 +108,12 @@ class TestFindCriticalRound:
     def _make_entry(self, round_no, unreachable=0, stall=False, assigned=1,
                     unassigned=0, empty_labs=0):
         return {
-            "round_no": round_no,
+            "round_no":                 round_no,
             "unreachable_faculty_count": unreachable,
-            "is_stall": stall,
-            "assignments_made": assigned,
-            "unassigned_count": unassigned,
-            "empty_labs_count": empty_labs,
+            "is_stall":                 stall,
+            "assignments_made":         assigned,
+            "unassigned_count":         unassigned,
+            "empty_labs_count":         empty_labs,
         }
 
     def test_no_criterion_fires(self):
@@ -156,32 +157,37 @@ class TestFindCriticalRound:
         """Empty dry-run returns k=1."""
         assert find_critical_round([]) == 1
 
-    def test_unassigned_below_empty_labs_fires_criterion(self):
-        """k=1 when unassigned drops below empty_labs at round 2."""
-        states = [
-            self._make_entry(1, unassigned=20, empty_labs=7),
-            self._make_entry(2, unassigned=6,  empty_labs=7),
-        ]
-        assert find_critical_round(states) == 1
-
     def test_unassigned_equals_empty_labs_fires_criterion(self):
         """Criterion fires when unassigned == empty_labs (switch at parity)."""
         states = [
             self._make_entry(1, unassigned=10, empty_labs=7),
             self._make_entry(2, unassigned=7,  empty_labs=7),
         ]
-        # Round 2 hits parity → criterion fires → k=1
+        assert find_critical_round(states) == 1
+
+    def test_unassigned_below_empty_labs_fires_criterion(self):
+        """Criterion fires when unassigned drops below empty_labs."""
+        states = [
+            self._make_entry(1, unassigned=20, empty_labs=7),
+            self._make_entry(2, unassigned=6,  empty_labs=7),
+        ]
         assert find_critical_round(states) == 1
 
     def test_unassigned_zero_does_not_fire_empty_labs_criterion(self):
-        """When all students are assigned (unassigned=0) the criterion does not fire
-        even if empty labs remain — tiered rounds ran to completion."""
+        """Criterion does not fire when unassigned=0 (all students already assigned)."""
         states = [
             self._make_entry(1, unassigned=5, empty_labs=3),
             self._make_entry(2, unassigned=0, empty_labs=3),
         ]
-        # unassigned=5 >= empty_labs=3 at round 1 → k=1; unassigned=0 at round 2
-        # doesn't trigger (0 is not > 0) → k=2
+        # unassigned=0 does not satisfy (unassigned > 0) → criterion doesn't fire → k=2
+        assert find_critical_round(states) == 2
+
+    def test_unassigned_above_empty_labs_does_not_fire(self):
+        """Criterion does not fire when unassigned > empty_labs."""
+        states = [
+            self._make_entry(1, unassigned=5, empty_labs=2),
+            self._make_entry(2, unassigned=3, empty_labs=2),
+        ]
         assert find_critical_round(states) == 2
 
 
@@ -220,6 +226,7 @@ class TestTieredRoundsDryRun:
             assert "unreachable_faculty_count" in entry
             assert "assignments_made" in entry
             assert "is_stall" in entry
+            assert "empty_labs_count" in entry
 
     def test_round_nos_are_sequential(self):
         students, faculty = self._clean_cohort()
@@ -465,7 +472,6 @@ class TestRegression:
 
     def test_least_loaded_via_run_full_allocation(self):
         """least_loaded policy still works (no regression from engine changes)."""
-        from src.allocator.allocation import run_full_allocation
         students, faculty = self._sample_cohort()
         assignments, snaps, meta, metrics = run_full_allocation(
             students, faculty, policy="least_loaded"
@@ -475,10 +481,48 @@ class TestRegression:
 
     def test_cpi_fill_via_run_full_allocation(self):
         """cpi_fill policy still works."""
-        from src.allocator.allocation import run_full_allocation
         students, faculty = self._sample_cohort()
         assignments, snaps, meta, metrics = run_full_allocation(
             students, faculty, policy="cpi_fill"
         )
         assigned = sum(1 for v in assignments.values() if v is not None)
         assert assigned == len(students)
+
+    def test_tiered_rounds_via_run_full_allocation(self):
+        """tiered_rounds CLI auto-mode assigns all students on a diverse-pref cohort."""
+        # Diverse preferences so each faculty receives a distinct first-choice
+        # student in round 1 and all remaining students are covered by round 2.
+        faculty = [_f(i, 2) for i in range(1, 5)]
+        students = [
+            _s(1, 9.7, ["F01", "F02", "F03", "F04"]),
+            _s(2, 9.4, ["F02", "F01", "F03", "F04"]),
+            _s(3, 9.1, ["F03", "F04", "F01", "F02"]),
+            _s(4, 8.8, ["F04", "F03", "F02", "F01"]),
+            _s(5, 8.5, ["F01", "F03", "F02", "F04"]),
+            _s(6, 8.2, ["F02", "F04", "F01", "F03"]),
+        ]
+        assignments, snaps, meta, metrics = run_full_allocation(
+            students, faculty, policy="tiered_rounds"
+        )
+        assert all(v is not None for v in assignments.values()), \
+            "Some students unassigned under tiered_rounds"
+
+    def test_tiered_ll_via_run_full_allocation_assigns_all(self):
+        """tiered_ll CLI auto-mode assigns all students."""
+        students, faculty = self._sample_cohort()
+        assignments, snaps, meta, metrics = run_full_allocation(
+            students, faculty, policy="tiered_ll"
+        )
+        assert all(v is not None for v in assignments.values()), \
+            "Some students unassigned under tiered_ll"
+
+    def test_tiered_ll_via_run_full_allocation_no_empty_labs(self):
+        """tiered_ll CLI auto-mode leaves no empty labs (S=6 ≥ F=4, full pref lists)."""
+        students, faculty = self._sample_cohort()
+        assignments, snaps, meta, metrics = run_full_allocation(
+            students, faculty, policy="tiered_ll"
+        )
+        fac_ids      = {f.id for f in faculty}
+        assigned_fids = {v for v in assignments.values() if v is not None}
+        empty = fac_ids - assigned_fids
+        assert empty == set(), f"Unexpected empty labs under tiered_ll: {empty}"

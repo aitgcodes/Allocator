@@ -480,12 +480,12 @@ No separate Round 1 or class-wise main allocation. Phase 0 tier classification i
 | Round 1 | Yes | Yes | No | No | No |
 | Processing order | Tier-by-tier | Tier-by-tier | Strict descending CPI | Round-by-preference-rank | Rounds 1..k, then backfill |
 | Preference window | N_tier per tier | N_tier (auto-widened) | Full list | Full list (N_tier diagnostic) | Full list |
-| Primary assignment criterion | Min load | Min load | First pref with capacity | Highest CPI in round | CPI (rounds) then min load |
-| Tie-breaking | Preference rank | Preference rank | Student ID | Manual operator pick | Manual (rounds) / pref rank (backfill) |
-| Empty-lab guarantee | Indirect | Yes (when S ≥ F) | Explicit (Phase 2) | Implicit | Yes (when S ≥ F) |
+| Primary assignment criterion | Min load | Min load | First pref with capacity | Highest CPI in round | CPI (rounds) then first pref with capacity → empty lab (backfill) |
+| Tie-breaking | Preference rank | Preference rank | Student ID | Highest CPI (CLI) / Manual pick (GUI) | Highest CPI (CLI) / Manual pick in GUI rounds |
+| Empty-lab guarantee | Indirect | Yes (when S ≥ F) | Explicit (Phase 2) | No | Yes (when S ≥ F) |
 | Merit sensitivity (NPSS) | Moderate | Moderate | High | High | High |
 | Equal-weighted satisfaction (PSI) | Cohort-dependent | Cohort-dependent | Cohort-dependent | High in balanced cohorts | Cohort-dependent |
-| Load balance | Strong | Strong | Variable | Implicit | Strong (backfill phase) |
+| Load balance | Strong | Strong | Variable | Implicit | Variable (backfill phase) |
 | CLI available | Yes | Yes | Yes | Yes (auto CPI ties) | Yes (auto CPI ties) |
 
 > **Note:** PSI and advisor entropy outcomes are cohort-sensitive. Neither policy dominates consistently across all cohort types. See Section 3.8 for guidance on interpretation.
