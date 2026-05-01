@@ -39,7 +39,7 @@ Before any interactive steps, the app runs a full dry-run of the tiered-rounds p
 |--------------------|---------|
 | `unreachable_faculty_count > 0` | A faculty member with capacity can no longer be reached by any student |
 | `is_stall` (zero new assignments) | The rounds process has deadlocked |
-| `unassigned_count ≤ empty_labs_count` | The number of remaining students is at or below the number of empty labs — backfill can handle them one-to-one |
+| `unassigned_count > 0` and `unassigned_count ≤ empty_labs_count` | Remaining students have reached parity with (or dropped below) empty labs — backfill can fill them one-to-one. The `> 0` guard ensures the criterion does not fire once all students are already assigned. |
 
 The computed *k* is stored in `meta` as `k_crit_static` and shown in the Phase 0 status panel. If the stopping criterion never fires during the dry-run, *k* equals the total number of rounds (the tiered rounds process runs to completion and the backfill phase handles zero students).
 
@@ -72,7 +72,7 @@ Processes unassigned students in descending CPI order using preferences from pos
 
 Uses CPI-Fill Phase 1 + Phase 2 semantics on the remaining unassigned students:
 
-**Phase 2a (CPI-Fill Phase 1 on `prefs[k:]`):** process unassigned students in descending CPI order; assign each to their highest-preferred advisor with remaining capacity (scanning from position *k+1* onward). Stop when `unassigned == empty_labs`. Because the switch criterion fires at `unassigned ≤ empty_labs`, Phase 2a typically has zero or very few assignments to make.
+**Phase 2a (CPI-Fill Phase 1 on `prefs[k:]`):** process unassigned students in descending CPI order; assign each to their highest-preferred advisor with remaining capacity (scanning from position *k+1* onward). Stop when `unassigned == empty_labs`. Because the switch criterion fires at `unassigned > 0 and unassigned ≤ empty_labs`, Phase 2a typically has zero or very few assignments to make.
 
 **Phase 2b (CPI-Fill Phase 2 on full preference list):** each remaining student is assigned to their highest-preferred **empty lab**, scanning their *full* preference list (advisors in positions 1..k that are still empty are eligible). This guarantees all empty labs are filled when S_remaining ≥ E_remaining.
 
