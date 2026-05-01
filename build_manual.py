@@ -477,7 +477,7 @@ story += [
     note("Full technical specifications for each policy are in "
          "docs/policy_least_loaded.md, docs/policy_adaptive_ll.md, "
          "docs/policy_cpi_fill.md, docs/policy_tiered_rounds.md, and "
-         "docs/policy_tiered_ll.md (forthcoming)."),
+         "docs/policy_tiered_ll.md."),
     Spacer(1, 10),
 ]
 

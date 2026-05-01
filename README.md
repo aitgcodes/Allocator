@@ -22,7 +22,7 @@ Five policies are available, selected by setting `ALLOCATION_POLICY` in `app.py`
 | `tiered_rounds` | Phase 0 → Preference Rounds | Each advisor picks one student per round; highest CPI wins; ties require manual pick | Transparent preference-driven process |
 | `tiered_ll` | Phase 0a+0b → Tiered Rounds 1..k → LL-HP Backfill | Hybrid: interactive rounds up to critical round k, then automatic backfill | Transparent early rounds + guaranteed no empty labs |
 
-Full descriptions: [`docs/policy_least_loaded.md`](docs/policy_least_loaded.md) · [`docs/policy_adaptive_ll.md`](docs/policy_adaptive_ll.md) · [`docs/policy_cpi_fill.md`](docs/policy_cpi_fill.md) · [`docs/policy_tiered_rounds.md`](docs/policy_tiered_rounds.md)
+Full descriptions: [`docs/policy_least_loaded.md`](docs/policy_least_loaded.md) · [`docs/policy_adaptive_ll.md`](docs/policy_adaptive_ll.md) · [`docs/policy_cpi_fill.md`](docs/policy_cpi_fill.md) · [`docs/policy_tiered_rounds.md`](docs/policy_tiered_rounds.md) · [`docs/policy_tiered_ll.md`](docs/policy_tiered_ll.md)
 
 ---
 
@@ -232,6 +232,7 @@ docs/             – User manual (PDF) and policy reference docs
   policy_adaptive_ll.md   – adaptive_ll policy specification
   policy_cpi_fill.md      – cpi_fill policy specification
   policy_tiered_rounds.md – tiered_rounds policy specification
+  policy_tiered_ll.md     – tiered_ll policy specification
 stats/            – Policy comparison study
   run_study.py        – Generates synthetic datasets and runs both policies
   policy_report.md    – Comparison report (tables, deltas, recommendations)

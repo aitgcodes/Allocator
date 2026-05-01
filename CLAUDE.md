@@ -41,7 +41,7 @@ PYTHONPATH=src python -m allocator.allocation --phase0-only \
 PYTHONPATH=src python -m allocator.allocation \
   --students data/sample_students.csv \
   --faculty data/sample_faculty.csv \
-  --policy least_loaded   # or: cpi_fill  (tiered_rounds requires the GUI)
+  --policy least_loaded   # or: adaptive_ll, cpi_fill  (tiered_rounds / tiered_ll require the GUI)
   --out reports/
 ```
 

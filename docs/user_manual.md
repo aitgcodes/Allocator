@@ -312,7 +312,7 @@ PYTHONPATH=src python -m allocator.allocation \
   --out      reports/
 ```
 
-The `--policy` flag accepts `least_loaded` or `cpi_fill`.
+The `--policy` flag accepts `least_loaded`, `adaptive_ll`, or `cpi_fill`. The `tiered_rounds` and `tiered_ll` policies require the Dash GUI and cannot be run via CLI.
 
 ---
 
@@ -475,18 +475,18 @@ No separate Round 1 or class-wise main allocation. Phase 0 tier classification i
 
 ### 3.6 Policy comparison
 
-| Aspect | `least_loaded` | `cpi_fill` | `tiered_rounds` |
-|--------|----------------|------------|-----------------|
-| Round 1 | Yes | No | No |
-| Processing order | Tier-by-tier | Strict descending CPI | Round-by-preference-rank |
-| Preference window | Applied per tier; overflow possible via promotion cascade | Full list | Full list (N_tier diagnostic only) |
-| Primary assignment criterion | Min load | First pref with capacity | Highest CPI in round |
-| Tie-breaking | Preference rank | Student ID | Manual operator pick |
-| Empty-lab guarantee | Indirect | Explicit (Phase 2) | Implicit |
-| Merit sensitivity (NPSS) | Moderate | High | High |
-| Equal-weighted satisfaction (PSI) | Cohort-dependent | Cohort-dependent | High in balanced cohorts |
-| Load balance | Strong | Variable | Implicit |
-| CLI available | Yes | Yes | No (GUI only) |
+| Aspect | `least_loaded` | `adaptive_ll` | `cpi_fill` | `tiered_rounds` | `tiered_ll` |
+|--------|----------------|---------------|------------|-----------------|-------------|
+| Round 1 | Yes | Yes | No | No | No |
+| Processing order | Tier-by-tier | Tier-by-tier | Strict descending CPI | Round-by-preference-rank | Rounds 1..k, then backfill |
+| Preference window | N_tier per tier | N_tier (auto-widened) | Full list | Full list (N_tier diagnostic) | Full list |
+| Primary assignment criterion | Min load | Min load | First pref with capacity | Highest CPI in round | CPI (rounds) then min load |
+| Tie-breaking | Preference rank | Preference rank | Student ID | Manual operator pick | Manual (rounds) / pref rank (backfill) |
+| Empty-lab guarantee | Indirect | Yes (when S ≥ F) | Explicit (Phase 2) | Implicit | Yes (when S ≥ F) |
+| Merit sensitivity (NPSS) | Moderate | Moderate | High | High | High |
+| Equal-weighted satisfaction (PSI) | Cohort-dependent | Cohort-dependent | Cohort-dependent | High in balanced cohorts | Cohort-dependent |
+| Load balance | Strong | Strong | Variable | Implicit | Strong (backfill phase) |
+| CLI available | Yes | Yes | Yes | No (GUI only) | No (GUI only) |
 
 > **Note:** PSI and advisor entropy outcomes are cohort-sensitive. Neither policy dominates consistently across all cohort types. See Section 3.8 for guidance on interpretation.
 
