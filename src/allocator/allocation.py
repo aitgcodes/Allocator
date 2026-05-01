@@ -1895,7 +1895,7 @@ def tiered_rounds_dry_run(
 
     Each dict contains:
         round_no, unassigned_count, unreachable_faculty_count,
-        assignments_made, is_stall
+        empty_labs_count, assignments_made, is_stall
     """
     students_copy = copy.deepcopy(students)
     faculty_copy  = copy.deepcopy(faculty)
@@ -2140,22 +2140,25 @@ def run_full_allocation(
     policy: str = "least_loaded",
 ) -> Tuple[Dict[str, Optional[str]], SnapshotList, dict, dict]:
     """
-    Run Phase 0 → (Round 1 →) Main allocation end-to-end.
+    Run Phase 0 → allocation end-to-end using the selected policy.
 
-    Round 1 is skipped when policy="cpi_fill"; it runs for all other policies.
+    Round 1 runs only for "least_loaded" and "adaptive_ll". All other policies
+    (cpi_fill, tiered_rounds, tiered_ll) skip Round 1; r1_picks is ignored for them.
 
     Parameters
     ----------
     students  : raw Student list (tier/n_tier not yet set)
     faculty   : raw Faculty list (max_load=-1 where not specified)
-    r1_picks  : optional Round-1 picks dict (see round1()); ignored for cpi_fill
+    r1_picks  : optional Round-1 picks dict (see round1()); only used by
+                least_loaded and adaptive_ll; ignored for all other policies
     out_dir   : if provided, Phase-0 report CSVs are written here
-    policy    : assignment policy.
-                "least_loaded" (default) — Phase 0 → Round 1 → assign to the
-                least-loaded eligible faculty, tie-broken by preference rank.
-                "cpi_fill" — Phase 0 → Phase 1 (CPI order, highest-preferred
-                with capacity, stopping condition) → Phase 2 (highest-preferred
-                empty lab). Round 1 is not run.
+    policy    : assignment policy — one of:
+                "least_loaded"  (default) Phase 0 → Round 1 → LL assignment.
+                "adaptive_ll"   Phase 0 (with cap optimisation) → Round 1 → LL.
+                "cpi_fill"      Phase 0 → CPI-Fill Phase 1 → Phase 2. No Round 1.
+                "tiered_rounds" Phase 0 → preference rounds (auto CPI ties). No Round 1.
+                "tiered_ll"     Phase 0 → dry-run → tiered rounds 1..k → CPI-Fill
+                                backfill. No Round 1.
 
     Returns
     -------
@@ -2265,7 +2268,8 @@ def _cli():
             "                  guaranteeing no empty labs when S ≥ F.\n"
             "  cpi_fill      : Phase 0 → CPI-Fill Phase 1 (CPI order until\n"
             "                  unassigned == empty labs) → Phase 2 (highest-\n"
-            "                  preferred empty lab). Guarantees no empty labs.\n"
+            "                  preferred empty lab). Guarantees no empty labs\n"
+            "                  when S ≥ F and preferences cover all faculty.\n"
             "  tiered_rounds : preference rounds with automatic CPI tie-breaking;\n"
             "                  no empty-lab guarantee (GUI offers manual picks).\n"
             "  tiered_ll     : tiered rounds up to critical round k (auto CPI\n"

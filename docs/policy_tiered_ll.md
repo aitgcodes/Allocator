@@ -2,7 +2,7 @@
 
 ## Overview
 
-`tiered_ll` is a **hybrid policy** that combines the transparency of preference rounds with the load-balancing guarantee of the least-loaded rule. It runs interactive tiered preference rounds for the first *k* rounds (where *k* is determined by a static dry-run pre-computation), then automatically switches to LL-HP backfill for any remaining unassigned students. When S ≥ F and the preference structure is feasible, `tiered_ll` guarantees no empty labs.
+`tiered_ll` is a **hybrid policy** that combines the transparency of preference rounds with an empty-lab guarantee. It runs interactive tiered preference rounds for the first *k* rounds (where *k* is determined by a static dry-run pre-computation), then automatically switches to a backfill phase for any remaining unassigned students. The backfill algorithm differs by mode: GUI uses LL-HP backfill; CLI uses CPI-Fill Phase 1+2 semantics. When S ≥ F and the preference structure is feasible, `tiered_ll` guarantees no empty labs.
 
 This policy is available both through the Dash UI and via the CLI. In CLI (batch) mode all tie-breaks in Phase 1 are resolved automatically by highest CPI (ties in CPI broken by student ID ascending); the manual pick UI is only available in the Dash GUI.
 
@@ -13,7 +13,7 @@ This policy is available both through the Dash UI and via the CLI. In CLI (batch
 ```
 Phase 0a (tiering)  →  Phase 0b (dry-run → k_crit)
   →  Phase 1: Tiered Rounds 1..k_crit  (interactive)
-  →  Phase 2: LL-HP Backfill           (automatic)
+  →  Phase 2: Backfill (GUI: LL-HP | CLI: CPI-Fill Phase 1+2)  (automatic)
 ```
 
 ---
