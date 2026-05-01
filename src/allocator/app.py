@@ -1761,15 +1761,13 @@ def cb_run(n_phase0, n_full, loaded):
         stall_rd = next(
             (e["round_no"] for e in dry_run_states if e["is_stall"]), None
         )
-        # Advisors with remaining capacity unreachable by any unassigned student at round k.
-        unreachable_at_k = next(
-            (e["unreachable_faculty_count"] for e in dry_run_states
-             if e["round_no"] == k), 0
-        )
-        meta["k_crit_static"]           = k
-        meta["dry_run_rounds_total"]    = total_rounds
-        meta["dry_run_stall_round"]     = stall_rd
-        meta["dry_run_unreachable_at_k"] = unreachable_at_k
+        entry_at_k = next((e for e in dry_run_states if e["round_no"] == k), {})
+        meta["k_crit_static"]            = k
+        meta["dry_run_rounds_total"]     = total_rounds
+        meta["dry_run_stall_round"]      = stall_rd
+        meta["dry_run_unreachable_at_k"] = entry_at_k.get("unreachable_faculty_count", 0)
+        meta["dry_run_empty_labs_at_k"]  = entry_at_k.get("empty_labs_count", 0)
+        meta["dry_run_unassigned_at_k"]  = entry_at_k.get("unassigned_count", 0)
 
     def _phase0_status_msg(students, faculty, meta):
         tier_c = sum(1 for s in students if s.tier == "C")

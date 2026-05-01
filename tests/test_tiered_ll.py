@@ -104,13 +104,15 @@ class TestReachability:
 # ---------------------------------------------------------------------------
 
 class TestFindCriticalRound:
-    def _make_entry(self, round_no, unreachable=0, stall=False, assigned=1, unassigned=0):
+    def _make_entry(self, round_no, unreachable=0, stall=False, assigned=1,
+                    unassigned=0, empty_labs=0):
         return {
             "round_no": round_no,
             "unreachable_faculty_count": unreachable,
             "is_stall": stall,
             "assignments_made": assigned,
             "unassigned_count": unassigned,
+            "empty_labs_count": empty_labs,
         }
 
     def test_no_criterion_fires(self):
@@ -153,6 +155,34 @@ class TestFindCriticalRound:
     def test_empty_states(self):
         """Empty dry-run returns k=1."""
         assert find_critical_round([]) == 1
+
+    def test_unassigned_below_empty_labs_fires_criterion(self):
+        """k=1 when unassigned drops below empty_labs at round 2."""
+        states = [
+            self._make_entry(1, unassigned=20, empty_labs=7),
+            self._make_entry(2, unassigned=6,  empty_labs=7),
+        ]
+        assert find_critical_round(states) == 1
+
+    def test_unassigned_equals_empty_labs_fires_criterion(self):
+        """Criterion fires when unassigned == empty_labs (switch at parity)."""
+        states = [
+            self._make_entry(1, unassigned=10, empty_labs=7),
+            self._make_entry(2, unassigned=7,  empty_labs=7),
+        ]
+        # Round 2 hits parity → criterion fires → k=1
+        assert find_critical_round(states) == 1
+
+    def test_unassigned_zero_does_not_fire_empty_labs_criterion(self):
+        """When all students are assigned (unassigned=0) the criterion does not fire
+        even if empty labs remain — tiered rounds ran to completion."""
+        states = [
+            self._make_entry(1, unassigned=5, empty_labs=3),
+            self._make_entry(2, unassigned=0, empty_labs=3),
+        ]
+        # unassigned=5 >= empty_labs=3 at round 1 → k=1; unassigned=0 at round 2
+        # doesn't trigger (0 is not > 0) → k=2
+        assert find_critical_round(states) == 2
 
 
 # ---------------------------------------------------------------------------

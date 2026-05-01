@@ -1924,10 +1924,12 @@ def tiered_rounds_dry_run(
         _, unreachable = _reachability(
             unassigned_ids, faculty_copy, loads_after, student_map, round_no
         )
+        empty_labs = sum(1 for f in faculty_copy if loads_after.get(f.id, 0) == 0)
         round_stats.append({
             "round_no":                 round_no,
             "unassigned_count":         len(unassigned_ids),
             "unreachable_faculty_count": unreachable,
+            "empty_labs_count":         empty_labs,
             "assignments_made":         assigned_count,
             "is_stall":                 (assigned_count == 0 and len(unassigned_ids) > 0),
         })
@@ -1939,19 +1941,27 @@ def find_critical_round(dry_run_states: List[Dict]) -> int:
     """
     Return the last round k where the stopping criterion has NOT yet fired.
 
-    Stopping criterion fires when:
-      - unreachable_faculty_count > 0 (some advisor with capacity is unreachable), OR
-      - is_stall is True (zero new assignments with students remaining).
+    Stopping criterion fires when any of the following hold after a round:
+      - unreachable_faculty_count > 0: some advisor with remaining capacity
+        cannot be reached by any unassigned student via prefs[k:].
+      - is_stall is True: zero new assignments with students still remaining.
+      - unassigned_count <= empty_labs_count: unassigned students have reached
+        parity with (or dropped below) empty labs — switch to LL-HP backfill
+        so it can exactly (or as fully as possible) fill the remaining empty labs.
 
-    If the criterion never fires, k = total rounds (tiered rounds run to completion
-    and backfill will have no work to do).
+    If the criterion never fires, k = total rounds (tiered rounds run to
+    completion and backfill will have no work to do).
     If the criterion fires immediately at round 1, k = 1 (minimum).
     """
     if not dry_run_states:
         return 1
     k = 1
     for entry in dry_run_states:
-        if entry["unreachable_faculty_count"] > 0 or entry["is_stall"]:
+        empty_labs = entry.get("empty_labs_count", 0)
+        unassigned = entry["unassigned_count"]
+        if (entry["unreachable_faculty_count"] > 0
+                or entry["is_stall"]
+                or (unassigned > 0 and unassigned <= empty_labs)):
             break
         k = entry["round_no"]
     return k
