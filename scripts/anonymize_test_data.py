@@ -7,11 +7,15 @@ Anonymization rules:
   Roll numbers   → same sequential integers
   CPI            → preserved, normalised to plain float (handles "8.93/10")
   Faculty names  → Prof01, Prof02, …  (globally consistent, zero-padded so
-                   alphabetical order matches numeric order for backfill)
+                   alphabetical order matches numeric order)
 
 Preference columns keep their original "Preference N" headers so that
 preprocess_students() in data_loader.py normalises them automatically.
-preprocess_students() then deduplicates, maps names → IDs, and backfills.
+Deduplication and preference-list padding are deliberately left to
+preprocess_students(); this script only anonymizes names.
+
+The faculty.csv for each year is the union of all unique faculty IDs
+that appear in that year's preference columns — no manual curation needed.
 
 Outputs (one pair per year):
   test/2019/anonymized_preferences.csv
@@ -92,19 +96,15 @@ def process_year(
         seq = student_offset + i + 1          # global sequential label
 
         anon_prefs: dict[str, str] = {}
-        seen_prefs: set[str] = set()
         for col in pref_cols:
             cell = row[col]
             if pd.isna(cell) or str(cell).strip() == "":
                 anon_prefs[col] = ""
             else:
                 anon_name = faculty_map.get(canonical(cell), "")
-                if anon_name and anon_name not in seen_prefs:
-                    seen_prefs.add(anon_name)
-                    anon_prefs[col] = anon_name
+                anon_prefs[col] = anon_name
+                if anon_name:
                     year_faculty.add(anon_name)
-                else:
-                    anon_prefs[col] = ""  # duplicate or unknown → blank slot
 
         out_row: dict[str, str] = {
             "Name":             f"student{seq:02d}",
