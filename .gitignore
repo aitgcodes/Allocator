@@ -12,6 +12,11 @@ env/
 venv/
 reports/
 results/
+
+# Generated study outputs — kept local, not committed
+stats/policy_report.md
+stats/policy_report.pdf
+stats/students_*.csv
 .DS_Store
 .claude/
 test/
