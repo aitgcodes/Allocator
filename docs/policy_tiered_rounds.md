@@ -4,7 +4,7 @@
 
 `tiered_rounds` is an **interactive, round-based allocation policy**. It runs Phase 0 for tier classification (diagnostic only — no tier cap is applied during assignment) and then executes a sequence of preference rounds. In each round *n*, every still-unassigned student simultaneously offers their *n*-th preference. Each advisor considers their pool and selects at most one student per round: the highest-CPI candidate wins outright; if two or more students share the top CPI, the operator must make a manual pick before the round advances. The process continues until all students are assigned or a stall is detected.
 
-This policy is only available through the Dash UI; it cannot be run via the CLI because manual tie-breaking requires interactive input.
+This policy is available both through the Dash UI and via the CLI. In CLI (batch) mode all ties are resolved automatically by highest CPI (ties in CPI broken by student ID ascending); the manual pick UI is only available in the Dash GUI.
 
 ---
 

@@ -312,7 +312,7 @@ PYTHONPATH=src python -m allocator.allocation \
   --out      reports/
 ```
 
-The `--policy` flag accepts `least_loaded`, `adaptive_ll`, or `cpi_fill`. The `tiered_rounds` and `tiered_ll` policies require the Dash GUI and cannot be run via CLI.
+The `--policy` flag accepts all five policies: `least_loaded`, `adaptive_ll`, `cpi_fill`, `tiered_rounds`, and `tiered_ll`. In CLI mode, tie-breaking in `tiered_rounds` and `tiered_ll` is resolved automatically by highest CPI (ties broken by student ID); the manual pick UI is only available in the Dash GUI.
 
 ---
 
@@ -486,7 +486,7 @@ No separate Round 1 or class-wise main allocation. Phase 0 tier classification i
 | Merit sensitivity (NPSS) | Moderate | Moderate | High | High | High |
 | Equal-weighted satisfaction (PSI) | Cohort-dependent | Cohort-dependent | Cohort-dependent | High in balanced cohorts | Cohort-dependent |
 | Load balance | Strong | Strong | Variable | Implicit | Strong (backfill phase) |
-| CLI available | Yes | Yes | Yes | No (GUI only) | No (GUI only) |
+| CLI available | Yes | Yes | Yes | Yes (auto CPI ties) | Yes (auto CPI ties) |
 
 > **Note:** PSI and advisor entropy outcomes are cohort-sensitive. Neither policy dominates consistently across all cohort types. See Section 3.8 for guidance on interpretation.
 
