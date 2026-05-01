@@ -4,7 +4,7 @@
 
 `tiered_ll` is a **hybrid policy** that combines the transparency of preference rounds with the load-balancing guarantee of the least-loaded rule. It runs interactive tiered preference rounds for the first *k* rounds (where *k* is determined by a static dry-run pre-computation), then automatically switches to LL-HP backfill for any remaining unassigned students. When S ≥ F and the preference structure is feasible, `tiered_ll` guarantees no empty labs.
 
-This policy is only available through the Dash UI; it cannot be run via the CLI because Phase 1 requires interactive tie-breaking.
+This policy is available both through the Dash UI and via the CLI. In CLI (batch) mode all tie-breaks in Phase 1 are resolved automatically by highest CPI (ties in CPI broken by student ID ascending); the manual pick UI is only available in the Dash GUI.
 
 ---
 
@@ -82,4 +82,4 @@ The backfill phase runs non-interactively over the remaining unassigned students
 
 - The dry-run assumes CPI tie-breaking; actual manual picks in Phase 1 may produce a different assignment trajectory, causing the live critical round to differ from *k_crit_static*. In most cohorts this does not change *k*; extreme tie-sensitivity is rare.
 - If S < F (fewer students than faculty), empty labs cannot be avoided regardless of policy. The app flags this as a structural deficit.
-- `tiered_ll` is GUI-only. Headless batch runs should use `least_loaded`, `adaptive_ll`, or `cpi_fill`.
+- In CLI mode, tie-breaking uses CPI automatically (same rule as the dry-run), so `k_crit_static` is always exact. If you need human judgment over ties, use the Dash GUI.

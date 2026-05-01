@@ -1608,6 +1608,47 @@ def tiered_rounds_continue_unconstrained(state: TieredRoundsState) -> TieredRoun
     return _tr_prepare_round(next_state, stop_at_round=None)
 
 
+def tiered_rounds_auto_run(
+    students: List[Student],
+    faculty: List[Faculty],
+    snapshots: SnapshotList,
+    stop_at_round: Optional[int] = None,
+) -> "TieredRoundsState":
+    """
+    Run tiered preference rounds with automatic CPI tie-breaking (CLI/batch mode).
+
+    Equivalent to calling tiered_rounds_start then tiered_rounds_resume in a
+    loop, always choosing the highest-CPI student (ties broken by student ID
+    ascending) when the engine pauses for a manual pick.
+
+    The GUI callbacks (tiered_rounds_start_interactive, tiered_rounds_apply_picks,
+    tiered_rounds_continue_unconstrained) are not used or affected.
+
+    Parameters
+    ----------
+    students       : students with .tier/.n_tier set by phase0()
+    faculty        : faculty with .max_load set by phase0()
+    snapshots      : SnapshotList already containing the Phase-0 snapshot
+    stop_at_round  : if set, stop before executing that round number and return
+                     status="switch_to_backfill" (used by tiered_ll)
+
+    Returns
+    -------
+    TieredRoundsState with status in
+    {"complete", "stalled", "switch_to_backfill"}
+    """
+    student_map = {s.id: s for s in students}
+    state = tiered_rounds_start(students, faculty, snapshots, stop_at_round=stop_at_round)
+    while state.status == "awaiting_tie":
+        tie = state.pending_tie
+        chosen = min(
+            tie.tied_ids,
+            key=lambda sid: (-student_map[sid].cpi, sid),
+        )
+        state = tiered_rounds_resume(state, chosen, stop_at_round=stop_at_round)
+    return state
+
+
 def tiered_rounds_start(
     students: List[Student],
     faculty: List[Faculty],
@@ -2002,6 +2043,87 @@ def tiered_ll_backfill(
     return assignments, faculty_loads, overflow
 
 
+def tiered_ll_cpi_backfill(
+    students: List[Student],
+    faculty: List[Faculty],
+    assignments: Dict[str, Optional[str]],
+    faculty_loads: Dict[str, int],
+    snapshots: SnapshotList,
+    k: int,
+) -> Tuple[Dict[str, Optional[str]], Dict[str, int], SnapshotList, List[str]]:
+    """
+    CPI-Fill backfill for tiered_ll CLI auto-mode.
+
+    After k completed tiered rounds students have exhausted preferences 1..k.
+    Runs in two sub-phases:
+      Phase 1: CPI-order greedy assignment on prefs[k:] (highest-preferred
+               advisor with remaining capacity); stops when unassigned == empty_labs.
+      Phase 2: each remaining student is assigned to their highest-preferred
+               empty lab (full preference list, so advisors from positions 1..k
+               that are still empty are also considered).
+
+    Phase 2 guarantees no empty labs when S_remaining ≥ E_remaining and each
+    student's full preference list covers all faculty (structurally feasible).
+    Overflow is returned for the structurally-infeasible case (S_remaining < E).
+
+    Parameters
+    ----------
+    students       : full student list (original preferences; used for Phase 2
+                     and for NPSS rank lookup)
+    faculty        : faculty list
+    assignments    : current {student_id: faculty_id | None}
+    faculty_loads  : current {faculty_id: load}
+    snapshots      : SnapshotList to append to
+    k              : number of completed tiered rounds
+
+    Returns
+    -------
+    (assignments, faculty_loads, snapshots, overflow_ids)
+    """
+    unassigned_ids = {sid for sid, fid in assignments.items() if fid is None}
+    student_map = {s.id: s for s in students}
+
+    # Trimmed-pref copies for Phase 1: skip preferences 1..k (already offered)
+    trimmed = [
+        Student(
+            id=s.id, name=s.name, cpi=s.cpi,
+            preferences=s.preferences[k:],
+            tier=s.tier, n_tier=s.n_tier,
+        )
+        for s in (_sorted_by_cpi([student_map[sid] for sid in unassigned_ids]))
+    ]
+
+    step = snapshots.last().step if snapshots.last() else 0
+    step += 1
+    snapshots.append(AllocationSnapshot(
+        step=step,
+        phase="TieredLL_Backfill",
+        event=(
+            f"CPI-Fill backfill begins | {len(trimmed)} students unassigned | "
+            f"Phase 1 uses prefs[{k}:] | Phase 2 uses full pref list"
+        ),
+        assignments=copy.copy(assignments),
+        faculty_loads=copy.copy(faculty_loads),
+        unassigned=unassigned_ids,
+    ))
+
+    # Phase 1: CPI-order on prefs[k:], stop at unassigned == empty_labs
+    assignments, faculty_loads, snapshots, _ = cpi_fill_phase1(
+        trimmed, faculty, assignments, faculty_loads, snapshots,
+    )
+
+    # Phase 2: highest-preferred empty lab, scanning full pref list
+    # (advisors in positions 1..k that are still empty are eligible)
+    unassigned_after_p1 = [student_map[sid] for sid, fid in assignments.items() if fid is None]
+    if unassigned_after_p1:
+        assignments, snapshots, _ = cpi_fill_phase2(
+            unassigned_after_p1, faculty, assignments, faculty_loads, snapshots,
+        )
+
+    overflow = [sid for sid, fid in assignments.items() if fid is None]
+    return assignments, faculty_loads, snapshots, overflow
+
+
 # ---------------------------------------------------------------------------
 # Convenience: run full allocation in one call
 # ---------------------------------------------------------------------------
@@ -2041,21 +2163,16 @@ def run_full_allocation(
                       (keys: "npss", "overflow_count", "mean_psi",
                        "per_tier", "per_student")
     """
-    _POLICIES = {"least_loaded", "cpi_fill", "tiered_rounds", "adaptive_ll"}
+    _POLICIES = {"least_loaded", "cpi_fill", "tiered_rounds", "adaptive_ll", "tiered_ll"}
     if policy not in _POLICIES:
         raise ValueError(f"Unknown policy {policy!r}. Choose from {_POLICIES}.")
-    if policy == "tiered_rounds":
-        raise NotImplementedError(
-            "The 'tiered_rounds' policy requires interactive tie-breaking and "
-            "cannot be run via run_full_allocation(). Use the Dash UI or call "
-            "tiered_rounds_start() / tiered_rounds_resume() directly."
-        )
 
     students, faculty, meta, snaps = phase0(
         students, faculty, out_dir=out_dir, optimize=(policy == "adaptive_ll")
     )
     N_A = meta["N_A"]
     N_B = meta["N_B"]
+
     if policy == "cpi_fill":
         # Round 1 is skipped — CPI-Fill goes directly Phase 0 → Phase 1 → Phase 2.
         assignments   = {s.id: None for s in students}
@@ -2063,6 +2180,34 @@ def run_full_allocation(
         assignments, snaps, _ = cpi_fill_allocation(
             students, faculty, assignments, faculty_loads, snaps,
         )
+
+    elif policy == "tiered_rounds":
+        # Auto CPI tie-breaking; accepts possible empty labs (no guarantee).
+        state = tiered_rounds_auto_run(students, faculty, snaps)
+        assignments   = state.assignments
+        faculty_loads = state.faculty_loads
+
+    elif policy == "tiered_ll":
+        # Dry-run to find critical round k, then auto tiered rounds 1..k,
+        # then CPI-Fill backfill (Phase 1 on prefs[k:] + Phase 2 full prefs).
+        dry_run_states = tiered_rounds_dry_run(students, faculty)
+        k = find_critical_round(dry_run_states)
+        meta["k_crit_static"] = k
+        state = tiered_rounds_auto_run(students, faculty, snaps, stop_at_round=k + 1)
+        assignments   = state.assignments
+        faculty_loads = state.faculty_loads
+        assignments, faculty_loads, snaps, overflow = tiered_ll_cpi_backfill(
+            students, faculty, assignments, faculty_loads, snaps, k,
+        )
+        if overflow:
+            import warnings
+            warnings.warn(
+                f"tiered_ll: {len(overflow)} student(s) unassigned after backfill "
+                f"(structural deficit — remaining preferences all at capacity): "
+                f"{overflow}",
+                stacklevel=2,
+            )
+
     else:
         assignments, faculty_loads, snaps = round1(students, faculty, snaps, r1_picks)
         # adaptive_ll uses the same LL assignment rule with optimized caps
@@ -2105,19 +2250,23 @@ def _cli():
     parser.add_argument(
         "--policy",
         default="least_loaded",
-        choices=["least_loaded", "adaptive_ll", "cpi_fill"],
+        choices=["least_loaded", "adaptive_ll", "cpi_fill",
+                 "tiered_rounds", "tiered_ll"],
         help=(
-            "Assignment policy for the main allocation round.\n"
-            "  least_loaded : assign to the least-loaded eligible faculty,\n"
-            "                 tie-broken by preference rank (default).\n"
-            "  adaptive_ll  : like least_loaded but Phase 0b iteratively widens\n"
-            "                 N_A/N_B caps until empty labs after Tiers A+B ≤ |C|,\n"
-            "                 guaranteeing no empty labs when S ≥ F.\n"
-            "  cpi_fill     : two-phase procedure — Phase 1 processes students\n"
-            "                 in CPI order until unassigned count equals\n"
-            "                 empty-lab count; Phase 2 assigns each remaining\n"
-            "                 student to their highest-preferred empty lab.\n"
-            "  (tiered_rounds and tiered_ll require the Dash GUI.)"
+            "Assignment policy.\n"
+            "  least_loaded  : assign to the least-loaded eligible faculty,\n"
+            "                  tie-broken by preference rank (default).\n"
+            "  adaptive_ll   : like least_loaded but Phase 0b iteratively widens\n"
+            "                  N_A/N_B caps until empty labs after Tiers A+B ≤ |C|,\n"
+            "                  guaranteeing no empty labs when S ≥ F.\n"
+            "  cpi_fill      : Phase 0 → CPI-Fill Phase 1 (CPI order until\n"
+            "                  unassigned == empty labs) → Phase 2 (highest-\n"
+            "                  preferred empty lab). Guarantees no empty labs.\n"
+            "  tiered_rounds : preference rounds with automatic CPI tie-breaking;\n"
+            "                  no empty-lab guarantee (GUI offers manual picks).\n"
+            "  tiered_ll     : tiered rounds up to critical round k (auto CPI\n"
+            "                  ties), then CPI-Fill backfill on remaining prefs;\n"
+            "                  guarantees no empty labs when S ≥ F."
         ),
     )
     parser.add_argument(
