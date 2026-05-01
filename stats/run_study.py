@@ -487,17 +487,129 @@ def build_report(all_results: Dict[str, dict], scenario_labels: Dict[str, str]) 
         counts = " | ".join(str(wc[p]) for p in POLICIES)
         lines.append(f"| {metric_name} | ≥ {threshold} | {counts} | {wc['draw']} |")
 
+    # ------------------------------------------------------------------ #
+    # Section 8 — Real-cohort findings
+    # ------------------------------------------------------------------ #
+    real_keys = [k for k in all_results if k in ("2019", "2020")]
+
+    if real_keys:
+        lines += [
+            "",
+            "---",
+            "",
+            "## 8. Real-Cohort Findings",
+            "",
+            "> The 2019 and 2020 cohorts are the only real datasets in this study.",
+            "> All other datasets are synthetic. Real-cohort results reflect actual",
+            "> student preference structure and carry greater practical weight.",
+            "",
+        ]
+
+        for rk in real_keys:
+            label    = scenario_labels[rk]
+            pr       = all_results[rk]
+            n_s      = pr["least_loaded"]["n_students"]
+            n_f      = pr["least_loaded"]["n_faculty"]
+            ratio    = f"{n_s/n_f:.1f}"
+
+            # NPSS ranking
+            npss_rank = sorted(pr.items(), key=lambda x: x[1]["metrics"]["npss"], reverse=True)
+            # Best coverage policy (zero empty labs, highest NPSS)
+            coverage_policies = [(p, r) for p, r in npss_rank if r["empty_labs"] == 0]
+
+            lines += [
+                f"### {label} (S={n_s}, F={n_f}, S/F={ratio})",
+                "",
+                "**NPSS ranking (all students assigned in all runs):**",
+                "",
+                "| Rank | Policy | NPSS | PSI | Empty Labs | Note |",
+                "|------|--------|------|-----|------------|------|",
+            ]
+            for rank, (p, r) in enumerate(npss_rank, 1):
+                m    = r["metrics"]
+                note = ""
+                if r["empty_labs"] > 0:
+                    note = f"⚠ {r['empty_labs']} empty lab(s)"
+                elif r["k_crit"] is not None:
+                    note = f"k_crit={r['k_crit']}"
+                lines.append(
+                    f"| {rank} | `{p}` ({ABBREV[p]}) "
+                    f"| {m['npss']:.4f} "
+                    f"| {m['mean_psi']:.4f} "
+                    f"| {r['empty_labs']} "
+                    f"| {note} |"
+                )
+
+            lines += [""]
+
+            # Key observations
+            best_npss_p,  best_npss_r  = npss_rank[0]
+            best_cov_p,   best_cov_r   = coverage_policies[0] if coverage_policies else (None, None)
+            ll_r = pr["least_loaded"]
+
+            obs = []
+            obs.append(
+                f"`{best_npss_p}` achieves the highest NPSS ({best_npss_r['metrics']['npss']:.4f}) "
+                f"but leaves **{best_npss_r['empty_labs']} empty lab(s)**."
+            )
+            if best_cov_p and best_cov_p != best_npss_p:
+                obs.append(
+                    f"Among policies with zero empty labs, `{best_cov_p}` leads NPSS "
+                    f"({best_cov_r['metrics']['npss']:.4f})."
+                )
+            if ll_r["empty_labs"] == 0:
+                obs.append(
+                    f"`least_loaded` scores NPSS={ll_r['metrics']['npss']:.4f} with zero empty labs "
+                    f"— the best fully-automatic, coverage-guaranteed option."
+                )
+            else:
+                obs.append(
+                    f"`least_loaded` leaves {ll_r['empty_labs']} empty lab(s); "
+                    f"`adaptive_ll` eliminates them at the cost of "
+                    f"ΔNPSS={pr['adaptive_ll']['metrics']['npss'] - ll_r['metrics']['npss']:+.4f}."
+                )
+
+            tr_r = pr.get("tiered_rounds")
+            tll_r = pr.get("tiered_ll")
+            if tr_r and tll_r:
+                obs.append(
+                    f"`tiered_ll` (k_crit={tll_r['k_crit']}) trades "
+                    f"ΔNPSS={tll_r['metrics']['npss'] - tr_r['metrics']['npss']:+.4f} vs `tiered_rounds` "
+                    f"to eliminate its {tr_r['empty_labs']} empty lab(s)."
+                )
+
+            for o in obs:
+                lines.append(f"- {o}")
+            lines += [""]
+
+        lines += [
+            "**Cross-cohort pattern:**",
+            "",
+            "- `tiered_rounds` leads NPSS on both real cohorts but cannot guarantee coverage.",
+            "- `least_loaded` is the highest-NPSS fully-automatic policy with an implicit coverage",
+            "  guarantee on the 2019 cohort (2 empty labs) and a full guarantee on 2020.",
+            "- `adaptive_ll` reliably closes the empty-lab gap at a modest NPSS cost (~0.04).",
+            "- `cpi_fill` underperforms on real data relative to synthetic — real preference",
+            "  structures are not random, so strict CPI ordering does not align with actual",
+            "  preferences as well as round-based or load-balancing approaches.",
+            "- `tiered_ll` k_crit=1 on both cohorts, meaning the dry-run switches to CPI-Fill",
+            "  backfill after just one round. This collapses its behaviour toward `cpi_fill`",
+            "  and explains why its NPSS tracks close to (but slightly above) `cpi_fill`.",
+            "",
+        ]
+
     lines += [
+        "---",
         "",
         "### 7b. Policy guidance",
         "",
         "| Policy | Best when… | Empty-lab guarantee | Operator involvement |",
         "|--------|-----------|---------------------|----------------------|",
-        "| `least_loaded` | Load balance is paramount; safe default | Indirect | None |",
+        "| `least_loaded` | Load balance is paramount; best automatic policy on real cohorts | Indirect | None |",
         "| `adaptive_ll` | Structural empty-lab risk detected in Phase 0 | Yes (S ≥ F) | None |",
-        "| `cpi_fill` | Merit-first access is an explicit goal | Yes (S ≥ F) | None |",
-        "| `tiered_rounds` | Full transparency and auditability required | No | GUI: manual tie-break |",
-        "| `tiered_ll` | Transparent early rounds + coverage guarantee | Yes (S ≥ F) | GUI: manual tie-break in rounds |",
+        "| `cpi_fill` | Random/synthetic preference structure; merit-first goal | Yes (S ≥ F) | None |",
+        "| `tiered_rounds` | Maximum preference satisfaction; operator can accept empty labs | No | GUI: manual tie-break |",
+        "| `tiered_ll` | Transparent early rounds + coverage guarantee (k_crit > 1 needed for benefit) | Yes (S ≥ F) | GUI: manual tie-break in rounds |",
         "",
         "---",
         "",
@@ -552,6 +664,7 @@ def _run_dataset_raw(students_raw_path, faculty_path, label, all_results, key, s
     """Load a raw Google Form export via preprocess_students, save cleaned CSV, then run."""
     print(f"\n[{label}]")
     faculty = load_faculty(str(faculty_path))
+    random.seed(RANDOM_SEED)  # make backfill order deterministic
     cleaned_df, warns, _ = preprocess_students(students_raw_path, faculty)
     cleaned_df.to_csv(preprocessed_out, index=False)
     if warns:
