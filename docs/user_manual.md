@@ -189,7 +189,7 @@ Choose one of the five allocation policies on the landing page:
 - **Adaptive LL (`adaptive_ll`)** — like `least_loaded` but auto-tunes tier caps to guarantee no empty labs when S ≥ F.
 - **CPI Fill (`cpi_fill`)** — merit-first; processes students in strict descending CPI order; no tier window applied.
 - **CPI-Tiered Preference Rounds (`tiered_rounds`)** — round-based; in round *n* each student offers their *n*-th preference; manual pick required at every round (auto-run also available).
-- **Tiered LL (`tiered_ll`)** — runs tiered rounds 1..k (critical round determined by dry-run), then switches to LL-HP backfill for remaining students, guaranteeing no empty labs when feasible.
+- **Tiered LL (`tiered_ll`)** — runs tiered rounds 1..k (critical round *k* determined by dry-run), then switches to a two-phase backfill: Phase 2a assigns excess students (one per advisor, CPI order) while unassigned > empty labs; Phase 2b fills each remaining empty lab with the student's highest-preferred empty advisor. Guarantees no empty labs when S ≥ F and the preference structure is feasible.
 
 A full discussion of all policies is in Section 3. To switch policy mid-session, click **Home** (top-right of the allocation page) to return to the landing page.
 
@@ -213,7 +213,7 @@ Click **Run Phase 0 only** to tier students and compute faculty capacities witho
 - **`least_loaded` / `adaptive_ll`:** Confirm Round-1 picks (default: highest-CPI student per advisor), then proceed to main allocation, making or confirming each assignment.
 - **`cpi_fill`:** Run Phase 1 (manual or auto), then Phase 2.
 - **`tiered_rounds`:** After Phase 0, choose manual or auto-run. In manual mode, each round presents per-advisor dropdowns for operator picks; confirm to advance. In auto-run mode, the engine resolves ties by CPI automatically.
-- **`tiered_ll`:** After Phase 0, the dry-run computes the critical round k. Run tiered rounds 1..k manually or automatically, then confirm the Phase 2 switch to LL-HP backfill (or continue rounds unconstrained).
+- **`tiered_ll`:** After Phase 0, the dry-run computes the critical round *k* (the last round where running one more round would not leave more empty labs than remaining students). Run tiered rounds 1..k manually or automatically. On reaching round *k* the UI switches automatically to the two-phase backfill: Phase 2a (one student per advisor, CPI order, while unassigned > empty labs) followed by Phase 2b (each student to their highest-preferred empty lab).
 
 ---
 
@@ -440,7 +440,82 @@ Steps:
 
 ---
 
-### 3.5 Policy: CPI-Tiered Preference Rounds (`tiered_rounds`)
+### 3.4 Policy: Adaptive Least Loaded (`adaptive_ll`)
+
+#### Overview
+
+`adaptive_ll` is a variant of `least_loaded` that guarantees no empty labs when S ≥ F, without requiring operator intervention. Before running the main allocation it adjusts the tier-window caps `N_A` and `N_B` iteratively until the post-A+B empty-lab count is at most the size of Class C, making full coverage structurally possible.
+
+#### Pipeline
+
+```
+Phase 0  →  Phase 0b (cap optimisation)  →  Round 1  →  Main Allocation (A → B → C)
+```
+
+The assignment rule within each tier is identical to `least_loaded` (least-loaded advisor within window, preference rank as tiebreaker). The only difference is that `N_A` and `N_B` may be wider than the default values — expanded just enough to eliminate structural empty-lab risk.
+
+#### Properties
+
+| Property | Behaviour |
+|----------|-----------|
+| Load balance | Strong — same assignment rule as `least_loaded` |
+| Preference satisfaction (NPSS/PSI) | Slightly lower than `least_loaded` when caps expand (students placed further along their list to reach under-subscribed advisors) |
+| Empty-lab guarantee | Yes — structural (when S ≥ F) |
+| Operator involvement | None required |
+| Robustness | Reliable across sparse cohorts (S/F ≈ 1) where `least_loaded` may leave empty labs |
+
+> **When to prefer `adaptive_ll` over `least_loaded`:** when the S/F ratio is close to 1 and empty labs are unacceptable. At S/F > 1.3 the two policies are usually identical (no cap expansion needed).
+
+---
+
+### 3.5 Policy: Tiered LL (`tiered_ll`)
+
+#### Overview
+
+`tiered_ll` is a hybrid policy that combines the transparency of `tiered_rounds` with the coverage guarantee of `adaptive_ll`. It runs interactive tiered rounds for the first *k* rounds (determined by a dry-run pre-computation), then switches automatically to a two-phase backfill for any remaining students.
+
+#### Pipeline
+
+```
+Phase 0a (tiering)  →  Phase 0b (dry-run → k_crit)
+  →  Phase 1: Tiered Rounds 1..k  (interactive)
+  →  Phase 2a: Excess assignment  (automatic)
+  →  Phase 2b: Empty-lab fill  (automatic)
+```
+
+#### Finding the critical round *k*
+
+Before any interactive steps a full dry-run of `tiered_rounds` is run with automatic CPI tie-breaking. The dry-run scans each round's outcome and stops at the first round *n* that meets a criterion:
+
+| Condition after round *n* | k returned | Reason |
+|--------------------------|-----------|--------|
+| Unreachable faculty or stall | max(prev round, 1) | Structural problem; don't run the broken round |
+| `unassigned < empty_labs` | max(prev round, 0) | Overshoot — round *n* leaves more empty labs than students; stop one round earlier |
+| `unassigned == empty_labs` | round *n* | Exact parity — this is the right stopping point |
+
+*k* = 0 is valid: round 1 itself overshoots, so no tiered rounds are run and the full preference list is used for backfill.
+
+#### Phase 2 — Two-phase backfill (GUI)
+
+**Phase 2a** (while total\_unassigned > empty\_labs): students are processed in descending CPI order. Each student is assigned to their highest-preferred advisor in `prefs[k:]` that (a) has remaining capacity and (b) has not already received a student in Phase 2a (one-per-advisor discipline, mirroring Phase 1). The stop condition is re-evaluated after every individual assignment; overshoot is structurally impossible. Students with no eligible advisor are deferred to Phase 2b.
+
+**Phase 2b** (when total\_unassigned ≤ empty\_labs): the combined queue of remaining + deferred students is re-sorted by descending CPI, then each student is assigned to their highest-preferred empty lab in `prefs[k:]`. Once a lab is filled it leaves the candidate set. Students whose `prefs[k:]` contains no empty lab become overflow.
+
+In CLI auto-mode, Phase 2a uses `cpi_fill_phase1` on `prefs[k:]` (no one-per-advisor constraint) and Phase 2b uses `cpi_fill_phase2` on the full preference list.
+
+#### Properties
+
+| Property | Behaviour |
+|----------|-----------|
+| Transparency | High — rounds 1..k are fully logged and interactive |
+| Preference satisfaction (NPSS) | Depends on *k*; low *k* (e.g. k=1) collapses toward `cpi_fill` behaviour |
+| Empty-lab guarantee | Yes — Phase 2b fills all empty labs when S ≥ F |
+| Operator involvement | Required for CPI ties in rounds 1..k; Phase 2 is automatic |
+| Load balance | Phase 1 has one-per-advisor-per-round discipline; Phase 2a has one-per-advisor-per-phase discipline |
+
+---
+
+### 3.6 Policy: CPI-Tiered Preference Rounds (`tiered_rounds`)
 
 #### Overview
 
@@ -473,26 +548,26 @@ No separate Round 1 or class-wise main allocation. Phase 0 tier classification i
 
 ---
 
-### 3.6 Policy comparison
+### 3.7 Policy comparison
 
 | Aspect | `least_loaded` | `adaptive_ll` | `cpi_fill` | `tiered_rounds` | `tiered_ll` |
 |--------|----------------|---------------|------------|-----------------|-------------|
 | Round 1 | Yes | Yes | No | No | No |
 | Processing order | Tier-by-tier | Tier-by-tier | Strict descending CPI | Round-by-preference-rank | Rounds 1..k, then backfill |
 | Preference window | N_tier per tier | N_tier (auto-widened) | Full list | Full list (N_tier diagnostic) | Full list |
-| Primary assignment criterion | Min load | Min load | First pref with capacity | Highest CPI in round | CPI (rounds) then first pref with capacity → empty lab (backfill) |
+| Primary assignment criterion | Min load | Min load | First pref with capacity | Highest CPI in round | CPI in rounds; Phase 2a: first pref with capacity (one per advisor); Phase 2b: first empty lab |
 | Tie-breaking | Preference rank | Preference rank | Student ID | Highest CPI (CLI) / Manual pick (GUI) | Highest CPI (CLI) / Manual pick in GUI rounds |
 | Empty-lab guarantee | Indirect | Yes (when S ≥ F) | Explicit (Phase 2) | No | Yes (when S ≥ F) |
-| Merit sensitivity (NPSS) | Moderate | Moderate | High | High | High |
+| Merit sensitivity (NPSS) | Moderate | Moderate | High | High | Depends on k; low k → similar to cpi_fill |
 | Equal-weighted satisfaction (PSI) | Cohort-dependent | Cohort-dependent | Cohort-dependent | High in balanced cohorts | Cohort-dependent |
-| Load balance | Strong | Strong | Variable | Implicit | Variable (backfill phase) |
+| Load balance | Strong | Strong | Variable | Implicit (one per advisor per round) | Phase 1 + Phase 2a: one per advisor per phase; Phase 2b: structured |
 | CLI available | Yes | Yes | Yes | Yes (auto CPI ties) | Yes (auto CPI ties) |
 
 > **Note:** PSI and advisor entropy outcomes are cohort-sensitive. Neither policy dominates consistently across all cohort types. See Section 3.8 for guidance on interpretation.
 
 ---
 
-### 3.7 Metrics
+### 3.8 Metrics
 
 The app reports metrics in two places: the **Statistics** tab of the replay panel (updated at each step) and the **completion panel summary badge row** (final state only).
 
@@ -642,7 +717,7 @@ ERR answers "given how this run distributed students across advisors, what fract
 
 ---
 
-### 3.8 How to read the metrics together
+### 3.9 How to read the metrics together
 
 When interpreting a single run or comparing policies, use this hierarchy:
 
@@ -668,4 +743,4 @@ When interpreting a single run or comparing policies, use this hierarchy:
 
 ---
 
-*For further details see `MSThesisAllocationProtocol.md` (full protocol specification), `NPSS_Metric.md` (NPSS/PSI definitions), `docs/policy_*.md` (per-policy deep-dives), and `stats/policy_report.md` (empirical comparison across five synthetic datasets).*
+*For further details see `MSThesisAllocationProtocol.md` (full protocol specification), `NPSS_Metric.md` (NPSS/PSI definitions), `docs/policy_*.md` (per-policy deep-dives), and `stats/policy_report.md` / `stats/policy_report.pdf` (empirical comparison across all five policies on two real cohorts and four synthetic datasets).*
