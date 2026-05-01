@@ -220,7 +220,7 @@ def build_report(all_results: Dict[str, dict], scenario_labels: Dict[str, str]) 
     ]
     for ds_key, policy_results in all_results.items():
         label = scenario_labels[ds_key]
-        for policy, res in policy_results.items():
+        for policy, res in ((p, r) for p, r in policy_results.items() if p != "_meta"):
             m  = res["metrics"]
             lines.append(
                 f"| {label} | {ABBREV[policy]} "
@@ -242,7 +242,7 @@ def build_report(all_results: Dict[str, dict], scenario_labels: Dict[str, str]) 
     ]
     for ds_key, policy_results in all_results.items():
         label = scenario_labels[ds_key]
-        for policy, res in policy_results.items():
+        for policy, res in ((p, r) for p, r in policy_results.items() if p != "_meta"):
             per_tier = res["metrics"]["per_tier"]
             for tier in ["A", "B", "B1", "B2", "C"]:
                 td = per_tier.get(tier, {})
@@ -270,7 +270,7 @@ def build_report(all_results: Dict[str, dict], scenario_labels: Dict[str, str]) 
     ]
     for ds_key, policy_results in all_results.items():
         label = scenario_labels[ds_key]
-        for policy, res in policy_results.items():
+        for policy, res in ((p, r) for p, r in policy_results.items() if p != "_meta"):
             adv = res["metrics"]["advisor"]
             lines.append(
                 f"| {label} | {ABBREV[policy]} "
@@ -329,7 +329,7 @@ def build_report(all_results: Dict[str, dict], scenario_labels: Dict[str, str]) 
         name: {p: [] for p in POLICIES} for name, _, _ in metric_keys
     }
     for ds_key, policy_results in all_results.items():
-        for policy, res in policy_results.items():
+        for policy, res in ((p, r) for p, r in policy_results.items() if p != "_meta"):
             m   = res["metrics"]
             adv = m["advisor"]
             n   = res["n_students"]
@@ -412,7 +412,7 @@ def build_report(all_results: Dict[str, dict], scenario_labels: Dict[str, str]) 
     ]
     for ds_key, policy_results in all_results.items():
         label = scenario_labels[ds_key]
-        for policy, res in policy_results.items():
+        for policy, res in ((p, r) for p, r in policy_results.items() if p != "_meta"):
             ps = res["metrics"]["per_student"]
             ranks = sorted(v["assigned_rank"] for v in ps.values() if v["assigned_rank"] is not None)
             if not ranks:
@@ -439,7 +439,7 @@ def build_report(all_results: Dict[str, dict], scenario_labels: Dict[str, str]) 
     }
 
     for ds_key, policy_results in all_results.items():
-        metrics_by_policy = {p: res["metrics"] for p, res in policy_results.items()}
+        metrics_by_policy = {p: res["metrics"] for p, res in policy_results.items() if p != "_meta"}
         for metric_name, threshold in THRESHOLDS.items():
             higher_better = metric_name != "Avg MSES"
             vals = {}
@@ -512,8 +512,11 @@ def build_report(all_results: Dict[str, dict], scenario_labels: Dict[str, str]) 
             n_f      = pr["least_loaded"]["n_faculty"]
             ratio    = f"{n_s/n_f:.1f}"
 
-            # NPSS ranking
-            npss_rank = sorted(pr.items(), key=lambda x: x[1]["metrics"]["npss"], reverse=True)
+            # NPSS ranking (exclude _meta entry)
+            npss_rank = sorted(
+                ((p, r) for p, r in pr.items() if p != "_meta"),
+                key=lambda x: x[1]["metrics"]["npss"], reverse=True,
+            )
             # Best coverage policy (zero empty labs, highest NPSS)
             coverage_policies = [(p, r) for p, r in npss_rank if r["empty_labs"] == 0]
 
@@ -582,6 +585,36 @@ def build_report(all_results: Dict[str, dict], scenario_labels: Dict[str, str]) 
                 lines.append(f"- {o}")
             lines += [""]
 
+            # Per-student assignment table
+            meta_block = pr.get("_meta", {})
+            roster     = meta_block.get("roster", [])
+            fac_names  = meta_block.get("faculty_names", {})
+
+            if roster:
+                pol_header = " | ".join(f"{ABBREV[p]}" for p in POLICIES)
+                lines += [
+                    f"**Per-student assignments — {label}** *(faculty name, rank in brackets)*",
+                    "",
+                    f"| # | Student | CPI | {pol_header} |",
+                    "|---|---------|-----|" + "-----|" * len(POLICIES),
+                ]
+                for i, s in enumerate(roster, 1):
+                    sid   = s["id"]
+                    cells = []
+                    for p in POLICIES:
+                        res   = pr.get(p, {})
+                        fid   = res.get("assignments", {}).get(sid)
+                        rank  = res.get("metrics", {}).get("per_student", {}).get(sid, {}).get("assigned_rank")
+                        if fid:
+                            fname = fac_names.get(fid, fid)
+                            cells.append(f"{fname} ({rank})" if rank is not None else fname)
+                        else:
+                            cells.append("—")
+                    lines.append(
+                        f"| {i} | {s['name']} | {s['cpi']:.2f} | " + " | ".join(cells) + " |"
+                    )
+                lines += [""]
+
         lines += [
             "**Cross-cohort pattern:**",
             "",
@@ -646,6 +679,16 @@ def _run_policy(students, faculty, policy):
     }
 
 
+def _dataset_roster(students, faculty):
+    """Return (student_roster, faculty_names) for building assignment tables."""
+    student_roster = sorted(
+        [{"id": s.id, "name": s.name, "cpi": s.cpi} for s in students],
+        key=lambda x: -x["cpi"],
+    )
+    faculty_names = {f.id: f.name for f in faculty}
+    return student_roster, faculty_names
+
+
 def _run_dataset_from_files(students_path, faculty_path, label, all_results, key, scenario_labels):
     print(f"\n[{label}]")
     all_results[key] = {}
@@ -671,6 +714,9 @@ def _run_dataset_raw(students_raw_path, faculty_path, label, all_results, key, s
         for w in warns:
             print(f"    [preprocess warn] {w}")
     all_results[key] = {}
+    students_loaded = load_students(str(preprocessed_out))
+    roster, fac_names = _dataset_roster(students_loaded, faculty)
+    all_results[key]["_meta"] = {"roster": roster, "faculty_names": fac_names}
     for p in POLICIES:
         print(f"  {p}…", end=" ", flush=True)
         students = load_students(str(preprocessed_out))
@@ -746,7 +792,7 @@ def main():
     print("-" * 80)
     for ds_key, policy_results in all_results.items():
         ds_label = scenario_labels[ds_key]
-        for policy, res in policy_results.items():
+        for policy, res in ((p, r) for p, r in policy_results.items() if p != "_meta"):
             m = res["metrics"]
             k = f" k={res['k_crit']}" if res["k_crit"] is not None else ""
             print(

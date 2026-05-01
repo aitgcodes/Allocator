@@ -398,6 +398,39 @@ A win is counted only when the best policy exceeds the runner-up by ≥ threshol
 - `least_loaded` leaves 2 empty lab(s); `adaptive_ll` eliminates them at the cost of ΔNPSS=-0.0375.
 - `tiered_ll` (k_crit=1) trades ΔNPSS=-0.0671 vs `tiered_rounds` to eliminate its 4 empty lab(s).
 
+**Per-student assignments — 2019 Cohort** *(faculty name, rank in brackets)*
+
+| # | Student | CPI | LL | ALL | CF | TR | TLL |
+|---|---------|-----|-----|-----|-----|-----|-----|
+| 1 | student02 | 9.96 | Prof02 (1) | Prof02 (1) | Prof02 (1) | Prof02 (1) | Prof02 (1) |
+| 2 | student01 | 9.56 | Prof01 (1) | Prof01 (1) | Prof01 (1) | Prof01 (1) | Prof01 (1) |
+| 3 | student09 | 9.52 | Prof09 (1) | Prof09 (1) | Prof09 (1) | Prof09 (1) | Prof09 (1) |
+| 4 | student07 | 9.29 | Prof07 (1) | Prof07 (1) | Prof07 (1) | Prof07 (1) | Prof07 (1) |
+| 5 | student15 | 9.18 | Prof13 (1) | Prof13 (1) | Prof13 (1) | Prof13 (1) | Prof13 (1) |
+| 6 | student16 | 9.08 | Prof09 (1) | Prof09 (1) | Prof09 (1) | Prof07 (2) | Prof07 (2) |
+| 7 | student18 | 8.95 | Prof14 (1) | Prof14 (1) | Prof14 (1) | Prof14 (1) | Prof14 (1) |
+| 8 | student04 | 8.93 | Prof04 (1) | Prof04 (1) | Prof04 (1) | Prof04 (1) | Prof04 (1) |
+| 9 | student08 | 8.82 | Prof08 (1) | Prof08 (1) | Prof08 (1) | Prof08 (1) | Prof08 (1) |
+| 10 | student21 | 8.79 | Prof15 (1) | Prof15 (1) | Prof15 (1) | Prof15 (1) | Prof15 (1) |
+| 11 | student11 | 8.72 | Prof10 (1) | Prof10 (1) | Prof10 (1) | Prof10 (1) | Prof10 (1) |
+| 12 | student12 | 8.68 | Prof06 (1) | Prof06 (1) | Prof06 (1) | Prof06 (1) | Prof06 (1) |
+| 13 | student17 | 8.63 | Prof14 (1) | Prof22 (8) | Prof14 (1) | Prof11 (2) | Prof11 (2) |
+| 14 | student20 | 8.50 | Prof13 (1) | Prof25 (9) | Prof13 (1) | Prof10 (3) | Prof10 (3) |
+| 15 | student05 | 8.45 | Prof05 (1) | Prof05 (1) | Prof05 (1) | Prof05 (1) | Prof05 (1) |
+| 16 | student06 | 8.40 | Prof20 (2) | Prof20 (2) | Prof20 (2) | Prof20 (2) | Prof20 (2) |
+| 17 | student13 | 8.16 | Prof11 (1) | Prof11 (1) | Prof11 (1) | Prof11 (1) | Prof11 (1) |
+| 18 | student26 | 8.05 | Prof19 (1) | Prof19 (1) | Prof19 (1) | Prof19 (1) | Prof19 (1) |
+| 19 | student14 | 7.99 | Prof12 (1) | Prof12 (1) | Prof12 (1) | Prof12 (1) | Prof12 (1) |
+| 20 | student19 | 7.83 | Prof05 (3) | Prof13 (2) | Prof22 (11) | Prof13 (2) | Prof22 (11) |
+| 21 | student10 | 7.82 | Prof07 (3) | Prof05 (1) | Prof18 (9) | Prof09 (2) | Prof24 (10) |
+| 22 | student24 | 7.81 | Prof21 (16) | Prof21 (16) | Prof17 (10) | Prof08 (2) | Prof21 (16) |
+| 23 | student22 | 7.62 | Prof16 (1) | Prof16 (1) | Prof16 (1) | Prof16 (1) | Prof16 (1) |
+| 24 | student25 | 7.62 | Prof18 (1) | Prof18 (1) | Prof25 (14) | Prof18 (1) | Prof18 (1) |
+| 25 | student03 | 7.56 | Prof03 (1) | Prof03 (1) | Prof03 (1) | Prof03 (1) | Prof03 (1) |
+| 26 | student27 | 6.74 | Prof24 (10) | Prof24 (10) | Prof24 (10) | Prof01 (6) | Prof23 (13) |
+| 27 | student28 | 6.32 | Prof22 (2) | Prof23 (20) | Prof23 (20) | Prof22 (2) | Prof25 (18) |
+| 28 | student23 | 6.03 | Prof17 (1) | Prof17 (1) | Prof21 (2) | Prof17 (1) | Prof17 (1) |
+
 ### 2020 Cohort (S=44, F=31, S/F=1.4)
 
 **NPSS ranking (all students assigned in all runs):**
@@ -414,6 +447,55 @@ A win is counted only when the best policy exceeds the runner-up by ≥ threshol
 - Among policies with zero empty labs, `least_loaded` leads NPSS (0.9379).
 - `least_loaded` scores NPSS=0.9379 with zero empty labs — the best fully-automatic, coverage-guaranteed option.
 - `tiered_ll` (k_crit=1) trades ΔNPSS=-0.0621 vs `tiered_rounds` to eliminate its 6 empty lab(s).
+
+**Per-student assignments — 2020 Cohort** *(faculty name, rank in brackets)*
+
+| # | Student | CPI | LL | ALL | CF | TR | TLL |
+|---|---------|-----|-----|-----|-----|-----|-----|
+| 1 | student31 | 9.66 | Prof26 (1) | Prof26 (1) | Prof26 (1) | Prof26 (1) | Prof26 (1) |
+| 2 | student29 | 9.47 | Prof01 (1) | Prof01 (1) | Prof01 (1) | Prof01 (1) | Prof01 (1) |
+| 3 | student58 | 9.38 | Prof01 (1) | Prof01 (1) | Prof01 (1) | Prof11 (2) | Prof11 (2) |
+| 4 | student62 | 9.32 | Prof05 (1) | Prof05 (1) | Prof05 (1) | Prof05 (1) | Prof05 (1) |
+| 5 | student36 | 9.01 | Prof07 (1) | Prof07 (1) | Prof07 (1) | Prof07 (1) | Prof07 (1) |
+| 6 | student49 | 8.92 | Prof16 (1) | Prof16 (1) | Prof16 (1) | Prof16 (1) | Prof16 (1) |
+| 7 | student37 | 8.76 | Prof10 (1) | Prof10 (1) | Prof10 (1) | Prof10 (1) | Prof10 (1) |
+| 8 | student60 | 8.66 | Prof09 (1) | Prof09 (1) | Prof09 (1) | Prof09 (1) | Prof09 (1) |
+| 9 | student61 | 8.66 | Prof05 (1) | Prof05 (1) | Prof05 (1) | Prof20 (2) | Prof20 (2) |
+| 10 | student48 | 8.62 | Prof08 (1) | Prof08 (1) | Prof08 (1) | Prof08 (1) | Prof08 (1) |
+| 11 | student39 | 8.39 | Prof13 (1) | Prof13 (1) | Prof13 (1) | Prof13 (1) | Prof13 (1) |
+| 12 | student63 | 8.32 | Prof18 (1) | Prof18 (1) | Prof18 (1) | Prof18 (1) | Prof18 (1) |
+| 13 | student51 | 8.06 | Prof30 (3) | Prof30 (3) | Prof07 (1) | Prof14 (2) | Prof14 (2) |
+| 14 | student53 | 8.03 | Prof14 (1) | Prof14 (1) | Prof14 (1) | Prof14 (1) | Prof14 (1) |
+| 15 | student45 | 7.91 | Prof20 (1) | Prof20 (1) | Prof20 (1) | Prof20 (1) | Prof20 (1) |
+| 16 | student32 | 7.85 | Prof11 (1) | Prof11 (1) | Prof11 (1) | Prof11 (1) | Prof11 (1) |
+| 17 | student38 | 7.82 | Prof04 (1) | Prof04 (1) | Prof04 (1) | Prof04 (1) | Prof04 (1) |
+| 18 | student42 | 7.75 | Prof26 (1) | Prof26 (1) | Prof26 (1) | Prof21 (7) | Prof09 (3) |
+| 19 | student69 | 7.67 | Prof09 (1) | Prof09 (1) | Prof09 (1) | Prof08 (2) | Prof08 (2) |
+| 20 | student43 | 7.61 | Prof04 (1) | Prof04 (1) | Prof04 (1) | Prof26 (2) | Prof26 (2) |
+| 21 | student72 | 7.47 | Prof22 (1) | Prof22 (1) | Prof22 (1) | Prof22 (1) | Prof22 (1) |
+| 22 | student34 | 7.43 | Prof06 (1) | Prof06 (1) | Prof06 (1) | Prof06 (1) | Prof06 (1) |
+| 23 | student35 | 7.36 | Prof11 (2) | Prof11 (2) | Prof11 (2) | Prof16 (5) | Prof01 (3) |
+| 24 | student50 | 7.28 | Prof10 (1) | Prof10 (1) | Prof10 (1) | Prof28 (4) | Prof23 (3) |
+| 25 | student41 | 7.11 | Prof25 (5) | Prof25 (5) | Prof16 (1) | Prof23 (2) | Prof28 (3) |
+| 26 | student44 | 7.05 | Prof14 (1) | Prof14 (1) | Prof14 (1) | Prof09 (2) | Prof27 (3) |
+| 27 | student70 | 7.03 | Prof21 (1) | Prof21 (1) | Prof21 (1) | Prof21 (1) | Prof21 (1) |
+| 28 | student46 | 6.97 | Prof27 (1) | Prof27 (1) | Prof27 (1) | Prof27 (1) | Prof27 (1) |
+| 29 | student71 | 6.93 | Prof23 (1) | Prof23 (1) | Prof23 (1) | Prof23 (1) | Prof23 (1) |
+| 30 | student68 | 6.87 | Prof19 (1) | Prof19 (1) | Prof19 (1) | Prof19 (1) | Prof19 (1) |
+| 31 | student66 | 6.80 | Prof13 (5) | Prof13 (5) | Prof13 (5) | Prof01 (2) | Prof13 (5) |
+| 32 | student59 | 6.63 | Prof03 (1) | Prof03 (1) | Prof03 (1) | Prof03 (1) | Prof03 (1) |
+| 33 | student54 | 6.56 | Prof12 (2) | Prof12 (2) | Prof12 (2) | Prof12 (2) | Prof12 (2) |
+| 34 | student47 | 6.54 | Prof28 (1) | Prof28 (1) | Prof28 (1) | Prof28 (1) | Prof28 (1) |
+| 35 | student30 | 6.51 | Prof02 (11) | Prof02 (11) | Prof03 (1) | Prof05 (5) | Prof19 (4) |
+| 36 | student33 | 6.45 | Prof29 (12) | Prof29 (12) | Prof19 (1) | Prof06 (2) | Prof29 (12) |
+| 37 | student40 | 6.38 | Prof24 (10) | Prof24 (10) | Prof24 (10) | Prof07 (2) | Prof24 (10) |
+| 38 | student56 | 6.28 | Prof17 (28) | Prof17 (28) | Prof15 (13) | Prof13 (2) | Prof02 (22) |
+| 39 | student67 | 6.18 | Prof31 (30) | Prof31 (30) | Prof02 (6) | Prof02 (6) | Prof25 (16) |
+| 40 | student64 | 6.16 | Prof18 (1) | Prof18 (1) | Prof29 (10) | Prof02 (3) | Prof17 (19) |
+| 41 | student55 | 5.91 | Prof15 (1) | Prof15 (1) | Prof25 (19) | Prof15 (1) | Prof15 (1) |
+| 42 | student57 | 5.82 | Prof16 (1) | Prof16 (1) | Prof30 (18) | Prof10 (2) | Prof30 (18) |
+| 43 | student65 | 5.76 | Prof12 (1) | Prof12 (1) | Prof17 (23) | Prof12 (1) | Prof12 (1) |
+| 44 | student52 | 5.64 | Prof19 (2) | Prof19 (2) | Prof31 (31) | Prof19 (2) | Prof31 (31) |
 
 **Cross-cohort pattern:**
 
