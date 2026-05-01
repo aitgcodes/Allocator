@@ -2105,16 +2105,19 @@ def _cli():
     parser.add_argument(
         "--policy",
         default="least_loaded",
-        choices=["least_loaded", "cpi_fill"],
+        choices=["least_loaded", "adaptive_ll", "cpi_fill"],
         help=(
             "Assignment policy for the main allocation round.\n"
             "  least_loaded : assign to the least-loaded eligible faculty,\n"
             "                 tie-broken by preference rank (default).\n"
+            "  adaptive_ll  : like least_loaded but Phase 0b iteratively widens\n"
+            "                 N_A/N_B caps until empty labs after Tiers A+B ≤ |C|,\n"
+            "                 guaranteeing no empty labs when S ≥ F.\n"
             "  cpi_fill     : two-phase procedure — Phase 1 processes students\n"
-            "                 in CPI order (N_tier cap) until unassigned count\n"
-            "                 equals empty-lab count; Phase 2 assigns each\n"
-            "                 remaining student to their highest-preferred\n"
-            "                 empty lab (full preference list, no cap)."
+            "                 in CPI order until unassigned count equals\n"
+            "                 empty-lab count; Phase 2 assigns each remaining\n"
+            "                 student to their highest-preferred empty lab.\n"
+            "  (tiered_rounds and tiered_ll require the Dash GUI.)"
         ),
     )
     parser.add_argument(
