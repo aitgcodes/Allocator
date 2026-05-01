@@ -1,276 +1,388 @@
-# Allocation Policy Comparison Study
+# Allocation Policy Comparison Study — 5-Policy Matrix
 
-**Policies compared:** `least_loaded` vs `cpi_fill`  
-**Abbreviations:** LL = `least_loaded`, CF = `cpi_fill` (used in table annotations and inline comparisons throughout this report)  
-**Datasets:** 1 original + 4 synthetic (random, clustered, polarised, uniform_high_cpi)  
+**Policies:** LL = `least_loaded`, ALL = `adaptive_ll`, CF = `cpi_fill`, TR = `tiered_rounds`, TLL = `tiered_ll`  
+**Datasets:** 2019 cohort, 2020 cohort + 4 synthetic (random, clustered, polarised, uniform_high_cpi)  
+**Tie-breaking:** `tiered_rounds` and `tiered_ll` use automatic CPI tie-breaking (CLI mode)  
+**Seed:** `RANDOM_SEED=42` for reproducibility  
+
 **Metric hierarchy:**
   1. NPSS — primary student metric (CPI-weighted preference satisfaction)  
-  2. PSI — secondary student metric (equal-weighted, global rank)  
-  3. MSES — primary advisor satisfaction metric (mean rank students placed their advisor; lower = more enthusiastic)  
-  4. Equity Retention Rate — advisor equity metric (% of load-distribution's achievable entropy preserved; always in [0,100%])  
-  5. CPI Skewness — diagnostic (asymmetry in advisor mean-CPI distribution; Fisher-Pearson formula, std-normalized)  
-**Diagnostic columns (not independent deciding metrics):** Overflow Count, % Assigned in Window, Avg LUR  
-  — out-of-window assignments already score 0 in NPSS, so these columns explain *why* NPSS  
-  is low in stressed scenarios but carry no additional evidential weight for policy comparison.  
+  2. PSI — secondary student metric (equal-weighted)  
+  3. MSES — advisor satisfaction (mean rank students placed their advisor; lower = better)  
+  4. Equity Retention Rate — % of achievable load-entropy preserved; [0, 100%]  
+  5. CPI Skewness — diagnostic (asymmetry in advisor mean-CPI distribution)  
 
 ---
 
-## 1. Per-Dataset Metric Summary
+## 1. Student Satisfaction — Per Dataset
 
-### 1a. Student Satisfaction Metrics
+### 1a. NPSS and PSI (higher is better)
 
-| Dataset | Policy | NPSS ↑ | PSI ↑ | Overflow ↓ | % Assigned in Window ↑ |
-|---------|--------|--------|-------|------------|------------------------|
-| Original | least_loaded | 0.9379 | 0.9250 | 0 | 100.0% |
-| Original | cpi_fill | 0.9253 | 0.9030 | 0 | 100.0% |
-| Sample 1 (Random) | least_loaded | 0.9680 | 0.9636 | 0 | 100.0% |
-| Sample 1 (Random) | cpi_fill | 0.9795 | 0.9727 | 0 | 100.0% |
-| Sample 2 (Clustered) | least_loaded | 0.9100 | 0.8924 | 5 | 88.6% |
-| Sample 2 (Clustered) | cpi_fill | 0.9036 | 0.8818 | 7 | 84.1% |
-| Sample 3 (Polarised) | least_loaded | 0.9855 | 0.9841 | 0 | 100.0% |
-| Sample 3 (Polarised) | cpi_fill | 0.9784 | 0.9720 | 0 | 100.0% |
-| Sample 4 (High-CPI) | least_loaded | 0.9906 | 0.9902 | 0 | 100.0% |
-| Sample 4 (High-CPI) | cpi_fill | 0.9683 | 0.9636 | 0 | 100.0% |
+| Dataset | Policy | NPSS ↑ | PSI ↑ | Overflow ↓ | Assigned | Empty Labs ↓ |
+|---------|--------|--------|-------|------------|----------|--------------|
+| 2019 Cohort | LL | 0.9656 | 0.9598 | 0 | 28/28 | 2 |
+| 2019 Cohort | ALL | 0.9244 | 0.9137 | 0 | 28/28 | 0 |
+| 2019 Cohort | CF | 0.9167 | 0.8988 | 2 | 28/28 | 0 |
+| 2019 Cohort | TR | 0.9817 | 0.9792 | 0 | 28/28 | 4 |
+| 2019 Cohort | TLL | 0.9274 | 0.9182 | 2 | 28/28 | 0 |
+|  |  |  |  |  |  |  |
+| 2020 Cohort | LL | 0.9379 | 0.9250 | 0 | 44/44 | 0 |
+| 2020 Cohort | ALL | 0.9379 | 0.9250 | 0 | 44/44 | 0 |
+| 2020 Cohort | CF | 0.9253 | 0.9030 | 0 | 44/44 | 0 |
+| 2020 Cohort | TR | 0.9739 | 0.9712 | 1 | 44/44 | 6 |
+| 2020 Cohort | TLL | 0.9118 | 0.8909 | 0 | 44/44 | 0 |
+|  |  |  |  |  |  |  |
+| Synthetic 1 (Random) | LL | 0.9132 | 0.8869 | 0 | 24/24 | 0 |
+| Synthetic 1 (Random) | ALL | 0.9132 | 0.8869 | 0 | 24/24 | 0 |
+| Synthetic 1 (Random) | CF | 0.9911 | 0.9881 | 0 | 24/24 | 0 |
+| Synthetic 1 (Random) | TR | 0.8453 | 0.8095 | 0 | 24/24 | 0 |
+| Synthetic 1 (Random) | TLL | 0.8453 | 0.8095 | 0 | 24/24 | 0 |
+|  |  |  |  |  |  |  |
+| Synthetic 2 (Clustered) | LL | 0.9309 | 0.8988 | 0 | 24/24 | 0 |
+| Synthetic 2 (Clustered) | ALL | 0.9309 | 0.8988 | 0 | 24/24 | 0 |
+| Synthetic 2 (Clustered) | CF | 0.9960 | 0.9940 | 0 | 24/24 | 0 |
+| Synthetic 2 (Clustered) | TR | 0.8748 | 0.8393 | 0 | 24/24 | 0 |
+| Synthetic 2 (Clustered) | TLL | 0.8831 | 0.8512 | 0 | 24/24 | 0 |
+|  |  |  |  |  |  |  |
+| Synthetic 3 (Polarised) | LL | 0.8513 | 0.8095 | 0 | 24/24 | 0 |
+| Synthetic 3 (Polarised) | ALL | 0.8513 | 0.8095 | 0 | 24/24 | 0 |
+| Synthetic 3 (Polarised) | CF | 0.9756 | 0.9643 | 0 | 24/24 | 0 |
+| Synthetic 3 (Polarised) | TR | 0.8697 | 0.8393 | 0 | 24/24 | 0 |
+| Synthetic 3 (Polarised) | TLL | 0.8743 | 0.8452 | 0 | 24/24 | 0 |
+|  |  |  |  |  |  |  |
+| Synthetic 4 (High-CPI) | LL | 0.9433 | 0.9345 | 0 | 24/24 | 0 |
+| Synthetic 4 (High-CPI) | ALL | 0.9433 | 0.9345 | 0 | 24/24 | 0 |
+| Synthetic 4 (High-CPI) | CF | 0.9763 | 0.9702 | 0 | 24/24 | 0 |
+| Synthetic 4 (High-CPI) | TR | 0.8285 | 0.7976 | 0 | 24/24 | 0 |
+| Synthetic 4 (High-CPI) | TLL | 0.8331 | 0.8036 | 0 | 24/24 | 0 |
+|  |  |  |  |  |  |  |
 
-### 1b. Per-Tier Student Satisfaction Metrics
+### 1b. Per-Tier Student Satisfaction
 
 | Dataset | Policy | Tier | Count | Mean Rank ↓ | Within-Window % ↑ | Mean NPSS ↑ | Mean PSI ↑ |
-|---------|--------|------|-------|------------|-------------------|-------------|------------|
-| Original | least_loaded | A | 11 | 1.00 | 100.0% | 1.0000 | 1.0000 |
-| Original | least_loaded | B1 | 11 | 1.18 | 100.0% | 0.9941 | 0.9939 |
-| Original | least_loaded | B2 | 11 | 1.91 | 100.0% | 0.9707 | 0.9697 |
-| Original | least_loaded | C | 11 | 8.91 | 100.0% | 0.7449 | 0.7364 |
-| Original | cpi_fill | A | 11 | 1.00 | 100.0% | 1.0000 | 1.0000 |
-| Original | cpi_fill | B1 | 11 | 1.00 | 100.0% | 1.0000 | 1.0000 |
-| Original | cpi_fill | B2 | 11 | 1.55 | 100.0% | 0.9824 | 0.9818 |
-| Original | cpi_fill | C | 11 | 12.09 | 100.0% | 0.6422 | 0.6303 |
-| Sample 1 (Random) | least_loaded | A | 11 | 1.00 | 100.0% | 1.0000 | 1.0000 |
-| Sample 1 (Random) | least_loaded | B1 | 11 | 2.00 | 100.0% | 0.9677 | 0.9667 |
-| Sample 1 (Random) | least_loaded | B2 | 11 | 1.91 | 100.0% | 0.9707 | 0.9697 |
-| Sample 1 (Random) | least_loaded | C | 11 | 3.45 | 100.0% | 0.9208 | 0.9182 |
-| Sample 1 (Random) | cpi_fill | A | 11 | 1.00 | 100.0% | 1.0000 | 1.0000 |
-| Sample 1 (Random) | cpi_fill | B1 | 11 | 1.00 | 100.0% | 1.0000 | 1.0000 |
-| Sample 1 (Random) | cpi_fill | B2 | 11 | 1.27 | 100.0% | 0.9912 | 0.9909 |
-| Sample 1 (Random) | cpi_fill | C | 11 | 4.00 | 100.0% | 0.9032 | 0.9000 |
-| Sample 2 (Clustered) | least_loaded | A | 11 | 1.00 | 100.0% | 1.0000 | 1.0000 |
-| Sample 2 (Clustered) | least_loaded | B1 | 11 | 2.45 | 90.9% | 0.9531 | 0.9515 |
-| Sample 2 (Clustered) | least_loaded | B2 | 11 | 5.36 | 63.6% | 0.8592 | 0.8545 |
-| Sample 2 (Clustered) | least_loaded | C | 11 | 8.09 | 100.0% | 0.7713 | 0.7636 |
-| Sample 2 (Clustered) | cpi_fill | A | 11 | 1.00 | 100.0% | 1.0000 | 1.0000 |
-| Sample 2 (Clustered) | cpi_fill | B1 | 11 | 2.09 | 90.9% | 0.9648 | 0.9636 |
-| Sample 2 (Clustered) | cpi_fill | B2 | 11 | 5.45 | 45.5% | 0.8563 | 0.8515 |
-| Sample 2 (Clustered) | cpi_fill | C | 11 | 9.64 | 100.0% | 0.7214 | 0.7121 |
-| Sample 3 (Polarised) | least_loaded | A | 11 | 1.18 | 100.0% | 0.9941 | 0.9939 |
-| Sample 3 (Polarised) | least_loaded | B1 | 11 | 1.55 | 100.0% | 0.9824 | 0.9818 |
-| Sample 3 (Polarised) | least_loaded | B2 | 11 | 1.45 | 100.0% | 0.9853 | 0.9848 |
-| Sample 3 (Polarised) | least_loaded | C | 11 | 1.73 | 100.0% | 0.9765 | 0.9758 |
-| Sample 3 (Polarised) | cpi_fill | A | 11 | 1.18 | 100.0% | 0.9941 | 0.9939 |
-| Sample 3 (Polarised) | cpi_fill | B1 | 11 | 1.36 | 100.0% | 0.9883 | 0.9879 |
-| Sample 3 (Polarised) | cpi_fill | B2 | 11 | 1.00 | 100.0% | 1.0000 | 1.0000 |
-| Sample 3 (Polarised) | cpi_fill | C | 11 | 3.82 | 100.0% | 0.9091 | 0.9061 |
-| Sample 4 (High-CPI) | least_loaded | A | 11 | 1.00 | 100.0% | 1.0000 | 1.0000 |
-| Sample 4 (High-CPI) | least_loaded | B1 | 11 | 1.36 | 100.0% | 0.9883 | 0.9879 |
-| Sample 4 (High-CPI) | least_loaded | B2 | 11 | 1.64 | 100.0% | 0.9795 | 0.9788 |
-| Sample 4 (High-CPI) | least_loaded | C | 11 | 1.18 | 100.0% | 0.9941 | 0.9939 |
-| Sample 4 (High-CPI) | cpi_fill | A | 11 | 1.00 | 100.0% | 1.0000 | 1.0000 |
-| Sample 4 (High-CPI) | cpi_fill | B1 | 11 | 1.09 | 100.0% | 0.9971 | 0.9970 |
-| Sample 4 (High-CPI) | cpi_fill | B2 | 11 | 1.18 | 100.0% | 0.9941 | 0.9939 |
-| Sample 4 (High-CPI) | cpi_fill | C | 11 | 5.09 | 100.0% | 0.8680 | 0.8636 |
+|---------|--------|------|-------|-------------|-------------------|-------------|------------|
+| 2019 Cohort | LL | A | 7 | 1.00 | 100.0% | 1.0000 | 1.0000 |
+| 2019 Cohort | LL | B1 | 7 | 1.00 | 100.0% | 1.0000 | 1.0000 |
+| 2019 Cohort | LL | B2 | 7 | 1.71 | 100.0% | 0.9714 | 0.9702 |
+| 2019 Cohort | LL | C | 7 | 4.14 | 100.0% | 0.8743 | 0.8690 |
+| 2019 Cohort | ALL | A | 7 | 1.00 | 100.0% | 1.0000 | 1.0000 |
+| 2019 Cohort | ALL | B1 | 7 | 3.29 | 100.0% | 0.9086 | 0.9048 |
+| 2019 Cohort | ALL | B2 | 7 | 2.57 | 100.0% | 0.9371 | 0.9345 |
+| 2019 Cohort | ALL | C | 7 | 5.43 | 100.0% | 0.8229 | 0.8155 |
+| 2019 Cohort | CF | A | 7 | 1.00 | 100.0% | 1.0000 | 1.0000 |
+| 2019 Cohort | CF | B1 | 7 | 1.00 | 100.0% | 1.0000 | 1.0000 |
+| 2019 Cohort | CF | B2 | 7 | 4.14 | 71.4% | 0.8743 | 0.8690 |
+| 2019 Cohort | CF | C | 7 | 7.57 | 100.0% | 0.7371 | 0.7262 |
+| 2019 Cohort | TR | A | 7 | 1.14 | 100.0% | 0.9943 | 0.9940 |
+| 2019 Cohort | TR | B1 | 7 | 1.43 | 100.0% | 0.9829 | 0.9821 |
+| 2019 Cohort | TR | B2 | 7 | 1.43 | 100.0% | 0.9829 | 0.9821 |
+| 2019 Cohort | TR | C | 7 | 2.00 | 100.0% | 0.9600 | 0.9583 |
+| 2019 Cohort | TLL | A | 7 | 1.14 | 100.0% | 0.9943 | 0.9940 |
+| 2019 Cohort | TLL | B1 | 7 | 1.43 | 100.0% | 0.9829 | 0.9821 |
+| 2019 Cohort | TLL | B2 | 7 | 4.14 | 71.4% | 0.8743 | 0.8690 |
+| 2019 Cohort | TLL | C | 7 | 5.14 | 100.0% | 0.8343 | 0.8274 |
+| 2020 Cohort | LL | A | 11 | 1.00 | 100.0% | 1.0000 | 1.0000 |
+| 2020 Cohort | LL | B1 | 11 | 1.18 | 100.0% | 0.9941 | 0.9939 |
+| 2020 Cohort | LL | B2 | 11 | 1.91 | 100.0% | 0.9707 | 0.9697 |
+| 2020 Cohort | LL | C | 11 | 8.91 | 100.0% | 0.7449 | 0.7364 |
+| 2020 Cohort | ALL | A | 11 | 1.00 | 100.0% | 1.0000 | 1.0000 |
+| 2020 Cohort | ALL | B1 | 11 | 1.18 | 100.0% | 0.9941 | 0.9939 |
+| 2020 Cohort | ALL | B2 | 11 | 1.91 | 100.0% | 0.9707 | 0.9697 |
+| 2020 Cohort | ALL | C | 11 | 8.91 | 100.0% | 0.7449 | 0.7364 |
+| 2020 Cohort | CF | A | 11 | 1.00 | 100.0% | 1.0000 | 1.0000 |
+| 2020 Cohort | CF | B1 | 11 | 1.00 | 100.0% | 1.0000 | 1.0000 |
+| 2020 Cohort | CF | B2 | 11 | 1.55 | 100.0% | 0.9824 | 0.9818 |
+| 2020 Cohort | CF | C | 11 | 12.09 | 100.0% | 0.6422 | 0.6303 |
+| 2020 Cohort | TR | A | 11 | 1.18 | 100.0% | 0.9941 | 0.9939 |
+| 2020 Cohort | TR | B1 | 11 | 1.82 | 90.9% | 0.9736 | 0.9727 |
+| 2020 Cohort | TR | B2 | 11 | 2.00 | 100.0% | 0.9677 | 0.9667 |
+| 2020 Cohort | TR | C | 11 | 2.45 | 100.0% | 0.9531 | 0.9515 |
+| 2020 Cohort | TLL | A | 11 | 1.18 | 100.0% | 0.9941 | 0.9939 |
+| 2020 Cohort | TLL | B1 | 11 | 1.45 | 100.0% | 0.9853 | 0.9848 |
+| 2020 Cohort | TLL | B2 | 11 | 2.18 | 100.0% | 0.9619 | 0.9606 |
+| 2020 Cohort | TLL | C | 11 | 12.27 | 100.0% | 0.6364 | 0.6242 |
+| Synthetic 1 (Random) | LL | A | 6 | 1.00 | 100.0% | 1.0000 | 1.0000 |
+| Synthetic 1 (Random) | LL | B1 | 6 | 1.67 | 100.0% | 0.9167 | 0.9048 |
+| Synthetic 1 (Random) | LL | B2 | 6 | 1.67 | 100.0% | 0.9167 | 0.9048 |
+| Synthetic 1 (Random) | LL | C | 6 | 2.83 | 100.0% | 0.7708 | 0.7381 |
+| Synthetic 1 (Random) | ALL | A | 6 | 1.00 | 100.0% | 1.0000 | 1.0000 |
+| Synthetic 1 (Random) | ALL | B1 | 6 | 1.67 | 100.0% | 0.9167 | 0.9048 |
+| Synthetic 1 (Random) | ALL | B2 | 6 | 1.67 | 100.0% | 0.9167 | 0.9048 |
+| Synthetic 1 (Random) | ALL | C | 6 | 2.83 | 100.0% | 0.7708 | 0.7381 |
+| Synthetic 1 (Random) | CF | A | 6 | 1.00 | 100.0% | 1.0000 | 1.0000 |
+| Synthetic 1 (Random) | CF | B1 | 6 | 1.00 | 100.0% | 1.0000 | 1.0000 |
+| Synthetic 1 (Random) | CF | B2 | 6 | 1.00 | 100.0% | 1.0000 | 1.0000 |
+| Synthetic 1 (Random) | CF | C | 6 | 1.33 | 100.0% | 0.9583 | 0.9524 |
+| Synthetic 1 (Random) | TR | A | 6 | 1.33 | 100.0% | 0.9583 | 0.9524 |
+| Synthetic 1 (Random) | TR | B1 | 6 | 2.00 | 100.0% | 0.8750 | 0.8571 |
+| Synthetic 1 (Random) | TR | B2 | 6 | 3.00 | 100.0% | 0.7500 | 0.7143 |
+| Synthetic 1 (Random) | TR | C | 6 | 3.00 | 100.0% | 0.7500 | 0.7143 |
+| Synthetic 1 (Random) | TLL | A | 6 | 1.33 | 100.0% | 0.9583 | 0.9524 |
+| Synthetic 1 (Random) | TLL | B1 | 6 | 2.00 | 100.0% | 0.8750 | 0.8571 |
+| Synthetic 1 (Random) | TLL | B2 | 6 | 3.00 | 100.0% | 0.7500 | 0.7143 |
+| Synthetic 1 (Random) | TLL | C | 6 | 3.00 | 100.0% | 0.7500 | 0.7143 |
+| Synthetic 2 (Clustered) | LL | A | 6 | 1.17 | 100.0% | 0.9792 | 0.9762 |
+| Synthetic 2 (Clustered) | LL | B1 | 6 | 1.00 | 100.0% | 1.0000 | 1.0000 |
+| Synthetic 2 (Clustered) | LL | B2 | 6 | 1.17 | 100.0% | 0.9792 | 0.9762 |
+| Synthetic 2 (Clustered) | LL | C | 6 | 3.50 | 100.0% | 0.6875 | 0.6429 |
+| Synthetic 2 (Clustered) | ALL | A | 6 | 1.17 | 100.0% | 0.9792 | 0.9762 |
+| Synthetic 2 (Clustered) | ALL | B1 | 6 | 1.00 | 100.0% | 1.0000 | 1.0000 |
+| Synthetic 2 (Clustered) | ALL | B2 | 6 | 1.17 | 100.0% | 0.9792 | 0.9762 |
+| Synthetic 2 (Clustered) | ALL | C | 6 | 3.50 | 100.0% | 0.6875 | 0.6429 |
+| Synthetic 2 (Clustered) | CF | A | 6 | 1.00 | 100.0% | 1.0000 | 1.0000 |
+| Synthetic 2 (Clustered) | CF | B1 | 6 | 1.00 | 100.0% | 1.0000 | 1.0000 |
+| Synthetic 2 (Clustered) | CF | B2 | 6 | 1.00 | 100.0% | 1.0000 | 1.0000 |
+| Synthetic 2 (Clustered) | CF | C | 6 | 1.17 | 100.0% | 0.9792 | 0.9762 |
+| Synthetic 2 (Clustered) | TR | A | 6 | 1.50 | 100.0% | 0.9375 | 0.9286 |
+| Synthetic 2 (Clustered) | TR | B1 | 6 | 1.50 | 100.0% | 0.9375 | 0.9286 |
+| Synthetic 2 (Clustered) | TR | B2 | 6 | 2.50 | 100.0% | 0.8125 | 0.7857 |
+| Synthetic 2 (Clustered) | TR | C | 6 | 3.00 | 100.0% | 0.7500 | 0.7143 |
+| Synthetic 2 (Clustered) | TLL | A | 6 | 1.50 | 100.0% | 0.9375 | 0.9286 |
+| Synthetic 2 (Clustered) | TLL | B1 | 6 | 1.50 | 100.0% | 0.9375 | 0.9286 |
+| Synthetic 2 (Clustered) | TLL | B2 | 6 | 2.33 | 100.0% | 0.8333 | 0.8095 |
+| Synthetic 2 (Clustered) | TLL | C | 6 | 2.83 | 100.0% | 0.7708 | 0.7381 |
+| Synthetic 3 (Polarised) | LL | A | 6 | 1.33 | 100.0% | 0.9583 | 0.9524 |
+| Synthetic 3 (Polarised) | LL | B1 | 6 | 2.67 | 100.0% | 0.7917 | 0.7619 |
+| Synthetic 3 (Polarised) | LL | B2 | 6 | 1.50 | 100.0% | 0.9375 | 0.9286 |
+| Synthetic 3 (Polarised) | LL | C | 6 | 3.83 | 100.0% | 0.6458 | 0.5952 |
+| Synthetic 3 (Polarised) | ALL | A | 6 | 1.33 | 100.0% | 0.9583 | 0.9524 |
+| Synthetic 3 (Polarised) | ALL | B1 | 6 | 2.67 | 100.0% | 0.7917 | 0.7619 |
+| Synthetic 3 (Polarised) | ALL | B2 | 6 | 1.50 | 100.0% | 0.9375 | 0.9286 |
+| Synthetic 3 (Polarised) | ALL | C | 6 | 3.83 | 100.0% | 0.6458 | 0.5952 |
+| Synthetic 3 (Polarised) | CF | A | 6 | 1.00 | 100.0% | 1.0000 | 1.0000 |
+| Synthetic 3 (Polarised) | CF | B1 | 6 | 1.00 | 100.0% | 1.0000 | 1.0000 |
+| Synthetic 3 (Polarised) | CF | B2 | 6 | 1.17 | 100.0% | 0.9792 | 0.9762 |
+| Synthetic 3 (Polarised) | CF | C | 6 | 1.83 | 100.0% | 0.8958 | 0.8810 |
+| Synthetic 3 (Polarised) | TR | A | 6 | 1.50 | 100.0% | 0.9375 | 0.9286 |
+| Synthetic 3 (Polarised) | TR | B1 | 6 | 2.00 | 100.0% | 0.8750 | 0.8571 |
+| Synthetic 3 (Polarised) | TR | B2 | 6 | 2.00 | 100.0% | 0.8750 | 0.8571 |
+| Synthetic 3 (Polarised) | TR | C | 6 | 3.00 | 100.0% | 0.7500 | 0.7143 |
+| Synthetic 3 (Polarised) | TLL | A | 6 | 1.50 | 100.0% | 0.9375 | 0.9286 |
+| Synthetic 3 (Polarised) | TLL | B1 | 6 | 2.00 | 100.0% | 0.8750 | 0.8571 |
+| Synthetic 3 (Polarised) | TLL | B2 | 6 | 2.00 | 100.0% | 0.8750 | 0.8571 |
+| Synthetic 3 (Polarised) | TLL | C | 6 | 2.83 | 100.0% | 0.7708 | 0.7381 |
+| Synthetic 4 (High-CPI) | LL | A | 6 | 1.00 | 100.0% | 1.0000 | 1.0000 |
+| Synthetic 4 (High-CPI) | LL | B1 | 6 | 2.00 | 100.0% | 0.8750 | 0.8571 |
+| Synthetic 4 (High-CPI) | LL | B2 | 6 | 1.17 | 100.0% | 0.9792 | 0.9762 |
+| Synthetic 4 (High-CPI) | LL | C | 6 | 1.67 | 100.0% | 0.9167 | 0.9048 |
+| Synthetic 4 (High-CPI) | ALL | A | 6 | 1.00 | 100.0% | 1.0000 | 1.0000 |
+| Synthetic 4 (High-CPI) | ALL | B1 | 6 | 2.00 | 100.0% | 0.8750 | 0.8571 |
+| Synthetic 4 (High-CPI) | ALL | B2 | 6 | 1.17 | 100.0% | 0.9792 | 0.9762 |
+| Synthetic 4 (High-CPI) | ALL | C | 6 | 1.67 | 100.0% | 0.9167 | 0.9048 |
+| Synthetic 4 (High-CPI) | CF | A | 6 | 1.00 | 100.0% | 1.0000 | 1.0000 |
+| Synthetic 4 (High-CPI) | CF | B1 | 6 | 1.00 | 100.0% | 1.0000 | 1.0000 |
+| Synthetic 4 (High-CPI) | CF | B2 | 6 | 1.00 | 100.0% | 1.0000 | 1.0000 |
+| Synthetic 4 (High-CPI) | CF | C | 6 | 1.83 | 100.0% | 0.8958 | 0.8810 |
+| Synthetic 4 (High-CPI) | TR | A | 6 | 1.33 | 100.0% | 0.9583 | 0.9524 |
+| Synthetic 4 (High-CPI) | TR | B1 | 6 | 2.33 | 100.0% | 0.8333 | 0.8095 |
+| Synthetic 4 (High-CPI) | TR | B2 | 6 | 2.33 | 100.0% | 0.8333 | 0.8095 |
+| Synthetic 4 (High-CPI) | TR | C | 6 | 3.67 | 100.0% | 0.6667 | 0.6190 |
+| Synthetic 4 (High-CPI) | TLL | A | 6 | 1.33 | 100.0% | 0.9583 | 0.9524 |
+| Synthetic 4 (High-CPI) | TLL | B1 | 6 | 2.33 | 100.0% | 0.8333 | 0.8095 |
+| Synthetic 4 (High-CPI) | TLL | B2 | 6 | 2.33 | 100.0% | 0.8333 | 0.8095 |
+| Synthetic 4 (High-CPI) | TLL | C | 6 | 3.50 | 100.0% | 0.6875 | 0.6429 |
 
-## 2. Advisor Metrics
+## 2. Advisor Metrics — Per Dataset
 
-### 2a. Advisor Satisfaction
+| Dataset | Policy | Avg MSES ↓ | Avg LUR | Equity Ret% ↑ | CPI Skewness *(diag)* |
+|---------|--------|-----------|---------|---------------|----------------------|
+| 2019 Cohort | LL | 2.0870 | 60.9% | 60.0% | -0.6584 |
+| 2019 Cohort | ALL | 3.3000 | 56.0% | 66.7% | -0.6805 |
+| 2019 Cohort | CF | 3.7200 | 56.0% | 66.7% | -0.5969 |
+| 2019 Cohort | TR | 1.3810 | 66.7% | 71.4% | -0.9482 |
+| 2019 Cohort | TLL | 3.1200 | 56.0% | 33.3% | -0.5947 |
+|  |  |  |  |  |  |
+| 2020 Cohort | LL | 4.0806 | 71.0% | 76.9% | 0.4597 |
+| 2020 Cohort | ALL | 4.0806 | 71.0% | 76.9% | 0.4597 |
+| 2020 Cohort | CF | 5.0484 | 71.0% | 76.9% | 0.2033 |
+| 2020 Cohort | TR | 1.7600 | 88.0% | 84.2% | -0.3863 |
+| 2020 Cohort | TLL | 5.2742 | 71.0% | 76.9% | 0.0681 |
+|  |  |  |  |  |  |
+| Synthetic 1 (Random) | LL | 1.7917 | 75.0% | 68.5% | -0.6476 |
+| Synthetic 1 (Random) | ALL | 1.7917 | 75.0% | 68.5% | -0.6476 |
+| Synthetic 1 (Random) | CF | 1.0729 | 75.0% | 76.1% | 0.1610 |
+| Synthetic 1 (Random) | TR | 2.2396 | 75.0% | 86.3% | 0.5135 |
+| Synthetic 1 (Random) | TLL | 2.2396 | 75.0% | 86.3% | 0.5135 |
+|  |  |  |  |  |  |
+| Synthetic 2 (Clustered) | LL | 1.7083 | 75.0% | 79.0% | 0.5864 |
+| Synthetic 2 (Clustered) | ALL | 1.7083 | 75.0% | 79.0% | 0.5864 |
+| Synthetic 2 (Clustered) | CF | 1.0312 | 75.0% | 66.7% | -0.0693 |
+| Synthetic 2 (Clustered) | TR | 2.0833 | 75.0% | 80.0% | 0.2567 |
+| Synthetic 2 (Clustered) | TLL | 2.0000 | 75.0% | 77.0% | -0.5748 |
+|  |  |  |  |  |  |
+| Synthetic 3 (Polarised) | LL | 2.3333 | 75.0% | 50.7% | -0.2191 |
+| Synthetic 3 (Polarised) | ALL | 2.3333 | 75.0% | 50.7% | -0.2191 |
+| Synthetic 3 (Polarised) | CF | 1.2812 | 75.0% | 32.2% | -0.1304 |
+| Synthetic 3 (Polarised) | TR | 2.0417 | 75.0% | 50.5% | -0.0886 |
+| Synthetic 3 (Polarised) | TLL | 2.0104 | 75.0% | 58.0% | -0.0741 |
+|  |  |  |  |  |  |
+| Synthetic 4 (High-CPI) | LL | 1.4583 | 75.0% | 73.7% | -0.4853 |
+| Synthetic 4 (High-CPI) | ALL | 1.4583 | 75.0% | 73.7% | -0.4853 |
+| Synthetic 4 (High-CPI) | CF | 1.2812 | 75.0% | 69.3% | -0.7336 |
+| Synthetic 4 (High-CPI) | TR | 2.2604 | 75.0% | 70.0% | 0.7821 |
+| Synthetic 4 (High-CPI) | TLL | 2.1979 | 75.0% | 63.8% | 1.1267 |
+|  |  |  |  |  |  |
 
-| Dataset | Policy | Avg MSES ↓ | Avg LUR *(utilisation)* |
-|---------|--------|-----------|------------------------|
-| Original | least_loaded | 4.0806 | 71.0% |
-| Original | cpi_fill | 5.0484 | 71.0% |
-| Sample 1 (Random) | least_loaded | 2.3548 | 71.0% |
-| Sample 1 (Random) | cpi_fill | 2.1452 | 71.0% |
-| Sample 2 (Clustered) | least_loaded | 4.6935 | 71.0% |
-| Sample 2 (Clustered) | cpi_fill | 5.4516 | 71.0% |
-| Sample 3 (Polarised) | least_loaded | 1.5000 | 71.0% |
-| Sample 3 (Polarised) | cpi_fill | 2.0806 | 71.0% |
-| Sample 4 (High-CPI) | least_loaded | 1.3387 | 71.0% |
-| Sample 4 (High-CPI) | cpi_fill | 2.5161 | 71.0% |
+## 3. `tiered_ll` Critical Round k
 
-### 2b. Advisor Equity — Load Distribution
+| Dataset | k_crit | Notes |
+|---------|--------|-------|
+| 2019 Cohort | 1 | — |
+| 2020 Cohort | 1 | — |
+| Synthetic 1 (Random) | 3 | — |
+| Synthetic 2 (Clustered) | 2 | — |
+| Synthetic 3 (Polarised) | 2 | — |
+| Synthetic 4 (High-CPI) | 3 | — |
 
-| Dataset | Policy | Advisors Assigned | Empty Labs ↓ |
-|---------|--------|-------------------|--------------|
-| Original | least_loaded | 31 | 0 |
-| Original | cpi_fill | 31 | 0 |
-| Sample 1 (Random) | least_loaded | 31 | 0 |
-| Sample 1 (Random) | cpi_fill | 31 | 0 |
-| Sample 2 (Clustered) | least_loaded | 31 | 0 |
-| Sample 2 (Clustered) | cpi_fill | 31 | 0 |
-| Sample 3 (Polarised) | least_loaded | 31 | 0 |
-| Sample 3 (Polarised) | cpi_fill | 31 | 0 |
-| Sample 4 (High-CPI) | least_loaded | 31 | 0 |
-| Sample 4 (High-CPI) | cpi_fill | 31 | 0 |
+## 4. Aggregate Statistics (mean ± std across 5 datasets)
 
-### 2c. Advisor Equity — Tier Mixing
+> Values are mean ± std across the 5 datasets. With only 5 datasets
+> these comparisons are descriptive, not inferential. Only 2 cohorts are real data;
+> significance testing would require more cohorts.
 
-| Dataset | Policy | Load-Aware Entropy Ceiling | Equity Retention % ↑ | CPI Skewness *(diag)* |
-|---------|--------|----------------------------|----------------------|-----------------------|
-| Original | least_loaded | 0.2097 | 76.9% | 0.4597 |
-| Original | cpi_fill | 0.2097 | 76.9% | 0.2033 |
-| Sample 1 (Random) | least_loaded | 0.2097 | 92.3% | 0.1591 |
-| Sample 1 (Random) | cpi_fill | 0.2097 | 84.6% | -0.1619 |
-| Sample 2 (Clustered) | least_loaded | 0.2097 | 53.8% | -0.1195 |
-| Sample 2 (Clustered) | cpi_fill | 0.2097 | 61.5% | 0.0192 |
-| Sample 3 (Polarised) | least_loaded | 0.2097 | 69.2% | 0.1863 |
-| Sample 3 (Polarised) | cpi_fill | 0.2097 | 53.8% | 0.1399 |
-| Sample 4 (High-CPI) | least_loaded | 0.2097 | 92.3% | -0.3057 |
-| Sample 4 (High-CPI) | cpi_fill | 0.2097 | 92.3% | -0.4342 |
+| Metric | LL | ALL | CF | TR | TLL | Best |
+|--------|--------|--------|--------|--------|--------|------|
+| NPSS | 0.924 ± 0.039 | 0.917 ± 0.034 | 0.964 ± 0.034 | 0.896 ± 0.066 | 0.879 ± 0.037 | **CF** |
+| PSI | 0.902 ± 0.052 | 0.895 ± 0.045 | 0.953 ± 0.042 | 0.873 ± 0.081 | 0.853 ± 0.045 | **CF** |
+| Overflow | 0.000 ± 0.000 | 0.000 ± 0.000 | 0.333 ± 0.816 | 0.167 ± 0.408 | 0.333 ± 0.816 | **LL** |
+| % In Window | 100.000 ± 0.000 | 100.000 ± 0.000 | 98.810 ± 2.916 | 99.621 ± 0.928 | 98.810 ± 2.916 | **LL** |
+| Empty Labs | 0.333 ± 0.816 | 0.000 ± 0.000 | 0.000 ± 0.000 | 1.667 ± 2.658 | 0.000 ± 0.000 | **ALL** |
+| Avg MSES | 2.243 ± 0.950 | 2.445 ± 1.036 | 2.239 ± 1.717 | 1.961 ± 0.336 | 2.807 ± 1.278 | **TR** |
+| Equity Ret% | 68.125 ± 10.919 | 69.237 ± 10.245 | 64.649 ± 16.524 | 73.753 ± 13.159 | 65.899 ± 18.923 | **TR** |
+| Avg LUR | 71.973 ± 5.674 | 71.161 ± 7.601 | 71.161 ± 7.601 | 75.778 ± 6.853 | 71.161 ± 7.601 | **TR** |
+| |CPI Skewness| | 0.509 ± 0.164 | 0.513 ± 0.168 | 0.316 ± 0.278 | 0.496 ± 0.323 | 0.492 ± 0.394 | **CF** |
 
-## 3. Aggregate Statistics Across All Datasets
+## 5. Per-Dataset Deltas vs `least_loaded` (baseline)
 
-Values are **mean ± std** across the 5 datasets.
+Positive Δ = better than LL for higher-is-better metrics; negative = worse.  
+Empty labs and overflow: negative Δ = fewer (better).  
 
-> **Note on interpretation:** With only 5 datasets and no formal significance testing,
-> these aggregate comparisons are descriptive, not inferential. The std devs overlap
-> heavily for every metric. A win is called only when the mean difference clearly
-> exceeds the per-metric significance threshold; otherwise the result is a **Draw**.
+### 5a. NPSS
 
-| Metric | `least_loaded` | `cpi_fill` | Threshold | Verdict |
-|--------|---------------|------------|-----------|---------|
-| NPSS | 0.9584 ± 0.0340 | 0.9510 ± 0.0345 | ≥ 0.04 | **Draw** |
-| PSI | 0.9511 ± 0.0415 | 0.9386 ± 0.0430 | ≥ 0.025 | **Draw** |
-| Overflow Count | 1.0000 ± 2.2361 | 1.4000 ± 3.1305 | *(diag)* | *(diagnostic)* |
-| % In Window | 97.7273 ± 5.0820 | 96.8182 ± 7.1148 | *(diag)* | *(diagnostic)* |
-| Avg MSES | 2.7935 ± 1.5206 | 3.4484 ± 1.6592 | ≥ 0.5 | **least_loaded** |
-| Equity Retention % | 76.9231 ± 16.3178 | 73.8462 ± 15.9511 | ≥ 5.0 | **Draw** |
-| Avg LUR | 70.9677 ± 0.0000 | 70.9677 ± 0.0000 | *(diag)* | *(diagnostic)* |
-| CPI Skewness (|abs|) | 0.2461 ± 0.1381 | 0.1917 ± 0.1519 | ≥ 0.1 | **Draw** |
-| Advisors Assigned | 31.0000 ± 0.0000 | 31.0000 ± 0.0000 | *(diag)* | *(diagnostic)* |
+| Dataset | LL | ΔALL | ΔCF | ΔTR | ΔTLL |
+|---------|----|--------|--------|--------|--------|
+| 2019 Cohort | 0.966 | -0.041 | -0.049 | +0.016 | -0.038 |
+| 2020 Cohort | 0.938 | +0.000 | -0.013 | +0.036 | -0.026 |
+| Synthetic 1 (Random) | 0.913 | +0.000 | +0.078 | -0.068 | -0.068 |
+| Synthetic 2 (Clustered) | 0.931 | +0.000 | +0.065 | -0.056 | -0.048 |
+| Synthetic 3 (Polarised) | 0.851 | +0.000 | +0.124 | +0.018 | +0.023 |
+| Synthetic 4 (High-CPI) | 0.943 | +0.000 | +0.033 | -0.115 | -0.110 |
 
-## 4. Per-Dataset Policy Deltas (cpi_fill − least_loaded)
+### 5b. PSI
 
-Positive ΔNPSS / ΔPSI / ΔEquity Retention means `cpi_fill` is better; negative means `least_loaded` is better.
-ΔMSES: negative means CF students are more enthusiastic (lower mean rank = better).
-ΔSkewness = Δ|abs| = |CF| − |LL|; negative means CF has lower absolute skewness.
-Overflow and % In Window are shown for diagnostic context only (not used to declare wins).
+| Dataset | LL | ΔALL | ΔCF | ΔTR | ΔTLL |
+|---------|----|--------|--------|--------|--------|
+| 2019 Cohort | 0.960 | -0.046 | -0.061 | +0.019 | -0.042 |
+| 2020 Cohort | 0.925 | +0.000 | -0.022 | +0.046 | -0.034 |
+| Synthetic 1 (Random) | 0.887 | +0.000 | +0.101 | -0.077 | -0.077 |
+| Synthetic 2 (Clustered) | 0.899 | +0.000 | +0.095 | -0.060 | -0.048 |
+| Synthetic 3 (Polarised) | 0.810 | +0.000 | +0.155 | +0.030 | +0.036 |
+| Synthetic 4 (High-CPI) | 0.935 | +0.000 | +0.036 | -0.137 | -0.131 |
 
-| Dataset | ΔNPSS | ΔPSI | ΔMSES | ΔEquity Ret% | ΔOverflow *(diag)* | Δ% In Window *(diag)* | ΔSkewness *(diag)* |
-|---------|-------|------|-------|-------------|--------------------|-----------------------|-------------------|
-| Original | -0.0125 | -0.0220 | +0.9677 | +0.0% | +0 | +0.0% | -0.2564 |
-| Sample 1 (Random) | +0.0115 | +0.0091 | -0.2097 | -7.7% | +0 | +0.0% | -0.3210 |
-| Sample 2 (Clustered) | -0.0064 | -0.0106 | +0.7581 | +7.7% | +2 | -4.5% | 0.1387 |
-| Sample 3 (Polarised) | -0.0071 | -0.0121 | +0.5806 | -15.4% | +0 | +0.0% | -0.0464 |
-| Sample 4 (High-CPI) | -0.0223 | -0.0265 | +1.1774 | +0.0% | +0 | +0.0% | -0.1285 |
+### 5c. Overflow
 
-## 5. Assigned Preference Rank Distributions
+| Dataset | LL | ΔALL | ΔCF | ΔTR | ΔTLL |
+|---------|----|--------|--------|--------|--------|
+| 2019 Cohort | 0.000 | +0.000 | +2.000 | +0.000 | +2.000 |
+| 2020 Cohort | 0.000 | +0.000 | +0.000 | +1.000 | +0.000 |
+| Synthetic 1 (Random) | 0.000 | +0.000 | +0.000 | +0.000 | +0.000 |
+| Synthetic 2 (Clustered) | 0.000 | +0.000 | +0.000 | +0.000 | +0.000 |
+| Synthetic 3 (Polarised) | 0.000 | +0.000 | +0.000 | +0.000 | +0.000 |
+| Synthetic 4 (High-CPI) | 0.000 | +0.000 | +0.000 | +0.000 | +0.000 |
 
-| Dataset | Policy | Min Rank | Median Rank | Mean Rank | Max Rank | Std Rank |
-|---------|--------|----------|-------------|-----------|----------|----------|
-| Original | least_loaded | 1 | 1.0 | 3.25 | 30 | 6.27 |
-| Original | cpi_fill | 1 | 1.0 | 3.91 | 31 | 6.77 |
-| Sample 1 (Random) | least_loaded | 1 | 1.0 | 2.09 | 22 | 3.25 |
-| Sample 1 (Random) | cpi_fill | 1 | 1.0 | 1.82 | 13 | 2.24 |
-| Sample 2 (Clustered) | least_loaded | 1 | 1.0 | 4.23 | 24 | 5.49 |
-| Sample 2 (Clustered) | cpi_fill | 1 | 1.0 | 4.55 | 31 | 6.07 |
-| Sample 3 (Polarised) | least_loaded | 1 | 1.0 | 1.48 | 5 | 0.98 |
-| Sample 3 (Polarised) | cpi_fill | 1 | 1.0 | 1.84 | 26 | 3.77 |
-| Sample 4 (High-CPI) | least_loaded | 1 | 1.0 | 1.30 | 4 | 0.70 |
-| Sample 4 (High-CPI) | cpi_fill | 1 | 1.0 | 2.09 | 31 | 4.72 |
+### 5d. Empty Labs
 
-## 6. Scenario-by-Scenario Observations
+| Dataset | LL | ΔALL | ΔCF | ΔTR | ΔTLL |
+|---------|----|--------|--------|--------|--------|
+| 2019 Cohort | 2.000 | -2.000 | -2.000 | +2.000 | -2.000 |
+| 2020 Cohort | 0.000 | +0.000 | +0.000 | +6.000 | +0.000 |
+| Synthetic 1 (Random) | 0.000 | +0.000 | +0.000 | +0.000 | +0.000 |
+| Synthetic 2 (Clustered) | 0.000 | +0.000 | +0.000 | +0.000 | +0.000 |
+| Synthetic 3 (Polarised) | 0.000 | +0.000 | +0.000 | +0.000 | +0.000 |
+| Synthetic 4 (High-CPI) | 0.000 | +0.000 | +0.000 | +0.000 | +0.000 |
 
-### Original
-- NPSS: LL=0.9379, CF=0.9253 — **draw** (threshold 0.04)
-- PSI: LL=0.9250, CF=0.9030 — **draw** (threshold 0.025)
-- MSES: LL=4.0806, CF=5.0484 — **win LL** (threshold 0.5)
-- Equity Retention: LL=76.9%, CF=76.9% — **draw** (threshold 5.0%)
-- CPI skewness (diagnostic): |LL|=0.4597, |CF|=0.2033 — **win CF** (diagnostic)
-- Overflow (diagnostic): LL=0, CF=0
+### 5e. Equity Ret%
 
-### Sample 1 (Random)
-- NPSS: LL=0.9680, CF=0.9795 — **draw** (threshold 0.04)
-- PSI: LL=0.9636, CF=0.9727 — **draw** (threshold 0.025)
-- MSES: LL=2.3548, CF=2.1452 — **draw** (threshold 0.5)
-- Equity Retention: LL=92.3%, CF=84.6% — **win LL** (threshold 5.0%)
-- CPI skewness (diagnostic): |LL|=0.1591, |CF|=0.1619 — **draw** (diagnostic)
-- Overflow (diagnostic): LL=0, CF=0
+| Dataset | LL | ΔALL | ΔCF | ΔTR | ΔTLL |
+|---------|----|--------|--------|--------|--------|
+| 2019 Cohort | 60.000 | +6.667 | +6.667 | +11.429 | -26.667 |
+| 2020 Cohort | 76.923 | +0.000 | +0.000 | +7.287 | +0.000 |
+| Synthetic 1 (Random) | 68.454 | +0.000 | +7.673 | +17.861 | +17.861 |
+| Synthetic 2 (Clustered) | 78.969 | +0.000 | -12.248 | +1.047 | -1.930 |
+| Synthetic 3 (Polarised) | 50.696 | +0.000 | -18.499 | -0.186 | +7.256 |
+| Synthetic 4 (High-CPI) | 73.711 | +0.000 | -4.451 | -3.674 | -9.880 |
 
-### Sample 2 (Clustered)
-- NPSS: LL=0.9100, CF=0.9036 — **draw** (threshold 0.04)
-- PSI: LL=0.8924, CF=0.8818 — **draw** (threshold 0.025)
-- MSES: LL=4.6935, CF=5.4516 — **win LL** (threshold 0.5)
-- Equity Retention: LL=53.8%, CF=61.5% — **win CF** (threshold 5.0%)
-- CPI skewness (diagnostic): |LL|=0.1195, |CF|=0.0192 — **win CF** (diagnostic)
-- Overflow (diagnostic): LL=5, CF=7
+### 5f. Avg MSES
 
-### Sample 3 (Polarised)
-- NPSS: LL=0.9855, CF=0.9784 — **draw** (threshold 0.04)
-- PSI: LL=0.9841, CF=0.9720 — **draw** (threshold 0.025)
-- MSES: LL=1.5000, CF=2.0806 — **win LL** (threshold 0.5)
-- Equity Retention: LL=69.2%, CF=53.8% — **win LL** (threshold 5.0%)
-- CPI skewness (diagnostic): |LL|=0.1863, |CF|=0.1399 — **draw** (diagnostic)
-- Overflow (diagnostic): LL=0, CF=0
+| Dataset | LL | ΔALL | ΔCF | ΔTR | ΔTLL |
+|---------|----|--------|--------|--------|--------|
+| 2019 Cohort | 2.087 | +1.213 | +1.633 | -0.706 | +1.033 |
+| 2020 Cohort | 4.081 | +0.000 | +0.968 | -2.321 | +1.194 |
+| Synthetic 1 (Random) | 1.792 | +0.000 | -0.719 | +0.448 | +0.448 |
+| Synthetic 2 (Clustered) | 1.708 | +0.000 | -0.677 | +0.375 | +0.292 |
+| Synthetic 3 (Polarised) | 2.333 | +0.000 | -1.052 | -0.292 | -0.323 |
+| Synthetic 4 (High-CPI) | 1.458 | +0.000 | -0.177 | +0.802 | +0.740 |
 
-### Sample 4 (High-CPI)
-- NPSS: LL=0.9906, CF=0.9683 — **draw** (threshold 0.04)
-- PSI: LL=0.9902, CF=0.9636 — **win LL** (threshold 0.025)
-- MSES: LL=1.3387, CF=2.5161 — **win LL** (threshold 0.5)
-- Equity Retention: LL=92.3%, CF=92.3% — **draw** (threshold 5.0%)
-- CPI skewness (diagnostic): |LL|=0.3057, |CF|=0.4342 — **win LL** (diagnostic)
-- Overflow (diagnostic): LL=0, CF=0
+## 6. Assigned Preference Rank Distributions
+
+| Dataset | Policy | Min | Median | Mean | Max | Std |
+|---------|--------|-----|--------|------|-----|-----|
+| 2019 Cohort | LL | 1 | 1.0 | 1.96 | 13 | 2.78 |
+| 2019 Cohort | ALL | 1 | 1.0 | 3.07 | 13 | 4.02 |
+| 2019 Cohort | CF | 1 | 1.0 | 3.43 | 20 | 4.90 |
+| 2019 Cohort | TR | 1 | 1.0 | 1.50 | 6 | 1.04 |
+| 2019 Cohort | TLL | 1 | 1.0 | 2.96 | 20 | 4.57 |
+| 2020 Cohort | LL | 1 | 1.0 | 3.25 | 30 | 6.27 |
+| 2020 Cohort | ALL | 1 | 1.0 | 3.25 | 30 | 6.27 |
+| 2020 Cohort | CF | 1 | 1.0 | 3.91 | 31 | 6.77 |
+| 2020 Cohort | TR | 1 | 1.0 | 1.86 | 7 | 1.42 |
+| 2020 Cohort | TLL | 1 | 1.0 | 4.27 | 31 | 6.75 |
+| Synthetic 1 (Random) | LL | 1 | 1.0 | 1.79 | 7 | 1.44 |
+| Synthetic 1 (Random) | ALL | 1 | 1.0 | 1.79 | 7 | 1.44 |
+| Synthetic 1 (Random) | CF | 1 | 1.0 | 1.08 | 2 | 0.28 |
+| Synthetic 1 (Random) | TR | 1 | 2.0 | 2.33 | 5 | 1.24 |
+| Synthetic 1 (Random) | TLL | 1 | 2.0 | 2.33 | 5 | 1.24 |
+| Synthetic 2 (Clustered) | LL | 1 | 1.0 | 1.71 | 8 | 1.68 |
+| Synthetic 2 (Clustered) | ALL | 1 | 1.0 | 1.71 | 8 | 1.68 |
+| Synthetic 2 (Clustered) | CF | 1 | 1.0 | 1.04 | 2 | 0.20 |
+| Synthetic 2 (Clustered) | TR | 1 | 2.0 | 2.12 | 4 | 0.99 |
+| Synthetic 2 (Clustered) | TLL | 1 | 2.0 | 2.04 | 3 | 0.86 |
+| Synthetic 3 (Polarised) | LL | 1 | 1.5 | 2.33 | 5 | 1.69 |
+| Synthetic 3 (Polarised) | ALL | 1 | 1.5 | 2.33 | 5 | 1.69 |
+| Synthetic 3 (Polarised) | CF | 1 | 1.0 | 1.25 | 4 | 0.68 |
+| Synthetic 3 (Polarised) | TR | 1 | 2.0 | 2.12 | 4 | 1.03 |
+| Synthetic 3 (Polarised) | TLL | 1 | 2.0 | 2.08 | 4 | 0.97 |
+| Synthetic 4 (High-CPI) | LL | 1 | 1.0 | 1.46 | 4 | 0.72 |
+| Synthetic 4 (High-CPI) | ALL | 1 | 1.0 | 1.46 | 4 | 0.72 |
+| Synthetic 4 (High-CPI) | CF | 1 | 1.0 | 1.21 | 3 | 0.51 |
+| Synthetic 4 (High-CPI) | TR | 1 | 2.0 | 2.42 | 5 | 1.21 |
+| Synthetic 4 (High-CPI) | TLL | 1 | 2.0 | 2.38 | 4 | 1.13 |
 
 ---
 
-## 7. Policy Recommendation
+## 7. Summary and Policy Guidance
 
-### 7a. Threshold-based win count
+### 7a. Win counts (best policy per dataset per metric)
 
-Only differences that cross the significance threshold count as wins.
-Overflow Count and % In Window are excluded — subsumed by NPSS.
+A win is counted only when the best policy exceeds the runner-up by ≥ threshold.
 
-| Metric | `least_loaded` wins | `cpi_fill` wins | Draws |
-|--------|--------------------|--------------------|-------|
-| NPSS (primary, threshold 0.04) | 0 | 0 | 5 |
-| PSI (secondary, threshold 0.025) | 1 | 0 | 4 |
-| MSES (threshold 0.5) | 4 | 0 | 1 |
-| Equity Retention % (threshold 5.0%) | 2 | 1 | 2 |
-| CPI Skewness | *(diagnostic — see per-dataset notes in §6)* | | |
-| Overflow Count | *(diagnostic — subsumed by NPSS)* | | |
-| % In Window | *(diagnostic — subsumed by NPSS)* | | |
+| Metric | Threshold | LL | ALL | CF | TR | TLL | Draw |
+|--------|-----------|---|---|---|---|---|-----|
+| NPSS | ≥ 0.04 | 0 | 0 | 3 | 0 | 0 | 3 |
+| PSI | ≥ 0.025 | 0 | 0 | 4 | 1 | 0 | 1 |
+| Avg MSES | ≥ 0.5 | 0 | 0 | 3 | 2 | 0 | 1 |
+| Equity Ret% | ≥ 5.0 | 0 | 0 | 0 | 1 | 1 | 4 |
 
-### 7b. When to use each policy
+### 7b. Policy guidance
 
-### When to use `least_loaded`
-
-- When **equitable treatment of students** across CPI tiers is important: placement
-  depends on faculty load, not student CPI rank.
-- When **robustness to clustered demand** is a priority: load-spreading is less likely
-  to exhaust popular advisor capacity early.
-- As the **safe default** when cohort structure is unknown.
-
-### When to use `cpi_fill`
-
-- When **rewarding academic merit** is an explicit institutional goal: high-CPI students
-  get first access to their preferred advisors.
-- When **no empty labs** is a hard requirement: Phase 2 structurally guarantees this.
-- In **random or weakly correlated preference** cohorts: the only threshold-crossing NPSS
-  win in this study occurs here (Δ=+0.083).
-
-### 7c. Summary
-
-> **The honest conclusion is that neither policy is uniformly superior.**
-> Across the datasets, NPSS is the primary comparison metric; advisor entropy is the
-> preferred advisor-equity metric; CPI skewness is a diagnostic cross-check whose
-> direction can reverse across cohort types and should not be used alone to declare
-> a policy winner. The two policies converge on nearly identical outcomes in typical
-> cohorts. The choice is a value judgement about institutional priorities, not a
-> metric-determined optimum.
->
-> - Choose `cpi_fill` if the institution explicitly rewards academic merit in advisor
->   matching. Verify with NPSS; check entropy to confirm advisor-equity is acceptable.
-> - Choose `least_loaded` if equitable treatment across tiers, robustness to clustered
->   demand, or predictability of outcomes is the priority.
-> - Do not use CPI skewness alone to justify either choice; use it alongside entropy
->   as a supplementary diagnostic.
+| Policy | Best when… | Empty-lab guarantee | Operator involvement |
+|--------|-----------|---------------------|----------------------|
+| `least_loaded` | Load balance is paramount; safe default | Indirect | None |
+| `adaptive_ll` | Structural empty-lab risk detected in Phase 0 | Yes (S ≥ F) | None |
+| `cpi_fill` | Merit-first access is an explicit goal | Yes (S ≥ F) | None |
+| `tiered_rounds` | Full transparency and auditability required | No | GUI: manual tie-break |
+| `tiered_ll` | Transparent early rounds + coverage guarantee | Yes (S ≥ F) | GUI: manual tie-break in rounds |
 
 ---
 
-*Report generated by `stats/run_study.py` using the IISER-B MS Thesis Allocator engine.*
+*Report generated by `stats/run_study.py` — IISER-B MS Thesis Allocator engine.*
