@@ -140,5 +140,7 @@ class TieredRoundsState:
     pending_tie: Optional[PendingTie]   # current tie awaiting resolution
     pending_tie_queue: List[PendingTie] # remaining ties in the current round
     trace_log: List[Dict[str, Any]]     # round-by-round audit records
-    status: str                         # "running"|"awaiting_tie"|"complete"|"stalled"
+    status: str                         # "running"|"awaiting_tie"|"awaiting_round_picks"|"complete"|"stalled"|"switch_to_backfill"
     stall_unassigned: List[str]         # IDs of students that could not be assigned
+    # populated when status == "awaiting_round_picks": advisor_id → [student_ids] sorted by CPI desc
+    pending_round_groups: Dict[str, List[str]] = field(default_factory=dict)
