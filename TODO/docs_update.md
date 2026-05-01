@@ -25,12 +25,6 @@ features. Each doc should be self-contained and verifiable against the current c
   baseline-sufficient (✓ modal).
 - [ ] Document structural deficit flag and recommended fallback policies.
 
-### `docs/policy_nonempty.md`
-- [ ] Verify assignment rule: highest-preferred empty lab first; falls back to
-  highest-preferred advisor with remaining capacity.
-- [ ] Confirm no Phase 0b or cap optimization step.
-- [ ] Remove any stale metric references.
-
 ### `docs/policy_cpi_fill.md`
 - [ ] Verify Phase 1 stopping condition: stop when `unassigned == empty_labs`.
 - [ ] Verify Phase 2: each remaining student → highest-preferred empty lab (full
@@ -95,16 +89,15 @@ features. Each doc should be self-contained and verifiable against the current c
 
 - [ ] Regenerate by running `stats/run_study.py` (or the new `analyze study`
   subcommand once available) after all policy CLI changes land.
-- [ ] Expand to include `adaptive_ll` and `nonempty` alongside `least_loaded` and
-  `cpi_fill` (current report only covers the latter two).
+- [ ] Expand to include `adaptive_ll`, `tiered_rounds`, and `tiered_ll` alongside
+  `least_loaded` and `cpi_fill` (current report only covers the latter two).
 - [ ] Add `tiered_rounds` column once `--auto-tiebreak` CLI flag is available.
 
 ---
 
 ## 5. `CLAUDE.md`
 
-- [ ] Update policy table: add `adaptive_ll` row with description; update `nonempty`
-  and `tiered_rounds` rows if stale.
+- [ ] Update policy table: add/verify `adaptive_ll`, `tiered_rounds`, and `tiered_ll` rows.
 - [ ] Add `tiered_ll` row (marked as "forthcoming") once the TODO is underway.
 - [ ] Update NPSS formula section to match current full-list denominator.
 - [ ] Update **Commands** section to match CLI TODO (new `analyze` subcommand,

@@ -64,7 +64,7 @@ were already in the codebase. Real data anonymization can now be re-run cleanly.
 | [`docs_update.md`](docs_update.md) | Audit and rewrite all docs (`policy_*.md`, `NPSS_Metric.md`, `MSThesisAllocationProtocol.md`, `user_manual.md`, `policy_report.md`, `CLAUDE.md`) to reflect current code. Add `docs/policy_tiered_ll.md`. Regenerate PDFs. |
 
 **Notes:**
-- Existing policy docs (LL, adaptive-LL, CPI-Fill, nonempty, tiered_rounds) and metric
+- Existing policy docs (LL, adaptive-LL, CPI-Fill, tiered_rounds) and metric
   docs can be updated as soon as their implementations are stable — no need to wait for
   Steps 2–4 to complete those sections.
 - `tiered_ll` doc and the updated `policy_report.md` must wait for Steps 2 and 4.

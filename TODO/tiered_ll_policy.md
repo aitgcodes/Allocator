@@ -113,7 +113,7 @@ or adjusts k during the actual run based on live reachability.
   full → overflow students reported, not silently unassigned.
 - [ ] `test_meta_fields_always_present`: `k_crit_static`, `dry_run_empty_labs`,
   `dry_run_rounds_total` in meta after phase0.
-- [ ] Regression: `tiered_rounds`, `least_loaded`, `cpi_fill`, `nonempty` unaffected.
+- [ ] Regression: `tiered_rounds`, `least_loaded`, `cpi_fill`, `adaptive_ll` unaffected.
 
 ---
 
