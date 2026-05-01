@@ -18,7 +18,7 @@ Round 1 is **not run** under this policy. The two-phase procedure replaces both 
 
 ### Phase 0 — Tiering and parameter setup
 
-Identical to `least_loaded` and `nonempty`. Students are tiered by CPI percentile (or quartile), `N_tier` windows are set, and faculty `max_load` is determined. The tier information is computed but is not used during the assignment phases — `cpi_fill` does not apply tier-based preference windows. All students draw from their full preference list.
+Identical to `least_loaded`. Students are tiered by CPI percentile (or quartile), `N_tier` windows are set, and faculty `max_load` is determined. The tier information is computed but is not used during the assignment phases — `cpi_fill` does not apply tier-based preference windows. All students draw from their full preference list.
 
 ---
 

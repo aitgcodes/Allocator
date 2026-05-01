@@ -605,7 +605,6 @@ def advisor_tier_heatmap(
 _POLICY_COLOURS = {
     "least_loaded": "#2196F3",   # blue
     "cpi_fill":     "#FF9800",   # orange
-    "nonempty":     "#43A047",   # green
 }
 _FALLBACK_COLOURS = ["#9C27B0", "#E53935", "#00BCD4"]
 

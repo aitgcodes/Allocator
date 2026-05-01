@@ -186,7 +186,6 @@ Navigate to **http://localhost:8050**. The landing page shows a policy selector 
 Choose one of the four allocation policies on the landing page:
 
 - **Least Loaded (`least_loaded`)** — the default; assigns each student to the least-loaded eligible advisor within their tier preference window.
-- **Highest Preferred with Vacancy (`nonempty`)** — like `least_loaded` but steers students toward empty labs first.
 - **CPI Fill (`cpi_fill`)** — merit-first; processes students in strict descending CPI order; no tier window applied.
 - **CPI-Tiered Preference Rounds (`tiered_rounds`)** — round-based; in round *n* each student offers their *n*-th preference; CPI breaks ties; manual pick required when top CPI is tied.
 
@@ -209,7 +208,7 @@ Click **Run Phase 0 only** to tier students and compute faculty capacities witho
 
 #### Step 5 — Complete the allocation
 
-- **`least_loaded` / `nonempty`:** Confirm Round-1 picks (default: highest-CPI student per advisor), then proceed to main allocation, making or confirming each assignment.
+- **`least_loaded`:** Confirm Round-1 picks (default: highest-CPI student per advisor), then proceed to main allocation, making or confirming each assignment.
 - **`cpi_fill`:** Run Phase 1 (manual or auto), then Phase 2.
 - **`tiered_rounds`:** The engine runs rounds automatically until a CPI tie is detected. Resolve each tie using the dropdown; the engine resumes automatically.
 
@@ -310,7 +309,7 @@ PYTHONPATH=src python -m allocator.allocation \
   --out      reports/
 ```
 
-The `--policy` flag accepts `least_loaded`, `nonempty`, or `cpi_fill`.
+The `--policy` flag accepts `least_loaded` or `cpi_fill`.
 
 ---
 
@@ -332,7 +331,7 @@ Students are divided into tiers based on cohort CPI percentiles:
 
 If more than 40% of students cluster in one band, tiering switches to **quartile mode** (A / B1 / B2 / C). If the cohort has fewer than 10 students, all are placed in Class A with `N_tier = 2`.
 
-`N_tier` is used as the **assignment window** in `least_loaded` and `nonempty`. For `cpi_fill` and `tiered_rounds` it is computed but not applied during assignment — it appears in the per-tier diagnostics only.
+`N_tier` is used as the **assignment window** in `least_loaded`. For `cpi_fill` and `tiered_rounds` it is computed but not applied during assignment — it appears in the per-tier diagnostics only.
 
 #### Faculty capacity
 
@@ -387,31 +386,7 @@ Load balance is the **primary criterion**; preference rank is the **tiebreaker**
 
 ---
 
-### 3.3 Policy: Highest Preferred with Vacancy (`nonempty`)
-
-#### Overview
-
-`nonempty` is a **load-distribution variant** of `least_loaded`. It runs the same Phase 0 → Round 1 → Main Allocation pipeline but changes the advisor selection rule: instead of always choosing the advisor with the minimum current load, it **actively seeks out empty labs** first. Only if no empty lab exists within the student's preference window does it fall back to the least-loaded advisor.
-
-#### Assignment rule
-
-Given a student and their eligible candidate advisors (those within `N_tier` with remaining capacity):
-
-1. **If any empty lab exists** within the eligible set: assign to the **highest-preferred empty lab** (earliest in the student's preference list).
-2. **Otherwise:** assign to the **highest-preferred advisor** with remaining capacity (earliest in list, regardless of current load).
-
-#### Properties
-
-| Property | Behaviour |
-|----------|-----------|
-| Empty-lab guarantee | Strong — aggressively fills empty labs before considering non-empty ones |
-| Preference satisfaction (PSI) | Similar to `least_loaded`; can be slightly better or worse depending on preference alignment |
-| Load balance | Moderate — once all labs have students, degenerates to a pure highest-preference-within-window rule |
-| Merit sensitivity (NPSS) | Similar to `least_loaded` — no explicit CPI ordering beyond the tier window |
-
----
-
-### 3.4 Policy: CPI Fill (`cpi_fill`)
+### 3.3 Policy: CPI Fill (`cpi_fill`)
 
 #### Overview
 
@@ -497,18 +472,18 @@ No separate Round 1 or class-wise main allocation. Phase 0 tier classification i
 
 ### 3.6 Policy comparison
 
-| Aspect | `least_loaded` | `nonempty` | `cpi_fill` | `tiered_rounds` |
-|--------|----------------|------------|------------|-----------------|
-| Round 1 | Yes | Yes | No | No |
-| Processing order | Tier-by-tier | Tier-by-tier | Strict descending CPI | Round-by-preference-rank |
-| Preference window | Applied per tier; overflow possible via promotion cascade | Applied per tier; overflow possible via promotion cascade | Full list | Full list (N_tier diagnostic only) |
-| Primary assignment criterion | Min load | Emptiness → preference | First pref with capacity | Highest CPI in round |
-| Tie-breaking | Preference rank | Preference rank | Student ID | Manual operator pick |
-| Empty-lab guarantee | Indirect | Strong | Explicit (Phase 2) | Implicit |
-| Merit sensitivity (NPSS) | Moderate | Moderate | High | High |
-| Equal-weighted satisfaction (PSI) | Cohort-dependent | Cohort-dependent | Cohort-dependent | High in balanced cohorts |
-| Load balance | Strong | Moderate | Variable | Implicit |
-| CLI available | Yes | Yes | Yes | No (GUI only) |
+| Aspect | `least_loaded` | `cpi_fill` | `tiered_rounds` |
+|--------|----------------|------------|-----------------|
+| Round 1 | Yes | No | No |
+| Processing order | Tier-by-tier | Strict descending CPI | Round-by-preference-rank |
+| Preference window | Applied per tier; overflow possible via promotion cascade | Full list | Full list (N_tier diagnostic only) |
+| Primary assignment criterion | Min load | First pref with capacity | Highest CPI in round |
+| Tie-breaking | Preference rank | Student ID | Manual operator pick |
+| Empty-lab guarantee | Indirect | Explicit (Phase 2) | Implicit |
+| Merit sensitivity (NPSS) | Moderate | High | High |
+| Equal-weighted satisfaction (PSI) | Cohort-dependent | Cohort-dependent | High in balanced cohorts |
+| Load balance | Strong | Variable | Implicit |
+| CLI available | Yes | Yes | No (GUI only) |
 
 > **Note:** PSI and advisor entropy outcomes are cohort-sensitive. Neither policy dominates consistently across all cohort types. See Section 3.8 for guidance on interpretation.
 
@@ -589,7 +564,7 @@ The overflow count reports the number of students assigned **beyond their tier `
 
 All four policies can produce overflow, but through different mechanisms:
 
-- **`least_loaded` / `nonempty`**: the N_tier window is applied first; a student is only promoted to a wider pool (B → C, or A → B → C) when every advisor within their current window is at capacity. Overflow occurs when the promotion chain ends at the Class C full-list round and the assigned rank exceeds the original N_tier. This is anomalous — it only happens under very tight capacity — and is flagged as a **red warning badge**.
+- **`least_loaded`**: the N_tier window is applied first; a student is only promoted to a wider pool (B → C, or A → B → C) when every advisor within their current window is at capacity. Overflow occurs when the promotion chain ends at the Class C full-list round and the assigned rank exceeds the original N_tier. This is anomalous — it only happens under very tight capacity — and is flagged as a **red warning badge**.
 - **`cpi_fill` / `tiered_rounds`**: no N_tier window is applied during assignment; overflow is a structural feature of the protocol. For `tiered_rounds` in particular, a student reaches round *n* naturally when their first *n*−1 preferences were claimed by others, so assignments beyond N_tier are expected and routine. These are shown as a **blue informational badge**, not an error.
 
 #### Advisor Satisfaction Metrics
@@ -684,7 +659,7 @@ When interpreting a single run or comparing policies, use this hierarchy:
 
 8. **CPI Skewness** *(diagnostic)* — cross-check for CPI concentration in the advisor mean-CPI distribution. Already std-normalized (scale-invariant). `|γ| > 1.0` warrants attention. Use alongside ERR, not as a standalone verdict.
 
-9. **Overflow Count** *(protocol-compliance diagnostic)* — reports placements beyond the tier `N_tier` window. For window-applying policies (`least_loaded`, `nonempty`) this signals near-overflow stress. For `cpi_fill` and `tiered_rounds` — which apply no window during assignment — it is purely informational (blue badge, not red). It does not affect NPSS.
+9. **Overflow Count** *(protocol-compliance diagnostic)* — reports placements beyond the tier `N_tier` window. For window-applying policies (`least_loaded`) this signals near-overflow stress. For `cpi_fill` and `tiered_rounds` — which apply no window during assignment — it is purely informational (blue badge, not red). It does not affect NPSS.
 
 **If metrics disagree:** this is normal. The four policies trade off across dimensions rather than one uniformly dominating. The choice is a value judgement about institutional priorities — merit-weighted access, equitable treatment, load balance, or operator transparency — not a metric-determined optimum.
 
