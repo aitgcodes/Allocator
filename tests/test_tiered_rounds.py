@@ -20,8 +20,11 @@ from src.allocator.allocation import (
     main_allocation,
     phase0,
     round1,
+    tiered_rounds_apply_picks,
+    tiered_rounds_continue_unconstrained,
     tiered_rounds_resume,
     tiered_rounds_start,
+    tiered_rounds_start_interactive,
 )
 from src.allocator.state import Faculty, SnapshotList, Student
 
@@ -362,3 +365,207 @@ def test_regression_cpi_fill():
     fl = {f.id: 0 for f in f_up}
     assignments, snaps, _ = cpi_fill_allocation(s_up, f_up, assignments, fl, snaps)
     assert all(v is not None for v in assignments.values())
+
+
+# ---------------------------------------------------------------------------
+# Tests for interactive (manual) engine path
+# ---------------------------------------------------------------------------
+
+def test_interactive_basic_manual_progression():
+    """
+    3 students, 3 advisors, all distinct first preferences.
+    Round 1 should have 3 advisor groups each with 1 candidate.
+    Confirming the default picks (highest CPI = only candidate) completes allocation.
+    """
+    students = [
+        _student("S1", "Alice",   9.0, ["F1", "F2", "F3"]),
+        _student("S2", "Bob",     8.0, ["F2", "F1", "F3"]),
+        _student("S3", "Charlie", 7.0, ["F3", "F1", "F2"]),
+    ]
+    faculty = [
+        _faculty("F1", "Prof A", 1),
+        _faculty("F2", "Prof B", 1),
+        _faculty("F3", "Prof C", 1),
+    ]
+    s_up, f_up, snaps = _phase0_snaps(students, faculty)
+    tr = tiered_rounds_start_interactive(s_up, f_up, snaps)
+
+    assert tr.status == "awaiting_round_picks"
+    assert tr.round_no == 1
+    assert set(tr.pending_round_groups.keys()) == {"F1", "F2", "F3"}
+    # Each advisor has exactly one candidate
+    assert all(len(v) == 1 for v in tr.pending_round_groups.values())
+
+    # Confirm picks: take the only candidate for each advisor
+    picks = {fid: sids[0] for fid, sids in tr.pending_round_groups.items()}
+    tr = tiered_rounds_apply_picks(tr, picks)
+
+    assert tr.status == "complete"
+    assert all(v is not None for v in tr.assignments.values())
+    assert len(tr.trace_log) == 1
+    assert len(tr.trace_log[0]["manual_decisions"]) == 3
+
+
+def test_interactive_multi_round_progression():
+    """
+    S1 and S2 both prefer F1 first; S1 wins (higher CPI).
+    Round 2 S2 moves to F2.  Two manual rounds to complete.
+    """
+    students = [
+        _student("S1", "Alice", 9.0, ["F1", "F2"]),
+        _student("S2", "Bob",   8.0, ["F1", "F2"]),
+    ]
+    faculty = [
+        _faculty("F1", "Prof A", 1),
+        _faculty("F2", "Prof B", 1),
+    ]
+    s_up, f_up, snaps = _phase0_snaps(students, faculty)
+    tr = tiered_rounds_start_interactive(s_up, f_up, snaps)
+
+    assert tr.status == "awaiting_round_picks"
+    assert tr.round_no == 1
+    # Both target F1; S1 is top candidate
+    assert "F1" in tr.pending_round_groups
+    assert tr.pending_round_groups["F1"][0] == "S1"
+
+    picks = {fid: sids[0] for fid, sids in tr.pending_round_groups.items()}
+    tr = tiered_rounds_apply_picks(tr, picks)
+
+    # S2 still unassigned → round 2
+    assert tr.status == "awaiting_round_picks"
+    assert tr.round_no == 2
+    assert "F2" in tr.pending_round_groups
+
+    picks2 = {fid: sids[0] for fid, sids in tr.pending_round_groups.items()}
+    tr = tiered_rounds_apply_picks(tr, picks2)
+
+    assert tr.status == "complete"
+    assert tr.assignments["S1"] == "F1"
+    assert tr.assignments["S2"] == "F2"
+
+
+def test_interactive_missing_pick_raises():
+    """
+    Omitting a required advisor from picks raises a clear ValueError.
+    """
+    students = [
+        _student("S1", "Alice", 9.0, ["F1", "F2"]),
+        _student("S2", "Bob",   8.0, ["F2", "F1"]),
+    ]
+    faculty = [
+        _faculty("F1", "Prof A", 1),
+        _faculty("F2", "Prof B", 1),
+    ]
+    s_up, f_up, snaps = _phase0_snaps(students, faculty)
+    tr = tiered_rounds_start_interactive(s_up, f_up, snaps)
+
+    assert tr.status == "awaiting_round_picks"
+    # Provide only one of the two required picks
+    partial_picks = {"F1": tr.pending_round_groups["F1"][0]}
+    with pytest.raises(ValueError, match="missing"):
+        tiered_rounds_apply_picks(tr, partial_picks)
+
+
+def test_interactive_null_round_auto_advance():
+    """
+    Round 1: S1 → F1, F1 becomes saturated.
+    Round 2: S2's only preference is F1 (saturated) → null round auto-advances.
+    Round 3: S2's next preference is F2 → assigned.
+    """
+    students = [
+        _student("S1", "Alice", 9.0, ["F1", "F2"]),
+        _student("S2", "Bob",   8.0, ["F1", "F2"]),
+    ]
+    faculty = [
+        _faculty("F1", "Prof A", 1),
+        _faculty("F2", "Prof B", 1),
+    ]
+    s_up, f_up, snaps = _phase0_snaps(students, faculty)
+    # Use stop_at_round=None; S2 preference list length forces round 2 to be null
+    tr = tiered_rounds_start_interactive(s_up, f_up, snaps)
+
+    assert tr.status == "awaiting_round_picks"
+    assert tr.round_no == 1
+    # Assign S1 to F1 (saturates it)
+    picks = {"F1": "S1"}
+    tr = tiered_rounds_apply_picks(tr, picks)
+
+    # Round 2 would be null (S2 targets saturated F1); should auto-advance to round 2→F2
+    # The engine skips the null round internally and returns awaiting_round_picks for F2
+    assert tr.status == "awaiting_round_picks"
+    assert "F1" not in tr.pending_round_groups  # saturated, skipped
+    assert "F2" in tr.pending_round_groups
+
+    picks2 = {"F2": "S2"}
+    tr = tiered_rounds_apply_picks(tr, picks2)
+    assert tr.status == "complete"
+    assert tr.assignments["S2"] == "F2"
+
+
+def test_interactive_stop_at_round_switch_to_backfill():
+    """
+    stop_at_round=2: after round 1 the engine should return switch_to_backfill
+    without proceeding to round 2.
+    tiered_rounds_continue_unconstrained then resumes without a cap.
+    """
+    students = [
+        _student("S1", "Alice", 9.0, ["F1", "F2"]),
+        _student("S2", "Bob",   8.0, ["F2", "F1"]),
+    ]
+    faculty = [
+        _faculty("F1", "Prof A", 1),
+        _faculty("F2", "Prof B", 1),
+    ]
+    s_up, f_up, snaps = _phase0_snaps(students, faculty)
+    tr = tiered_rounds_start_interactive(s_up, f_up, snaps, stop_at_round=2)
+
+    assert tr.status == "awaiting_round_picks"
+    assert tr.round_no == 1
+
+    picks = {fid: sids[0] for fid, sids in tr.pending_round_groups.items()}
+    tr = tiered_rounds_apply_picks(tr, picks, stop_at_round=2)
+
+    # Both students assigned in round 1 (distinct first prefs) → complete, not switch
+    # Adjust: make only one assigned so round 2 would be needed
+    # Re-run with a scenario where one student is unassigned after round 1
+    students2 = [
+        _student("S1", "Alice", 9.0, ["F1", "F2"]),
+        _student("S2", "Bob",   8.0, ["F1", "F2"]),
+    ]
+    s_up2, f_up2, snaps2 = _phase0_snaps(students2, faculty)
+    tr2 = tiered_rounds_start_interactive(s_up2, f_up2, snaps2, stop_at_round=2)
+
+    assert tr2.status == "awaiting_round_picks"
+    picks2 = {"F1": "S1"}  # only F1 has candidates; S2 will be unassigned
+    tr2 = tiered_rounds_apply_picks(tr2, picks2, stop_at_round=2)
+
+    assert tr2.status == "switch_to_backfill"
+
+    # Continuing unconstrained should present round 2 for S2
+    tr2 = tiered_rounds_continue_unconstrained(tr2)
+    assert tr2.status == "awaiting_round_picks"
+    assert tr2.round_no == 2
+
+
+def test_interactive_rank_uses_round_number():
+    """
+    Preference rank stored in snapshots equals round_no, not list.index().
+    """
+    students = [
+        _student("S1", "Alice", 9.0, ["F1", "F2"]),
+        _student("S2", "Bob",   8.0, ["F2", "F1"]),
+    ]
+    faculty = [
+        _faculty("F1", "Prof A", 1),
+        _faculty("F2", "Prof B", 1),
+    ]
+    s_up, f_up, snaps = _phase0_snaps(students, faculty)
+    tr = tiered_rounds_start_interactive(s_up, f_up, snaps)
+
+    picks = {fid: sids[0] for fid, sids in tr.pending_round_groups.items()}
+    tr = tiered_rounds_apply_picks(tr, picks)
+
+    assert tr.status == "complete"
+    # Both students assigned at round 1; each snapshot for a pick should record rank=1
+    pick_snaps = [s for s in tr.snapshots if s.preference_rank]
+    assert all(rank == 1 for s in pick_snaps for rank in s.preference_rank.values())

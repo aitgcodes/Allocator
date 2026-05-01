@@ -107,9 +107,12 @@ from .allocation import (
     run_full_allocation,
     simulate_tiers_ab,
     tiered_ll_backfill,
+    tiered_rounds_apply_picks,
+    tiered_rounds_continue_unconstrained,
     tiered_rounds_dry_run,
     tiered_rounds_resume,
     tiered_rounds_start,
+    tiered_rounds_start_interactive,
 )
 from .metrics import compute_metrics
 
@@ -1668,6 +1671,61 @@ def _run_tiered_ll_backfill_and_finalize(tr_state, k_crit, snaps, marks):
     )
 
 
+def _handle_tr_state(tr_state, snaps, marks):
+    """
+    Dispatch from a freshly-updated TieredRoundsState to the correct 7-tuple return.
+
+    Shared by cb_tr_start_manual, cb_tr_confirm_round, cb_tr_continue_unconstrained,
+    and the auto-run path.  Updates _app_state phase.
+    """
+    n = len(snaps)
+    marks = {i: str(snaps[i].step) for i in range(0, n, max(1, n // 10))}
+
+    if tr_state.status == "awaiting_round_picks":
+        _app_state["phase"] = "tr_round_pending"
+        groups = tr_state.pending_round_groups
+        k_crit = _app_state.get("meta", {}).get("k_crit_static")
+        round_label = (f"Round {tr_state.round_no}/{k_crit}"
+                       if k_crit is not None else f"Round {tr_state.round_no}")
+        msg = (f"{round_label}: {len(groups)} advisor(s) have applicants — "
+               "confirm picks below.")
+        return msg, "tr_round_pending", n - 1, marks, n - 1, dash.no_update, dash.no_update
+
+    if tr_state.status == "switch_to_backfill":
+        _app_state["phase"] = "tr_round_pending"
+        k_crit = _app_state.get("meta", {}).get("k_crit_static", "?")
+        unassigned = sum(1 for v in tr_state.assignments.values() if v is None)
+        empty_labs = sum(1 for f in tr_state.faculty
+                         if tr_state.faculty_loads.get(f.id, 0) == 0)
+        msg = (f"k_crit={k_crit} | Phase 1 complete — {unassigned} unassigned, "
+               f"{empty_labs} empty lab(s). Choose: backfill or continue rounds.")
+        return msg, "tr_round_pending", n - 1, marks, n - 1, dash.no_update, dash.no_update
+
+    if tr_state.status == "awaiting_tie":
+        _app_state["phase"] = "tr_tie_pending"
+        tie = tr_state.pending_tie
+        remaining = len(tr_state.pending_tie_queue)
+        k_crit = _app_state.get("meta", {}).get("k_crit_static")
+        if ALLOCATION_POLICY == "tiered_ll" and k_crit is not None:
+            msg = (f"k_crit={k_crit} | Round {tie.round_no}/{k_crit}: "
+                   f"tie-break required for {tie.advisor_name}"
+                   + (f" ({remaining} more)" if remaining else "") + ".")
+        else:
+            msg = (f"Round {tie.round_no}: tie-break required for {tie.advisor_name}"
+                   + (f" ({remaining} more)" if remaining else "") + ".")
+        return msg, "tr_tie_pending", n - 1, marks, n - 1, dash.no_update, dash.no_update
+
+    if tr_state.status == "complete":
+        k_crit = _app_state.get("meta", {}).get("k_crit_static")
+        return _finalize_tr_complete(tr_state, snaps, marks,
+                                     k_crit=k_crit, backfill_ran=False)
+
+    if tr_state.status == "stalled":
+        return _finalize_tr_stalled(tr_state, snaps, marks)
+
+    return ("⚠ Unexpected engine state.", "idle", 0, {}, 0, dash.no_update, dash.no_update)
+
+
 # ---------------------------------------------------------------------------
 # Callbacks — run buttons
 # ---------------------------------------------------------------------------
@@ -1759,6 +1817,9 @@ def cb_run(n_phase0, n_full, loaded):
                         f"at round {k}, switch after round {k}")
             return base + " | (dry-run pending)"
 
+        if ALLOCATION_POLICY == "tiered_rounds":
+            return base + " | No empty-lab guarantee — outcome depends on preference structure"
+
         risk = check_empty_lab_risk(students, faculty, meta)
         if risk is None:
             return base + " | ✓ Empty-lab check passed"
@@ -1772,6 +1833,9 @@ def cb_run(n_phase0, n_full, loaded):
         was needed.
         """
         S, F_count = len(students), len(faculty)
+        # tiered_rounds has no empty-lab guarantee; skip the risk model entirely.
+        if ALLOCATION_POLICY == "tiered_rounds":
+            return None
         # Mirror check_empty_lab_risk exactly: exclude Tier-C students who win a
         # simulated Round-1 slot (highest-CPI wins each faculty's first-choice bucket).
         r1_ids = _r1_assigned_ids(students, faculty)
@@ -1931,72 +1995,25 @@ def cb_run(n_phase0, n_full, loaded):
                                 "Review the risk warning to proceed or switch policy.")
                 return warn_msg, "risk_warning", max(0, n-1), marks, max(0, n-1), dash.no_update, risk_data
 
-        # tiered_rounds: Phase 0 → start engine immediately (no Round 1)
-        if ALLOCATION_POLICY == "tiered_rounds":
-            try:
-                tr_state = tiered_rounds_start(students, faculty, snaps)
-            except Exception as e:
-                return f"✗ Tiered-rounds error: {e}", "idle", 0, {}, 0, dash.no_update, dash.no_update
-            _app_state["tr_state"]  = tr_state
-            _app_state["snapshots"] = tr_state.snapshots
-            snaps = tr_state.snapshots
+        # tiered_rounds / tiered_ll: Phase 0 done — present mode choice in card 3.
+        if ALLOCATION_POLICY in ("tiered_rounds", "tiered_ll"):
+            if ALLOCATION_POLICY == "tiered_ll":
+                meta = _app_state["meta"]
+                if "k_crit_static" not in meta:
+                    try:
+                        _run_tiered_ll_dry_run(students, faculty, meta)
+                    except Exception as e:
+                        return f"✗ Dry-run error: {e}", "idle", 0, {}, 0, dash.no_update, dash.no_update
+                k_crit = meta["k_crit_static"]
+                msg = (f"Phase 0 complete — k_crit={k_crit}. "
+                       "Choose how to run preference rounds below.")
+            else:
+                msg = (f"Phase 0 complete — {len(students)} students. "
+                       "Choose how to run preference rounds below.")
+            _app_state["phase"] = "phase0_done"
             n = len(snaps)
             marks = {i: str(snaps[i].step) for i in range(0, n, max(1, n // 10))}
-            if tr_state.status == "awaiting_tie":
-                tie = tr_state.pending_tie
-                remaining = len(tr_state.pending_tie_queue)
-                msg = (
-                    f"Phase 0 complete. Round {tie.round_no}: manual tie-break required "
-                    f"for {tie.advisor_name}"
-                    + (f" ({remaining} more tie(s) in this round)" if remaining else "")
-                    + "."
-                )
-                _app_state["phase"] = "tr_tie_pending"
-                return msg, "tr_tie_pending", n - 1, marks, n - 1, dash.no_update, dash.no_update
-            if tr_state.status == "complete":
-                return _finalize_tr_complete(tr_state, snaps, marks)
-            if tr_state.status == "stalled":
-                return _finalize_tr_stalled(tr_state, snaps, marks)
-            return "⚠ Unexpected engine state.", "idle", 0, {}, 0, dash.no_update, dash.no_update
-
-        # tiered_ll: Phase 0 → dry-run → tiered rounds 1..k_crit → auto backfill
-        if ALLOCATION_POLICY == "tiered_ll":
-            meta = _app_state["meta"]
-            if "k_crit_static" not in meta:
-                try:
-                    _run_tiered_ll_dry_run(students, faculty, meta)
-                except Exception as e:
-                    return f"✗ Dry-run error: {e}", "idle", 0, {}, 0, dash.no_update, dash.no_update
-            k_crit = meta["k_crit_static"]
-            try:
-                tr_state = tiered_rounds_start(students, faculty, snaps,
-                                               stop_at_round=k_crit + 1)
-            except Exception as e:
-                return f"✗ Tiered-rounds error: {e}", "idle", 0, {}, 0, dash.no_update, dash.no_update
-            _app_state["tr_state"]  = tr_state
-            _app_state["snapshots"] = tr_state.snapshots
-            snaps = tr_state.snapshots
-            n = len(snaps)
-            marks = {i: str(snaps[i].step) for i in range(0, n, max(1, n // 10))}
-
-            if tr_state.status == "switch_to_backfill":
-                return _run_tiered_ll_backfill_and_finalize(tr_state, k_crit, snaps, marks)
-            if tr_state.status == "awaiting_tie":
-                tie = tr_state.pending_tie
-                remaining = len(tr_state.pending_tie_queue)
-                msg = (
-                    f"k_crit={k_crit} | Round {tie.round_no}/{k_crit}: "
-                    f"tie-break required for {tie.advisor_name}"
-                    + (f" ({remaining} more tie(s) in this round)" if remaining else "")
-                    + "."
-                )
-                _app_state["phase"] = "tr_tie_pending"
-                return msg, "tr_tie_pending", n - 1, marks, n - 1, dash.no_update, dash.no_update
-            if tr_state.status == "complete":
-                return _finalize_tr_complete(tr_state, snaps, marks, k_crit, backfill_ran=False)
-            if tr_state.status == "stalled":
-                return _finalize_tr_stalled(tr_state, snaps, marks)
-            return "⚠ Unexpected tiered_ll engine state.", "idle", 0, {}, 0, dash.no_update, dash.no_update
+            return msg, "phase0_done", n - 1, marks, n - 1, dash.no_update, dash.no_update
 
         # CPI-Fill skips Round 1 — initialise empty assignments and wait for operator.
         if ALLOCATION_POLICY == "cpi_fill":
@@ -2327,11 +2344,29 @@ def cb_r1_panel(phase):
 
     # ---- tiered_rounds / tiered_ll phases ----
     if ALLOCATION_POLICY in ("tiered_rounds", "tiered_ll"):
-        if phase == "tr_tie_pending":
+        if phase == "phase0_done":
+            meta = _app_state.get("meta", {})
+            k_crit = meta.get("k_crit_static")
+            note = (f" Tiered rounds 1..{k_crit} will run, then LL-HP backfill."
+                    if k_crit is not None else "")
+            return html.Div([
+                html.P([html.Strong("Phase 0 complete."),
+                        f" {len(_app_state.get('students', []))} students ready "
+                        f"for preference rounds.{note}"],
+                       className="mb-3"),
+                html.Div([
+                    dbc.Button("Start preference rounds (manual) →",
+                               id="btn-tr-start-manual", color="success"),
+                    dbc.Button("Auto-run →",
+                               id="btn-tr-start-auto", color="primary",
+                               className="ms-2"),
+                ], className="d-flex"),
+            ])
+        if phase in ("tr_round_pending", "tr_tie_pending"):
             tr_state = _app_state.get("tr_state")
-            if tr_state and tr_state.status == "awaiting_tie":
+            if tr_state:
                 return _render_tiered_rounds_panel(tr_state)
-            return html.Span("Awaiting tie decision…", className="text-muted")
+            return html.Span("Awaiting round decision…", className="text-muted")
         if phase == "complete":
             tr_state = _app_state.get("tr_state")
             if tr_state:
@@ -2495,6 +2530,223 @@ def cb_tr_resolve(n_clicks, chosen_sid):
 
 
 # ---------------------------------------------------------------------------
+# Callback — start tiered rounds (manual mode)
+# ---------------------------------------------------------------------------
+
+@app.callback(
+    Output("r1-panel",         "children",  allow_duplicate=True),
+    Output("run-status",       "children",  allow_duplicate=True),
+    Output("store-phase",      "data",      allow_duplicate=True),
+    Output("step-slider",      "max",       allow_duplicate=True),
+    Output("step-slider",      "marks",     allow_duplicate=True),
+    Output("step-slider",      "value",     allow_duplicate=True),
+    Output("main-alloc-panel", "children",  allow_duplicate=True),
+    Input("btn-tr-start-manual", "n_clicks"),
+    prevent_initial_call=True,
+)
+def cb_tr_start_manual(n_clicks):
+    no_up7 = (dash.no_update,) * 7
+    if not n_clicks:
+        return no_up7
+    if not _app_state.get("students") or not _app_state.get("faculty") or _app_state.get("phase0_snapshots") is None:
+        return no_up7
+    students = _app_state["students"]
+    faculty  = _app_state["faculty"]
+    snaps    = _copy_snaps(_app_state["phase0_snapshots"])
+    _app_state["snapshots"] = snaps
+    stop_at = None
+    if ALLOCATION_POLICY == "tiered_ll":
+        k_crit = _app_state.get("meta", {}).get("k_crit_static")
+        if k_crit is not None:
+            stop_at = k_crit + 1
+    try:
+        tr_state = tiered_rounds_start_interactive(students, faculty, snaps,
+                                                   stop_at_round=stop_at)
+    except Exception as e:
+        return no_up7[0], f"✗ Error: {e}", *no_up7[2:]
+    _app_state["tr_state"]  = tr_state
+    _app_state["snapshots"] = tr_state.snapshots
+    snaps = tr_state.snapshots
+    n = len(snaps)
+    marks = {i: str(snaps[i].step) for i in range(0, n, max(1, n // 10))}
+    panel = _render_tiered_rounds_panel(tr_state)
+    msg, phase, sl_max, sl_marks, sl_val, _, _ = _handle_tr_state(tr_state, snaps, marks)
+    return panel, msg, phase, sl_max, sl_marks, sl_val, dash.no_update
+
+
+# ---------------------------------------------------------------------------
+# Callback — start tiered rounds (auto-run mode)
+# ---------------------------------------------------------------------------
+
+@app.callback(
+    Output("r1-panel",         "children",  allow_duplicate=True),
+    Output("run-status",       "children",  allow_duplicate=True),
+    Output("store-phase",      "data",      allow_duplicate=True),
+    Output("step-slider",      "max",       allow_duplicate=True),
+    Output("step-slider",      "marks",     allow_duplicate=True),
+    Output("step-slider",      "value",     allow_duplicate=True),
+    Output("main-alloc-panel", "children",  allow_duplicate=True),
+    Input("btn-tr-start-auto", "n_clicks"),
+    prevent_initial_call=True,
+)
+def cb_tr_start_auto(n_clicks):
+    no_up7 = (dash.no_update,) * 7
+    if not n_clicks:
+        return no_up7
+    students = _app_state.get("students")
+    faculty  = _app_state.get("faculty")
+    snaps    = _app_state.get("snapshots")
+    if not students or not faculty or snaps is None:
+        return no_up7
+    stop_at = None
+    if ALLOCATION_POLICY == "tiered_ll":
+        k_crit = _app_state.get("meta", {}).get("k_crit_static")
+        if k_crit is not None:
+            stop_at = k_crit + 1
+    try:
+        tr_state = tiered_rounds_start(students, faculty, snaps, stop_at_round=stop_at)
+    except Exception as e:
+        return no_up7[0], f"✗ Error: {e}", *no_up7[2:]
+    _app_state["tr_state"]  = tr_state
+    _app_state["snapshots"] = tr_state.snapshots
+    snaps = tr_state.snapshots
+    n = len(snaps)
+    marks = {i: str(snaps[i].step) for i in range(0, n, max(1, n // 10))}
+    panel = _render_tiered_rounds_panel(tr_state)
+    if tr_state.status == "switch_to_backfill" and ALLOCATION_POLICY == "tiered_ll":
+        k_crit = _app_state.get("meta", {}).get("k_crit_static")
+        msg, phase, sl_max, sl_marks, sl_val, fin, _ = _run_tiered_ll_backfill_and_finalize(
+            tr_state, k_crit, snaps, marks
+        )
+        return panel, msg, phase, sl_max, sl_marks, sl_val, fin
+    msg, phase, sl_max, sl_marks, sl_val, _, _ = _handle_tr_state(tr_state, snaps, marks)
+    return panel, msg, phase, sl_max, sl_marks, sl_val, dash.no_update
+
+
+# ---------------------------------------------------------------------------
+# Callback — confirm manual preference-round picks
+# ---------------------------------------------------------------------------
+
+@app.callback(
+    Output("r1-panel",         "children",  allow_duplicate=True),
+    Output("run-status",       "children",  allow_duplicate=True),
+    Output("store-phase",      "data",      allow_duplicate=True),
+    Output("step-slider",      "max",       allow_duplicate=True),
+    Output("step-slider",      "marks",     allow_duplicate=True),
+    Output("step-slider",      "value",     allow_duplicate=True),
+    Output("main-alloc-panel", "children",  allow_duplicate=True),
+    Input("btn-tr-confirm-round", "n_clicks"),
+    State({"type": "tr-round-pick", "index": dash.ALL}, "value"),
+    State({"type": "tr-round-pick", "index": dash.ALL}, "id"),
+    prevent_initial_call=True,
+)
+def cb_tr_confirm_round(n_clicks, pick_values, pick_ids):
+    no_up7 = (dash.no_update,) * 7
+    if not n_clicks:
+        return no_up7
+    tr_state = _app_state.get("tr_state")
+    if tr_state is None or tr_state.status != "awaiting_round_picks":
+        return no_up7
+    if not all(v is not None for v in pick_values):
+        return (
+            dash.no_update,
+            "⚠ Please select a student for every advisor before confirming.",
+            *no_up7[2:],
+        )
+    picks = {pid["index"]: pval for pid, pval in zip(pick_ids, pick_values)}
+    stop_at = None
+    if ALLOCATION_POLICY == "tiered_ll":
+        k_crit = _app_state.get("meta", {}).get("k_crit_static")
+        if k_crit is not None:
+            stop_at = k_crit + 1
+    try:
+        tr_state = tiered_rounds_apply_picks(tr_state, picks, stop_at_round=stop_at)
+    except Exception as e:
+        return (
+            dash.no_update,
+            f"✗ Error applying picks: {e}",
+            *no_up7[2:],
+        )
+    _app_state["tr_state"]  = tr_state
+    _app_state["snapshots"] = tr_state.snapshots
+    snaps = tr_state.snapshots
+    n = len(snaps)
+    marks = {i: str(snaps[i].step) for i in range(0, n, max(1, n // 10))}
+    panel = _render_tiered_rounds_panel(tr_state)
+    msg, phase, sl_max, sl_marks, sl_val, _, _ = _handle_tr_state(tr_state, snaps, marks)
+    return panel, msg, phase, sl_max, sl_marks, sl_val, dash.no_update
+
+
+# ---------------------------------------------------------------------------
+# Callback — tiered_ll: run LL-HP backfill after phase-1 decision
+# ---------------------------------------------------------------------------
+
+@app.callback(
+    Output("r1-panel",         "children",  allow_duplicate=True),
+    Output("run-status",       "children",  allow_duplicate=True),
+    Output("store-phase",      "data",      allow_duplicate=True),
+    Output("step-slider",      "max",       allow_duplicate=True),
+    Output("step-slider",      "marks",     allow_duplicate=True),
+    Output("step-slider",      "value",     allow_duplicate=True),
+    Output("main-alloc-panel", "children",  allow_duplicate=True),
+    Input("btn-tr-run-backfill", "n_clicks"),
+    prevent_initial_call=True,
+)
+def cb_tr_run_backfill(n_clicks):
+    no_up7 = (dash.no_update,) * 7
+    if not n_clicks:
+        return no_up7
+    tr_state = _app_state.get("tr_state")
+    if tr_state is None or tr_state.status != "switch_to_backfill":
+        return no_up7
+    k_crit = _app_state.get("meta", {}).get("k_crit_static")
+    snaps = tr_state.snapshots
+    n = len(snaps)
+    marks = {i: str(snaps[i].step) for i in range(0, n, max(1, n // 10))}
+    panel = _render_tiered_rounds_panel(tr_state)
+    msg, phase, sl_max, sl_marks, sl_val, fin, _ = _run_tiered_ll_backfill_and_finalize(
+        tr_state, k_crit, snaps, marks
+    )
+    return panel, msg, phase, sl_max, sl_marks, sl_val, fin
+
+
+# ---------------------------------------------------------------------------
+# Callback — tiered_ll: continue unconstrained rounds from switch_to_backfill
+# ---------------------------------------------------------------------------
+
+@app.callback(
+    Output("r1-panel",         "children",  allow_duplicate=True),
+    Output("run-status",       "children",  allow_duplicate=True),
+    Output("store-phase",      "data",      allow_duplicate=True),
+    Output("step-slider",      "max",       allow_duplicate=True),
+    Output("step-slider",      "marks",     allow_duplicate=True),
+    Output("step-slider",      "value",     allow_duplicate=True),
+    Output("main-alloc-panel", "children",  allow_duplicate=True),
+    Input("btn-tr-continue-unconstrained", "n_clicks"),
+    prevent_initial_call=True,
+)
+def cb_tr_continue_unconstrained(n_clicks):
+    no_up7 = (dash.no_update,) * 7
+    if not n_clicks:
+        return no_up7
+    tr_state = _app_state.get("tr_state")
+    if tr_state is None or tr_state.status != "switch_to_backfill":
+        return no_up7
+    try:
+        tr_state = tiered_rounds_continue_unconstrained(tr_state)
+    except Exception as e:
+        return no_up7[0], f"✗ Error: {e}", *no_up7[2:]
+    _app_state["tr_state"]  = tr_state
+    _app_state["snapshots"] = tr_state.snapshots
+    snaps = tr_state.snapshots
+    n = len(snaps)
+    marks = {i: str(snaps[i].step) for i in range(0, n, max(1, n // 10))}
+    panel = _render_tiered_rounds_panel(tr_state)
+    msg, phase, sl_max, sl_marks, sl_val, _, _ = _handle_tr_state(tr_state, snaps, marks)
+    return panel, msg, phase, sl_max, sl_marks, sl_val, dash.no_update
+
+
+# ---------------------------------------------------------------------------
 # Callback — reset to Round 1
 # ---------------------------------------------------------------------------
 
@@ -2515,7 +2767,7 @@ def cb_reset_r1(n_clicks):
 
     allowed = ("r1", "r1_done", "main_alloc", "complete",
                "cpi_phase1_alloc", "cpi_phase1_done", "cpi_phase2_alloc",
-               "tr_tie_pending")
+               "tr_tie_pending", "tr_round_pending", "phase0_done")
     if _app_state["phase"] not in allowed:
         return ("⚠ Run full allocation first before resetting.",
                 *([dash.no_update] * 5))
@@ -2548,9 +2800,10 @@ def cb_reset_r1(n_clicks):
     else:
         marks, slider_max, slider_val = {}, 0, 0
 
-    if ALLOCATION_POLICY == "tiered_rounds":
+    if ALLOCATION_POLICY in ("tiered_rounds", "tiered_ll"):
         _app_state["phase"] = "phase0_done"
-        msg = "Reset — Phase 0 complete. Click 'Run full allocation' to restart preference rounds."
+        _app_state["tr_state"] = None
+        msg = "Reset — Phase 0 complete. Use 'Start preference rounds (manual)' or 'Auto-run' below."
         panel = html.Span("Allocation reset. Ready to run preference rounds.", className="text-muted")
         return msg, "phase0_done", slider_max, marks, slider_val, panel
 
@@ -3492,15 +3745,27 @@ def _render_tiered_rounds_panel(tr_state: "TieredRoundsState") -> "html.Div":
         manual_n = len(entry["manual_decisions"])
         forwarded_n = len(entry["forwarded_to_next_round"])
         tie_n = len(entry["ties"])
+        # In fully-manual rounds every pick appears in both assigned_this_round
+        # AND manual_decisions (assigned_n == manual_n), so count once.
+        # In auto-run rounds with ties, assigned_this_round has unambiguous picks
+        # and manual_decisions has only tie-break picks — they are disjoint, so sum.
+        if manual_n > 0 and assigned_n == manual_n:
+            # Fully manual round: all assignments are manual decisions
+            display_assigned = manual_n
+            display_picks    = manual_n
+        else:
+            # Auto-run (unambiguous + optional tie-break): counts are disjoint
+            display_assigned = assigned_n + manual_n
+            display_picks    = tie_n
         trace_rows.append(html.Tr([
             html.Td(rn),
-            html.Td(assigned_n + manual_n),
-            html.Td(tie_n),
+            html.Td(display_assigned),
+            html.Td(display_picks),
             html.Td(forwarded_n),
         ]))
     trace_table = dbc.Table(
         [html.Thead(html.Tr([
-            html.Th("Round"), html.Th("Assigned"), html.Th("Ties"), html.Th("Forwarded"),
+            html.Th("Round"), html.Th("Assigned"), html.Th("Manual picks"), html.Th("Forwarded"),
         ])),
          html.Tbody(trace_rows)],
         bordered=True, size="sm", className="mb-2",
@@ -3545,10 +3810,92 @@ def _render_tiered_rounds_panel(tr_state: "TieredRoundsState") -> "html.Div":
             ], open=False))
         return panel
 
-    # --- awaiting_tie ---
+    # --- awaiting_round_picks — every advisor with candidates shown as a dropdown ---
+    if tr_state.status == "awaiting_round_picks":
+        groups = tr_state.pending_round_groups  # fid -> [sids sorted CPI desc]
+        k_crit = _app_state.get("meta", {}).get("k_crit_static")
+        round_label = (f"Round {tr_state.round_no}/{k_crit}"
+                       if k_crit is not None else f"Round {tr_state.round_no}")
+        rows = []
+        for fid, sids in groups.items():
+            fac = faculty_map.get(fid)
+            fac_label = f"{fac.name} ({fid})" if fac else fid
+            options = []
+            for sid in sids:
+                s = student_map.get(sid)
+                label = (f"{s.name} ({sid}) — CPI {s.cpi:.2f}, Tier {s.tier}"
+                         if s else sid)
+                options.append({"label": label, "value": sid})
+            rows.append(dbc.Row([
+                dbc.Col(html.Strong(fac_label), md=3,
+                        className="d-flex align-items-center"),
+                dbc.Col(
+                    dcc.Dropdown(
+                        id={"type": "tr-round-pick", "index": fid},
+                        options=options,
+                        value=sids[0],   # default: highest-CPI candidate
+                        clearable=False,
+                    ),
+                    md=9,
+                ),
+            ], className="mb-2"))
+        rows.append(dbc.Row(dbc.Col(
+            dbc.Button(f"Confirm {round_label} picks & continue →",
+                       id="btn-tr-confirm-round", color="success",
+                       className="mt-2"),
+        )))
+        assigned  = sum(1 for v in tr_state.assignments.values() if v is not None)
+        remaining = sum(1 for v in tr_state.assignments.values() if v is None)
+        return html.Div([
+            html.P([
+                html.Strong(f"{round_label} — {len(groups)} advisor(s) have applicants. "),
+                f"{assigned} assigned so far, {remaining} unassigned. "
+                "Select one student per advisor, then confirm.",
+            ], className="mb-3"),
+            dbc.Alert(
+                "Only advisors with at least one unassigned student listing them at this "
+                "preference position are shown. Advisors with no applicants this round are "
+                "skipped automatically.",
+                color="info", className="mb-3 py-2",
+            ),
+            *rows,
+            *([html.Details([
+                html.Summary("Round trace so far", className="fw-bold mb-1"),
+                trace_table,
+            ], open=False)] if trace_table else []),
+        ])
+
+    # --- switch_to_backfill (tiered_ll only) — decision prompt ---
+    if tr_state.status == "switch_to_backfill":
+        assigned   = sum(1 for fid in tr_state.assignments.values() if fid is not None)
+        unassigned = sum(1 for fid in tr_state.assignments.values() if fid is None)
+        empty_labs = sum(1 for f in tr_state.faculty
+                         if tr_state.faculty_loads.get(f.id, 0) == 0)
+        k_crit = _app_state.get("meta", {}).get("k_crit_static", "?")
+        return html.Div([
+            dbc.Alert([
+                html.Strong(f"Phase 1 complete after {k_crit} tiered round(s). "),
+                f"{assigned} student(s) assigned. {unassigned} unassigned, "
+                f"{empty_labs} empty lab(s). Choose how to proceed:",
+            ], color="warning", className="mb-3"),
+            html.Div([
+                dbc.Button("Phase 2: LL-HP backfill (assigns remaining by load + prefs) →",
+                           id="btn-tr-run-backfill", color="success"),
+                dbc.Button("Continue tiered rounds unconstrained",
+                           id="btn-tr-continue-unconstrained",
+                           color="outline-secondary", className="ms-3"),
+            ], className="d-flex align-items-center mb-3"),
+            *([html.Details([
+                html.Summary("Round trace", className="fw-bold mb-1"),
+                trace_table,
+            ])] if trace_table else []),
+        ])
+
+    # --- awaiting_tie (auto-run mode only) ---
     tie = tr_state.pending_tie
     if tie is None:
-        return [html.Span("Unexpected state — no pending tie.", className="text-danger")]
+        return html.Div([html.Span("Unexpected state — no pending tie.",
+                                   className="text-danger")])
 
     fac = faculty_map.get(tie.advisor_id)
     remaining_ties = len(tr_state.pending_tie_queue)
