@@ -22,3 +22,12 @@ stats/students_*.csv
 test/
 CoWork_Reports/
 *.mp4
+
+# Generated study outputs — kept local, not committed
+stats/policy_report.md
+stats/policy_report.pdf
+stats/students_*.csv
+
+# Presentation slides — generated locally, not committed
+docs/allocation_presentation.md
+docs/allocation_presentation.pdf
