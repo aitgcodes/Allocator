@@ -35,6 +35,7 @@ from __future__ import annotations
 import csv
 import math
 import os
+import random
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -364,9 +365,7 @@ def preprocess_students(
     # Build name→ID and ID→name maps from the faculty list
     name_to_id: Dict[str, str] = {f.name: f.id for f in faculty}
     all_fids: set[str] = {f.id for f in faculty}
-    # Alphabetical faculty names for backfill ordering
-    all_faculty_names_sorted = sorted(f.name for f in faculty)
-    fid_by_sorted_name: List[str] = [name_to_id[n] for n in all_faculty_names_sorted]
+    all_fids_list: List[str] = [f.id for f in faculty]
 
     n_faculty = len(faculty)
 
@@ -397,10 +396,12 @@ def preprocess_students(
     out[pref_out_cols] = out[pref_out_cols].apply(_dedup_pref_row, axis=1)
     dedup_changed = (out[pref_out_cols].fillna("") != before_dedup.fillna("")).any(axis=1).sum()
 
-    # Step 3 — backfill missing faculty
+    # Step 3 — backfill missing faculty (randomised per student for fairness)
     def _fill_trailing(row: pd.Series) -> pd.Series:
         listed = {p for p in row if p and not pd.isna(p)}
-        missed = iter(fid for fid in fid_by_sorted_name if fid not in listed)
+        remaining = [fid for fid in all_fids_list if fid not in listed]
+        random.shuffle(remaining)
+        missed = iter(remaining)
         result = []
         for p in row:
             if not p or pd.isna(p):
