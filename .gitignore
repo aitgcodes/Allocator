@@ -12,6 +12,7 @@ env/
 venv/
 reports/
 results/
+
 .DS_Store
 .claude/
 test/
