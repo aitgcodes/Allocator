@@ -20,11 +20,11 @@
 
 | Dataset | Policy | NPSS ↑ | PSI ↑ | Overflow ↓ | Assigned | Empty Labs ↓ |
 |---------|--------|--------|-------|------------|----------|--------------|
-| 2019 Cohort | LL | 0.9656 | 0.9598 | 0 | 28/28 | 2 |
-| 2019 Cohort | ALL | 0.9244 | 0.9137 | 0 | 28/28 | 0 |
-| 2019 Cohort | CF | 0.9167 | 0.8988 | 2 | 28/28 | 0 |
+| 2019 Cohort | LL | 0.9616 | 0.9554 | 0 | 28/28 | 2 |
+| 2019 Cohort | ALL | 0.9240 | 0.9107 | 0 | 28/28 | 0 |
+| 2019 Cohort | CF | 0.9132 | 0.8958 | 2 | 28/28 | 0 |
 | 2019 Cohort | TR | 0.9817 | 0.9792 | 0 | 28/28 | 4 |
-| 2019 Cohort | TLL | 0.9274 | 0.9182 | 2 | 28/28 | 0 |
+| 2019 Cohort | TLL | 0.9146 | 0.8988 | 2 | 28/28 | 0 |
 |  |  |  |  |  |  |  |
 | 2020 Cohort | LL | 0.9379 | 0.9250 | 0 | 44/44 | 0 |
 | 2020 Cohort | ALL | 0.9379 | 0.9250 | 0 | 44/44 | 0 |
@@ -64,23 +64,23 @@
 | 2019 Cohort | LL | A | 7 | 1.00 | 100.0% | 1.0000 | 1.0000 |
 | 2019 Cohort | LL | B1 | 7 | 1.00 | 100.0% | 1.0000 | 1.0000 |
 | 2019 Cohort | LL | B2 | 7 | 1.71 | 100.0% | 0.9714 | 0.9702 |
-| 2019 Cohort | LL | C | 7 | 4.14 | 100.0% | 0.8743 | 0.8690 |
+| 2019 Cohort | LL | C | 7 | 4.57 | 100.0% | 0.8571 | 0.8512 |
 | 2019 Cohort | ALL | A | 7 | 1.00 | 100.0% | 1.0000 | 1.0000 |
-| 2019 Cohort | ALL | B1 | 7 | 3.29 | 100.0% | 0.9086 | 0.9048 |
-| 2019 Cohort | ALL | B2 | 7 | 2.57 | 100.0% | 0.9371 | 0.9345 |
-| 2019 Cohort | ALL | C | 7 | 5.43 | 100.0% | 0.8229 | 0.8155 |
+| 2019 Cohort | ALL | B1 | 7 | 3.14 | 100.0% | 0.9143 | 0.9107 |
+| 2019 Cohort | ALL | B2 | 7 | 1.29 | 100.0% | 0.9886 | 0.9881 |
+| 2019 Cohort | ALL | C | 7 | 7.14 | 100.0% | 0.7543 | 0.7440 |
 | 2019 Cohort | CF | A | 7 | 1.00 | 100.0% | 1.0000 | 1.0000 |
 | 2019 Cohort | CF | B1 | 7 | 1.00 | 100.0% | 1.0000 | 1.0000 |
-| 2019 Cohort | CF | B2 | 7 | 4.14 | 71.4% | 0.8743 | 0.8690 |
-| 2019 Cohort | CF | C | 7 | 7.57 | 100.0% | 0.7371 | 0.7262 |
+| 2019 Cohort | CF | B2 | 7 | 3.71 | 71.4% | 0.8914 | 0.8869 |
+| 2019 Cohort | CF | C | 7 | 8.29 | 100.0% | 0.7086 | 0.6964 |
 | 2019 Cohort | TR | A | 7 | 1.14 | 100.0% | 0.9943 | 0.9940 |
 | 2019 Cohort | TR | B1 | 7 | 1.43 | 100.0% | 0.9829 | 0.9821 |
 | 2019 Cohort | TR | B2 | 7 | 1.43 | 100.0% | 0.9829 | 0.9821 |
 | 2019 Cohort | TR | C | 7 | 2.00 | 100.0% | 0.9600 | 0.9583 |
 | 2019 Cohort | TLL | A | 7 | 1.14 | 100.0% | 0.9943 | 0.9940 |
 | 2019 Cohort | TLL | B1 | 7 | 1.43 | 100.0% | 0.9829 | 0.9821 |
-| 2019 Cohort | TLL | B2 | 7 | 4.14 | 71.4% | 0.8743 | 0.8690 |
-| 2019 Cohort | TLL | C | 7 | 5.14 | 100.0% | 0.8343 | 0.8274 |
+| 2019 Cohort | TLL | B2 | 7 | 3.86 | 71.4% | 0.8857 | 0.8810 |
+| 2019 Cohort | TLL | C | 7 | 7.29 | 100.0% | 0.7486 | 0.7381 |
 | 2020 Cohort | LL | A | 11 | 1.00 | 100.0% | 1.0000 | 1.0000 |
 | 2020 Cohort | LL | B1 | 11 | 1.18 | 100.0% | 0.9941 | 0.9939 |
 | 2020 Cohort | LL | B2 | 11 | 1.91 | 100.0% | 0.9707 | 0.9697 |
@@ -186,11 +186,11 @@
 
 | Dataset | Policy | Avg MSES ↓ | Avg LUR | Equity Ret% ↑ | CPI Skewness *(diag)* |
 |---------|--------|-----------|---------|---------------|----------------------|
-| 2019 Cohort | LL | 2.0870 | 60.9% | 60.0% | -0.6584 |
-| 2019 Cohort | ALL | 3.3000 | 56.0% | 66.7% | -0.6805 |
-| 2019 Cohort | CF | 3.7200 | 56.0% | 66.7% | -0.5969 |
+| 2019 Cohort | LL | 2.2174 | 60.9% | 60.0% | -0.6584 |
+| 2019 Cohort | ALL | 3.3800 | 56.0% | 33.3% | -0.7343 |
+| 2019 Cohort | CF | 3.8000 | 56.0% | 66.7% | -0.5969 |
 | 2019 Cohort | TR | 1.3810 | 66.7% | 71.4% | -0.9482 |
-| 2019 Cohort | TLL | 3.1200 | 56.0% | 33.3% | -0.5947 |
+| 2019 Cohort | TLL | 3.6400 | 56.0% | 33.3% | -0.5947 |
 |  |  |  |  |  |  |
 | 2020 Cohort | LL | 4.0806 | 71.0% | 76.9% | 0.4597 |
 | 2020 Cohort | ALL | 4.0806 | 71.0% | 76.9% | 0.4597 |
@@ -242,15 +242,15 @@
 
 | Metric | LL | ALL | CF | TR | TLL | Best |
 |--------|--------|--------|--------|--------|--------|------|
-| NPSS | 0.924 ± 0.039 | 0.917 ± 0.034 | 0.964 ± 0.034 | 0.896 ± 0.066 | 0.879 ± 0.037 | **CF** |
-| PSI | 0.902 ± 0.052 | 0.895 ± 0.045 | 0.953 ± 0.042 | 0.873 ± 0.081 | 0.853 ± 0.045 | **CF** |
+| NPSS | 0.923 ± 0.039 | 0.917 ± 0.034 | 0.963 ± 0.035 | 0.896 ± 0.066 | 0.877 ± 0.033 | **CF** |
+| PSI | 0.902 ± 0.051 | 0.894 ± 0.045 | 0.953 ± 0.043 | 0.873 ± 0.081 | 0.850 ± 0.040 | **CF** |
 | Overflow | 0.000 ± 0.000 | 0.000 ± 0.000 | 0.333 ± 0.816 | 0.167 ± 0.408 | 0.333 ± 0.816 | **LL** |
 | % In Window | 100.000 ± 0.000 | 100.000 ± 0.000 | 98.810 ± 2.916 | 99.621 ± 0.928 | 98.810 ± 2.916 | **LL** |
 | Empty Labs | 0.333 ± 0.816 | 0.000 ± 0.000 | 0.000 ± 0.000 | 1.667 ± 2.658 | 0.000 ± 0.000 | **ALL** |
-| Avg MSES | 2.243 ± 0.950 | 2.445 ± 1.036 | 2.239 ± 1.717 | 1.961 ± 0.336 | 2.807 ± 1.278 | **TR** |
-| Equity Ret% | 68.125 ± 10.919 | 69.237 ± 10.245 | 64.649 ± 16.524 | 73.753 ± 13.159 | 65.899 ± 18.923 | **TR** |
+| Avg MSES | 2.265 ± 0.947 | 2.459 ± 1.049 | 2.253 ± 1.731 | 1.961 ± 0.336 | 2.894 ± 1.320 | **TR** |
+| Equity Ret% | 68.125 ± 10.919 | 63.681 ± 18.011 | 64.649 ± 16.524 | 73.753 ± 13.159 | 65.899 ± 18.923 | **TR** |
 | Avg LUR | 71.973 ± 5.674 | 71.161 ± 7.601 | 71.161 ± 7.601 | 75.778 ± 6.853 | 71.161 ± 7.601 | **TR** |
-| |CPI Skewness| | 0.509 ± 0.164 | 0.513 ± 0.168 | 0.316 ± 0.278 | 0.496 ± 0.323 | 0.492 ± 0.394 | **CF** |
+| |CPI Skewness| | 0.509 ± 0.164 | 0.522 ± 0.180 | 0.316 ± 0.278 | 0.496 ± 0.323 | 0.492 ± 0.394 | **CF** |
 
 ## 5. Per-Dataset Deltas vs `least_loaded` (baseline)
 
@@ -261,7 +261,7 @@ Empty labs and overflow: negative Δ = fewer (better).
 
 | Dataset | LL | ΔALL | ΔCF | ΔTR | ΔTLL |
 |---------|----|--------|--------|--------|--------|
-| 2019 Cohort | 0.966 | -0.041 | -0.049 | +0.016 | -0.038 |
+| 2019 Cohort | 0.962 | -0.038 | -0.048 | +0.020 | -0.047 |
 | 2020 Cohort | 0.938 | +0.000 | -0.013 | +0.036 | -0.026 |
 | Synthetic 1 (Random) | 0.913 | +0.000 | +0.078 | -0.068 | -0.068 |
 | Synthetic 2 (Clustered) | 0.931 | +0.000 | +0.065 | -0.056 | -0.048 |
@@ -272,7 +272,7 @@ Empty labs and overflow: negative Δ = fewer (better).
 
 | Dataset | LL | ΔALL | ΔCF | ΔTR | ΔTLL |
 |---------|----|--------|--------|--------|--------|
-| 2019 Cohort | 0.960 | -0.046 | -0.061 | +0.019 | -0.042 |
+| 2019 Cohort | 0.955 | -0.045 | -0.060 | +0.024 | -0.057 |
 | 2020 Cohort | 0.925 | +0.000 | -0.022 | +0.046 | -0.034 |
 | Synthetic 1 (Random) | 0.887 | +0.000 | +0.101 | -0.077 | -0.077 |
 | Synthetic 2 (Clustered) | 0.899 | +0.000 | +0.095 | -0.060 | -0.048 |
@@ -305,7 +305,7 @@ Empty labs and overflow: negative Δ = fewer (better).
 
 | Dataset | LL | ΔALL | ΔCF | ΔTR | ΔTLL |
 |---------|----|--------|--------|--------|--------|
-| 2019 Cohort | 60.000 | +6.667 | +6.667 | +11.429 | -26.667 |
+| 2019 Cohort | 60.000 | -26.667 | +6.667 | +11.429 | -26.667 |
 | 2020 Cohort | 76.923 | +0.000 | +0.000 | +7.287 | +0.000 |
 | Synthetic 1 (Random) | 68.454 | +0.000 | +7.673 | +17.861 | +17.861 |
 | Synthetic 2 (Clustered) | 78.969 | +0.000 | -12.248 | +1.047 | -1.930 |
@@ -316,7 +316,7 @@ Empty labs and overflow: negative Δ = fewer (better).
 
 | Dataset | LL | ΔALL | ΔCF | ΔTR | ΔTLL |
 |---------|----|--------|--------|--------|--------|
-| 2019 Cohort | 2.087 | +1.213 | +1.633 | -0.706 | +1.033 |
+| 2019 Cohort | 2.217 | +1.163 | +1.583 | -0.836 | +1.423 |
 | 2020 Cohort | 4.081 | +0.000 | +0.968 | -2.321 | +1.194 |
 | Synthetic 1 (Random) | 1.792 | +0.000 | -0.719 | +0.448 | +0.448 |
 | Synthetic 2 (Clustered) | 1.708 | +0.000 | -0.677 | +0.375 | +0.292 |
@@ -327,11 +327,11 @@ Empty labs and overflow: negative Δ = fewer (better).
 
 | Dataset | Policy | Min | Median | Mean | Max | Std |
 |---------|--------|-----|--------|------|-----|-----|
-| 2019 Cohort | LL | 1 | 1.0 | 1.96 | 13 | 2.78 |
-| 2019 Cohort | ALL | 1 | 1.0 | 3.07 | 13 | 4.02 |
-| 2019 Cohort | CF | 1 | 1.0 | 3.43 | 20 | 4.90 |
+| 2019 Cohort | LL | 1 | 1.0 | 2.07 | 16 | 3.24 |
+| 2019 Cohort | ALL | 1 | 1.0 | 3.14 | 20 | 4.92 |
+| 2019 Cohort | CF | 1 | 1.0 | 3.50 | 20 | 5.03 |
 | 2019 Cohort | TR | 1 | 1.0 | 1.50 | 6 | 1.04 |
-| 2019 Cohort | TLL | 1 | 1.0 | 2.96 | 20 | 4.57 |
+| 2019 Cohort | TLL | 1 | 1.0 | 3.43 | 18 | 5.02 |
 | 2020 Cohort | LL | 1 | 1.0 | 3.25 | 30 | 6.27 |
 | 2020 Cohort | ALL | 1 | 1.0 | 3.25 | 30 | 6.27 |
 | 2020 Cohort | CF | 1 | 1.0 | 3.91 | 31 | 6.77 |
@@ -373,15 +373,72 @@ A win is counted only when the best policy exceeds the runner-up by ≥ threshol
 | Avg MSES | ≥ 0.5 | 0 | 0 | 3 | 2 | 0 | 1 |
 | Equity Ret% | ≥ 5.0 | 0 | 0 | 0 | 1 | 1 | 4 |
 
+---
+
+## 8. Real-Cohort Findings
+
+> The 2019 and 2020 cohorts are the only real datasets in this study.
+> All other datasets are synthetic. Real-cohort results reflect actual
+> student preference structure and carry greater practical weight.
+
+### 2019 Cohort (S=28, F=25, S/F=1.1)
+
+**NPSS ranking (all students assigned in all runs):**
+
+| Rank | Policy | NPSS | PSI | Empty Labs | Note |
+|------|--------|------|-----|------------|------|
+| 1 | `tiered_rounds` (TR) | 0.9817 | 0.9792 | 4 | ⚠ 4 empty lab(s) |
+| 2 | `least_loaded` (LL) | 0.9616 | 0.9554 | 2 | ⚠ 2 empty lab(s) |
+| 3 | `adaptive_ll` (ALL) | 0.9240 | 0.9107 | 0 |  |
+| 4 | `tiered_ll` (TLL) | 0.9146 | 0.8988 | 0 | k_crit=1 |
+| 5 | `cpi_fill` (CF) | 0.9132 | 0.8958 | 0 |  |
+
+- `tiered_rounds` achieves the highest NPSS (0.9817) but leaves **4 empty lab(s)**.
+- Among policies with zero empty labs, `adaptive_ll` leads NPSS (0.9240).
+- `least_loaded` leaves 2 empty lab(s); `adaptive_ll` eliminates them at the cost of ΔNPSS=-0.0375.
+- `tiered_ll` (k_crit=1) trades ΔNPSS=-0.0671 vs `tiered_rounds` to eliminate its 4 empty lab(s).
+
+### 2020 Cohort (S=44, F=31, S/F=1.4)
+
+**NPSS ranking (all students assigned in all runs):**
+
+| Rank | Policy | NPSS | PSI | Empty Labs | Note |
+|------|--------|------|-----|------------|------|
+| 1 | `tiered_rounds` (TR) | 0.9739 | 0.9712 | 6 | ⚠ 6 empty lab(s) |
+| 2 | `least_loaded` (LL) | 0.9379 | 0.9250 | 0 |  |
+| 3 | `adaptive_ll` (ALL) | 0.9379 | 0.9250 | 0 |  |
+| 4 | `cpi_fill` (CF) | 0.9253 | 0.9030 | 0 |  |
+| 5 | `tiered_ll` (TLL) | 0.9118 | 0.8909 | 0 | k_crit=1 |
+
+- `tiered_rounds` achieves the highest NPSS (0.9739) but leaves **6 empty lab(s)**.
+- Among policies with zero empty labs, `least_loaded` leads NPSS (0.9379).
+- `least_loaded` scores NPSS=0.9379 with zero empty labs — the best fully-automatic, coverage-guaranteed option.
+- `tiered_ll` (k_crit=1) trades ΔNPSS=-0.0621 vs `tiered_rounds` to eliminate its 6 empty lab(s).
+
+**Cross-cohort pattern:**
+
+- `tiered_rounds` leads NPSS on both real cohorts but cannot guarantee coverage.
+- `least_loaded` is the highest-NPSS fully-automatic policy with an implicit coverage
+  guarantee on the 2019 cohort (2 empty labs) and a full guarantee on 2020.
+- `adaptive_ll` reliably closes the empty-lab gap at a modest NPSS cost (~0.04).
+- `cpi_fill` underperforms on real data relative to synthetic — real preference
+  structures are not random, so strict CPI ordering does not align with actual
+  preferences as well as round-based or load-balancing approaches.
+- `tiered_ll` k_crit=1 on both cohorts, meaning the dry-run switches to CPI-Fill
+  backfill after just one round. This collapses its behaviour toward `cpi_fill`
+  and explains why its NPSS tracks close to (but slightly above) `cpi_fill`.
+
+---
+
 ### 7b. Policy guidance
 
 | Policy | Best when… | Empty-lab guarantee | Operator involvement |
 |--------|-----------|---------------------|----------------------|
-| `least_loaded` | Load balance is paramount; safe default | Indirect | None |
+| `least_loaded` | Load balance is paramount; best automatic policy on real cohorts | Indirect | None |
 | `adaptive_ll` | Structural empty-lab risk detected in Phase 0 | Yes (S ≥ F) | None |
-| `cpi_fill` | Merit-first access is an explicit goal | Yes (S ≥ F) | None |
-| `tiered_rounds` | Full transparency and auditability required | No | GUI: manual tie-break |
-| `tiered_ll` | Transparent early rounds + coverage guarantee | Yes (S ≥ F) | GUI: manual tie-break in rounds |
+| `cpi_fill` | Random/synthetic preference structure; merit-first goal | Yes (S ≥ F) | None |
+| `tiered_rounds` | Maximum preference satisfaction; operator can accept empty labs | No | GUI: manual tie-break |
+| `tiered_ll` | Transparent early rounds + coverage guarantee (k_crit > 1 needed for benefit) | Yes (S ≥ F) | GUI: manual tie-break in rounds |
 
 ---
 
