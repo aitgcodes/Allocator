@@ -60,7 +60,7 @@ from typing import Dict, List, Optional
 
 OUTPUT_MODE        = "dash"          # "dash" | "html"
 STARTUP_MODE       = "full"          # "full" | "phase0_only" | "from_report"
-ALLOCATION_POLICY  = "least_loaded"  # "least_loaded" | "nonempty"
+ALLOCATION_POLICY  = "least_loaded"  # "least_loaded" | "cpi_fill" | "tiered_rounds" | "tiered_ll" | "adaptive_ll"
 
 # Paths used when not uploading via the UI
 DEFAULT_STUDENTS_PATH = str(Path(__file__).parent.parent.parent / "data" / "sample_students.csv")
@@ -97,7 +97,6 @@ from .allocation import (
     check_empty_lab_risk,
     cpi_fill_phase1,
     cpi_fill_phase2,
-    _nonempty_choice,
     build_r1_candidate_lists,
     cpi_fill_allocation,
     find_critical_round,
@@ -118,8 +117,6 @@ from .metrics import compute_metrics
 
 def _protocol_choice(student, cap_fids, faculty_map, faculty_loads):
     """Dispatch to the active policy's choice function for dashboard highlighting."""
-    if ALLOCATION_POLICY == "nonempty":
-        return _nonempty_choice(student, cap_fids, faculty_map, faculty_loads)
     return _least_loaded_choice(student, cap_fids, faculty_map, faculty_loads)
 
 import pandas as pd
@@ -517,8 +514,7 @@ def _render_student_picker(student, faculty_map, faculty_loads, meta, queue_idx,
                         className=f"small mt-1 {'text-danger fw-bold' if at_capacity else 'text-success'}",
                     ),
                     *([html.Div(
-                        "★ Highest preferred with vacancy" if ALLOCATION_POLICY == "nonempty"
-                        else "★ Least-loaded · highest preferred",
+                        "★ Least-loaded · highest preferred",
                         className="small fw-bold mt-1", style={"color": "#fd7e14"},
                     )] if is_protocol else []),
                 ],
@@ -1003,8 +999,6 @@ def _landing_layout() -> dbc.Container:
                                  "value": "least_loaded"},
                                 {"label": "Adaptive LL (auto-tuned caps, no empty labs)",
                                  "value": "adaptive_ll"},
-                                {"label": "Highest preferred with vacancy",
-                                 "value": "nonempty"},
                                 {"label": "CPI-Fill (two-phase)",
                                  "value": "cpi_fill"},
                                 {"label": "CPI-tiered preference rounds (manual tie-pick)",
@@ -1217,10 +1211,6 @@ def cb_landing_policy_desc(value):
                 "baseline caps leave empty labs inevitable, an optimized set of caps is "
                 "found before allocation proceeds. A warning is shown if no window "
                 "adjustment can resolve the deficit (structural issue).")
-    if value == "nonempty":
-        return ("Prioritises the highest-preferred advisor with no students yet assigned. "
-                "Falls back to the highest-preferred advisor with remaining capacity "
-                "if no empty labs exist.")
     if value == "cpi_fill":
         return ("Two-phase procedure: Phase 1 processes students in descending CPI order "
                 "(full preference list, no tier cap) until the number of unassigned students "
@@ -1348,12 +1338,14 @@ def toggle_popularity(n, is_open):
     Input("store-policy", "data"),
 )
 def cb_policy_badge(policy):
-    if policy == "nonempty":
-        label, color = "Highest preferred with vacancy", "info"
-    elif policy == "cpi_fill":
+    if policy == "cpi_fill":
         label, color = "CPI-Fill (two-phase)", "warning"
     elif policy == "tiered_rounds":
-        label, color = "CPI-tiered preference rounds (manual tie-pick)", "primary"
+        label, color = "CPI-tiered preference rounds", "primary"
+    elif policy == "tiered_ll":
+        label, color = "Tiered LL (tiered rounds + LL-HP backfill)", "primary"
+    elif policy == "adaptive_ll":
+        label, color = "Adaptive LL (auto-tuned caps)", "secondary"
     else:
         label, color = "Least-loaded · highest preferred", "secondary"
     return dbc.Badge(f"Policy: {label}", color=color, className="mb-2")
@@ -2027,7 +2019,7 @@ def cb_run(n_phase0, n_full, loaded):
             return (f"Phase 0 complete — {len(students)} students ready for Phase 1."), \
                    "r1_done", n - 1, marks, n - 1, dash.no_update, dash.no_update
 
-        # For least_loaded / adaptive_ll / nonempty: populate Round-1 candidate lists;
+        # For least_loaded / adaptive_ll: populate Round-1 candidate lists;
         # pause for operator picks.
         r1_candidates = build_r1_candidate_lists(students, faculty)
         _app_state["r1_pending"] = r1_candidates
@@ -2096,7 +2088,7 @@ def cb_risk_modal(risk_data):
             html.P(f"|C_remaining| = {c_remaining}. Even with full-list preference caps for all tiers, "
                    f"{count} lab(s) cannot be filled. No window adjustment can resolve this."),
             html.P("This is a structural issue with the cohort's preference distribution. "
-                   "Switching to a different policy (e.g. CPI-Fill or nonempty) is recommended."),
+                   "Switching to a different policy (e.g. CPI-Fill) is recommended."),
         ], color="danger")
         return True, title, body, _no, _no, _HIDE, _SHOW
 
@@ -2913,7 +2905,7 @@ def cb_proceed_main(n_clicks):
         marks = {i: str(snaps[i].step) for i in range(0, n, max(1, n // 10))}
         return content, dash.no_update, "cpi_phase1_alloc", n - 1, marks, n - 1
 
-    # Manual allocation for least_loaded / nonempty
+    # Manual allocation for least_loaded
     # Build queue in tier priority order, each tier by CPI desc, unassigned only
     tier_order = ("A", "B1", "B2", "C") if meta.get("mode") == "quartile" else ("A", "B", "C")
     queue = []
@@ -3079,7 +3071,7 @@ def cb_cpi_autorun_phase2(n_clicks):
 
 
 # ---------------------------------------------------------------------------
-# Callback — auto-run main allocation (least_loaded / nonempty / cpi_fill)
+# Callback — auto-run main allocation (least_loaded / cpi_fill)
 # ---------------------------------------------------------------------------
 
 @app.callback(
@@ -3145,7 +3137,7 @@ def cb_autorun_main(n_clicks):
 
     N_A = meta["N_A"]
     N_B = meta["N_B"]
-    # adaptive_ll uses the same LL assignment rule; main_allocation only knows ll/nonempty
+    # adaptive_ll uses the same LL assignment rule; main_allocation only knows ll
     _alloc_policy = "least_loaded" if ALLOCATION_POLICY == "adaptive_ll" else ALLOCATION_POLICY
 
     try:
@@ -4908,12 +4900,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--policy",
         default=None,
-        choices=["least_loaded", "nonempty", "cpi_fill", "tiered_rounds"],
+        choices=["least_loaded", "cpi_fill", "tiered_rounds"],
         help=(
             "Override the allocation policy set in ALLOCATION_POLICY.\n"
             "  least_loaded : least-loaded eligible faculty, tie-broken by preference rank.\n"
-            "  nonempty     : prefer the highest-preferred empty lab; fall back to\n"
-            "                 highest-preferred faculty with remaining capacity.\n"
             "  cpi_fill     : two-phase procedure — Phase 1 in CPI order with N_tier\n"
             "                 cap until stopping condition fires; Phase 2 assigns each\n"
             "                 remaining student to their highest-preferred empty lab."

@@ -109,11 +109,11 @@ A round-by-round trace is recorded and shown in a collapsible section of the com
 
 ## Trade-offs vs other policies
 
-| Aspect | `tiered_rounds` | `least_loaded` / `nonempty` | `cpi_fill` |
+| Aspect | `tiered_rounds` | `least_loaded` | `cpi_fill` |
 |--------|----------------|---------------------------|------------|
 | Assignment order | Round-by-preference-rank; CPI breaks ties within a round | Tier-by-tier (arbitrary within tier) | Strict descending CPI |
 | Tier cap | None (N_tier diagnostic only) | Applied per tier; overflow possible via promotion cascade (A → B → C) | None |
-| Competition resolution | Manual tie-break if CPI equal | Automatic (least-load / empty-lab preference) | Automatic (first-come first-served in CPI order) |
+| Competition resolution | Manual tie-break if CPI equal | Automatic (least-load preference) | Automatic (first-come first-served in CPI order) |
 | Load balancing | Implicit (at most 1 per advisor per round) | Explicit (least-load criterion) | Weak (first-preference greedy) |
 | Empty-lab guarantee | Implicit | Indirect | Explicit (Phase 2 design) |
 | Operator involvement | Required for ties | Optional override | Optional override |

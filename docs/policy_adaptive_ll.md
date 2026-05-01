@@ -72,7 +72,7 @@ For **Adaptive LL**: Phase 0b optimization runs automatically. If caps converge,
 A structural issue exists when N_A = N_B = F (full preference list for all tiers) still leaves E_after_B > |C|. This means:
 
 - The cohort's preference distribution is so skewed that even with full-list access, the LL rule cannot distribute students across all labs.
-- No window adjustment can fix this. Switching to `cpi_fill` or `nonempty` is recommended.
+- No window adjustment can fix this. Switching to `cpi_fill` is recommended.
 
 The Phase 0 modal shows a "Structural deficit" badge when this occurs.
 

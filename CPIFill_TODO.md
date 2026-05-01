@@ -6,7 +6,7 @@ Implementation checklist for the **CPI-Fill** allocation policy in `src/allocato
 
 ## Overview
 
-The CPI-Fill policy is a new **selectable option** added alongside the existing `"least_loaded"` and `"nonempty"` policies in the existing app. When selected (`policy="cpi_fill"`), it routes to a two-phase procedure instead of `main_allocation`; the existing policies and their behaviour are unchanged. The two-phase procedure is:
+The CPI-Fill policy is a new **selectable option** added alongside the existing `"least_loaded"` policy in the existing app. When selected (`policy="cpi_fill"`), it routes to a two-phase procedure instead of `main_allocation`; the existing policies and their behaviour are unchanged. The two-phase procedure is:
 
 **Phase 1 — CPI-ordered (with stopping condition)**
 
@@ -57,7 +57,7 @@ def _highest_preferred_empty(
 - [ ] Return `(faculty_id, rank_1based)` for the **first** faculty whose `faculty_loads[fid] == 0`.
 - [ ] Return `None` if no empty lab is found in the preference list (should not occur if preferences cover all `F` faculty and at least one empty lab remains, but handle defensively).
 
-> This is Phase 2's selection rule. It is distinct from `_nonempty_choice` (which falls back to any faculty with capacity when no empty labs exist). Here, if no empty lab is found, it is a hard error condition, not a fallback.
+> This is Phase 2's selection rule. If no empty lab is found, it is a hard error condition, not a fallback.
 
 ---
 
@@ -124,7 +124,7 @@ def run_full_allocation(
 ) -> Tuple[Dict, SnapshotList, dict, dict]:
 ```
 
-- [ ] Add `"cpi_fill"` to the `_POLICIES` set (currently in `main_allocation`; move it to `run_full_allocation` or duplicate it here for the routing check). The existing `"least_loaded"` and `"nonempty"` entries must remain unchanged.
+- [ ] Add `"cpi_fill"` to the `_POLICIES` set (currently in `main_allocation`; move it to `run_full_allocation` or duplicate it here for the routing check).
 - [ ] After `round1(...)`, branch on `policy`:
   ```python
   if policy == "cpi_fill":
@@ -150,7 +150,7 @@ def run_full_allocation(
 
 ## 5. Expose in the Dash app (`app.py`)
 
-- [ ] Add `"cpi_fill"` as a **third** selectable policy option in the existing policy-selector UI (alongside the existing `"least_loaded"` and `"nonempty"` options, which must remain available and unchanged).
+- [ ] Add `"cpi_fill"` as a selectable policy option in the existing policy-selector UI.
 - [ ] Display the Phase 1 / Phase 2 boundary in the snapshot timeline so operators can see exactly where the stopping condition fired and which students were handled by each phase.
 
 ---

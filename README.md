@@ -12,15 +12,17 @@ An interactive web app for assigning MS thesis advisors to students following a 
 
 ### Allocation policies
 
-Three policies are available, selected by setting `ALLOCATION_POLICY` in `app.py` or via the `--policy` CLI flag:
+Five policies are available, selected by setting `ALLOCATION_POLICY` in `app.py` or via the `--policy` CLI flag:
 
 | Policy | Pipeline | Core rule | Best for |
 |--------|----------|-----------|----------|
 | `least_loaded` *(default)* | Phase 0 → Round 1 → Class A→B→C | Assign to the least-loaded eligible advisor within the student's `N_tier` window | Balanced advisor loads; robust default |
-| `nonempty` | Phase 0 → Round 1 → Class A→B→C | Prefer the highest-preferred **empty lab** first; fall back to highest-preferred with capacity | Departments requiring every advisor to receive at least one student as early as possible |
+| `adaptive_ll` | Phase 0a+0b → Round 1 → Class A→B→C | Adaptive caps guarantee no empty labs when S ≥ F | Balanced loads with structural empty-lab guarantee |
 | `cpi_fill` | Phase 0 → CPI-Fill Phase 1 → Phase 2 | Process students in strict descending CPI order; Phase 2 guarantees no empty labs | Merit-first access; guaranteed no empty labs |
+| `tiered_rounds` | Phase 0 → Preference Rounds | Each advisor picks one student per round; highest CPI wins; ties require manual pick | Transparent preference-driven process |
+| `tiered_ll` | Phase 0a+0b → Tiered Rounds 1..k → LL-HP Backfill | Hybrid: interactive rounds up to critical round k, then automatic backfill | Transparent early rounds + guaranteed no empty labs |
 
-Full descriptions: [`docs/policy_least_loaded.md`](docs/policy_least_loaded.md) · [`docs/policy_nonempty.md`](docs/policy_nonempty.md) · [`docs/policy_cpi_fill.md`](docs/policy_cpi_fill.md)
+Full descriptions: [`docs/policy_least_loaded.md`](docs/policy_least_loaded.md) · [`docs/policy_adaptive_ll.md`](docs/policy_adaptive_ll.md) · [`docs/policy_cpi_fill.md`](docs/policy_cpi_fill.md) · [`docs/policy_tiered_rounds.md`](docs/policy_tiered_rounds.md)
 
 ---
 
@@ -227,8 +229,9 @@ scripts/
 data/             – Sample student and faculty CSV files
 docs/             – User manual (PDF) and policy reference docs
   policy_least_loaded.md  – least_loaded policy specification
-  policy_nonempty.md      – nonempty policy specification
+  policy_adaptive_ll.md   – adaptive_ll policy specification
   policy_cpi_fill.md      – cpi_fill policy specification
+  policy_tiered_rounds.md – tiered_rounds policy specification
 stats/            – Policy comparison study
   run_study.py        – Generates synthetic datasets and runs both policies
   policy_report.md    – Comparison report (tables, deltas, recommendations)

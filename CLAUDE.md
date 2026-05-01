@@ -41,7 +41,7 @@ PYTHONPATH=src python -m allocator.allocation --phase0-only \
 PYTHONPATH=src python -m allocator.allocation \
   --students data/sample_students.csv \
   --faculty data/sample_faculty.csv \
-  --policy least_loaded   # or: nonempty | cpi_fill  (tiered_rounds requires the GUI)
+  --policy least_loaded   # or: cpi_fill  (tiered_rounds requires the GUI)
   --out reports/
 ```
 
@@ -84,7 +84,6 @@ Load CSVs → Phase 0 (tier + N_tier + max_load)
 
 - **`least_loaded`** *(default)* — Phase 0 → Round 1 → class-wise assignment to the least-loaded advisor within the student's `N_tier` window; ties broken by preference rank. See `docs/policy_least_loaded.md`.
 - **`adaptive_ll`** — Adaptive variant of `least_loaded`: Phase 0a classifies tiers normally; Phase 0b iteratively expands `N_A`/`N_B` caps (maintaining N_A ≤ N_B) until the post-A+B empty-lab count is ≤ |C|, guaranteeing no empty labs when S ≥ F (structural issues flagged). Same LL assignment rule with the optimized caps. See `docs/policy_adaptive_ll.md`.
-- **`nonempty`** — Phase 0 → Round 1 → class-wise assignment preferring the highest-preferred **empty lab** (load = 0) first; falls back to highest-preferred advisor with remaining capacity. See `docs/policy_nonempty.md`.
 - **`cpi_fill`** — Phase 0 → CPI-Fill Phase 1 (students processed in descending CPI order, assigned to highest-preferred advisor with capacity, stops when `unassigned == empty_labs`) → Phase 2 (each remaining student goes to their highest-preferred empty lab). Round 1 is **skipped**. See `docs/policy_cpi_fill.md`.
 - **`tiered_rounds`** — Phase 0 (tier classification, diagnostic only) → Preference Rounds: in round *n* every unassigned student offers their *n*-th preference; each advisor picks at most one student per round (highest CPI wins; ties require a manual pick). Runs until all students assigned or a stall is detected. See `docs/policy_tiered_rounds.md`.
 - **`tiered_ll`** — Multi-phase hybrid policy: Phase 0a (tier classification) → Phase 0b (dry-run determines critical round k, stored as `k_crit_static` in meta) → Phase 1 (interactive tiered rounds 1..k, same tie-break UI as `tiered_rounds`) → Phase 2 (automatic LL-HP backfill over `prefs[k:]` for any remaining unassigned students). Guarantees no empty labs when S ≥ F and the preference structure is feasible. See `TODO/tiered_ll_policy.md` (documentation forthcoming).
@@ -125,7 +124,6 @@ Sample data: `data/sample_students.csv` (24 students, 8 faculty)
 - `MSThesisAllocationProtocol.md` — full protocol specification
 - `NPSS_Metric.md` — NPSS/PSI metric definitions
 - `docs/policy_least_loaded.md` — `least_loaded` policy: pipeline, assignment rule, trade-offs
-- `docs/policy_nonempty.md` — `nonempty` policy: pipeline, assignment rule, trade-offs
 - `docs/policy_cpi_fill.md` — `cpi_fill` policy: Phase 1/2 mechanics, stopping condition, trade-offs
 - `docs/policy_tiered_rounds.md` — `tiered_rounds` policy: round mechanics, tie-breaking, audit trace
 - `stats/policy_report.md` — empirical comparison of `least_loaded` vs `cpi_fill` across 5 datasets

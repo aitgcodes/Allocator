@@ -9,7 +9,7 @@ Tests:
 5. Resume after manual tie decision and allocation continues correctly.
 6. Multi-round forwarding of non-selected students.
 7. Defensive handling for malformed/incomplete preferences.
-8. Regression: existing least_loaded, nonempty, cpi_fill outputs unchanged.
+8. Regression: existing least_loaded, cpi_fill outputs unchanged.
 """
 from __future__ import annotations
 
@@ -329,24 +329,6 @@ def test_regression_least_loaded():
     )
     assert all(v is not None for v in assignments.values())
 
-
-def test_regression_nonempty():
-    """nonempty policy still produces a full allocation."""
-    students = [
-        _student("S1", "Alice",   9.0, ["F1", "F2"]),
-        _student("S2", "Bob",     8.0, ["F2", "F1"]),
-    ]
-    faculty = [
-        _faculty("F1", "Prof A", 1),
-        _faculty("F2", "Prof B", 1),
-    ]
-    s_up, f_up, meta, snaps = phase0(students, faculty)
-    N_A, N_B = meta["N_A"], meta["N_B"]
-    assignments, fl, snaps = round1(s_up, f_up, snaps)
-    assignments, snaps = main_allocation(
-        s_up, f_up, assignments, fl, snaps, N_A, N_B, policy="nonempty"
-    )
-    assert all(v is not None for v in assignments.values())
 
 
 def test_regression_cpi_fill():

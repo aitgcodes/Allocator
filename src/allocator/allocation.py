@@ -112,36 +112,6 @@ def _least_loaded_choice(
     return chosen, rank
 
 
-def _nonempty_choice(
-    student: Student,
-    candidate_faculty_ids: List[str],
-    faculty_map: Dict[str, Faculty],
-    faculty_loads: Dict[str, int],
-) -> Optional[Tuple[str, int]]:
-    """
-    'nonempty' policy: prefer the highest-preferred empty lab (load == 0)
-    among candidates with remaining capacity.  If no empty lab exists,
-    fall back to the highest-preferred faculty that still has capacity
-    (earliest in the student's preference list, regardless of load).
-
-    Returns (faculty_id, preference_rank_1based), or None if no candidate
-    has remaining capacity.
-    """
-    pref_index = {fid: i for i, fid in enumerate(student.preferences)}
-    eligible = [
-        fid for fid in candidate_faculty_ids
-        if faculty_loads[fid] < faculty_map[fid].max_load
-    ]
-    if not eligible:
-        return None
-
-    empty = [fid for fid in eligible if faculty_loads[fid] == 0]
-    pool = empty if empty else eligible
-    pool.sort(key=lambda fid: pref_index.get(fid, len(student.preferences)))
-    chosen = pool[0]
-    rank = pref_index.get(chosen, -1) + 1
-    return chosen, rank
-
 
 def _highest_preferred_empty(
     student: Student,
@@ -640,19 +610,14 @@ def main_allocation(
     policy : str
         "least_loaded" (default) — assign to the least-loaded eligible
         faculty, tie-broken by preference rank.
-        "nonempty" — prefer the highest-preferred empty lab among eligible
-        faculty; if none are empty, assign the highest-preferred with
-        remaining capacity.
 
     Returns (assignments, snapshots).
     """
-    _POLICIES = {"least_loaded", "nonempty"}
+    _POLICIES = {"least_loaded"}
     if policy not in _POLICIES:
         raise ValueError(f"Unknown policy {policy!r}. Choose from {_POLICIES}.")
 
     def _choice(student, candidates):
-        if policy == "nonempty":
-            return _nonempty_choice(student, candidates, faculty_map, faculty_loads)
         return _least_loaded_choice(student, candidates, faculty_map, faculty_loads)
 
     faculty_map  = {f.id: f for f in faculty}
@@ -2062,8 +2027,6 @@ def run_full_allocation(
     policy    : assignment policy.
                 "least_loaded" (default) — Phase 0 → Round 1 → assign to the
                 least-loaded eligible faculty, tie-broken by preference rank.
-                "nonempty" — Phase 0 → Round 1 → prefer the highest-preferred
-                empty lab; fall back to highest-preferred with remaining capacity.
                 "cpi_fill" — Phase 0 → Phase 1 (CPI order, highest-preferred
                 with capacity, stopping condition) → Phase 2 (highest-preferred
                 empty lab). Round 1 is not run.
@@ -2078,7 +2041,7 @@ def run_full_allocation(
                       (keys: "npss", "overflow_count", "mean_psi",
                        "per_tier", "per_student")
     """
-    _POLICIES = {"least_loaded", "nonempty", "cpi_fill", "tiered_rounds", "adaptive_ll"}
+    _POLICIES = {"least_loaded", "cpi_fill", "tiered_rounds", "adaptive_ll"}
     if policy not in _POLICIES:
         raise ValueError(f"Unknown policy {policy!r}. Choose from {_POLICIES}.")
     if policy == "tiered_rounds":
@@ -2142,14 +2105,11 @@ def _cli():
     parser.add_argument(
         "--policy",
         default="least_loaded",
-        choices=["least_loaded", "nonempty", "cpi_fill"],
+        choices=["least_loaded", "cpi_fill"],
         help=(
             "Assignment policy for the main allocation round.\n"
             "  least_loaded : assign to the least-loaded eligible faculty,\n"
             "                 tie-broken by preference rank (default).\n"
-            "  nonempty     : prefer the highest-preferred empty lab;\n"
-            "                 if none are empty, assign the highest-preferred\n"
-            "                 faculty with remaining capacity.\n"
             "  cpi_fill     : two-phase procedure — Phase 1 processes students\n"
             "                 in CPI order (N_tier cap) until unassigned count\n"
             "                 equals empty-lab count; Phase 2 assigns each\n"
