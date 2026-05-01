@@ -33,15 +33,15 @@ Before any interactive steps, the app runs a full dry-run of the tiered-rounds p
 - Number of faculty with remaining capacity that no unassigned student can reach (unreachable faculty)
 - Whether the round produced zero new assignments (stall)
 
-**`find_critical_round`** scans the dry-run states and returns the last round *k* at which the stopping criterion has **not yet fired**:
+**`find_critical_round`** scans the dry-run states and returns *k*, the number of tiered rounds the GUI will run before switching to backfill:
 
-| Stopping criterion | Meaning |
-|--------------------|---------|
-| `unreachable_faculty_count > 0` | A faculty member with capacity can no longer be reached by any student |
-| `is_stall` (zero new assignments) | The rounds process has deadlocked |
-| `unassigned_count > 0` and `unassigned_count ≤ empty_labs_count` | Remaining students have reached parity with (or dropped below) empty labs — backfill can fill them one-to-one. The `> 0` guard ensures the criterion does not fire once all students are already assigned. |
+| Stopping criterion | k returned | Meaning |
+|--------------------|-----------|---------|
+| `unreachable_faculty_count > 0` OR `is_stall` | prev round (min 1) | Structural problem; don't count the broken round |
+| `unassigned_count > 0` AND `unassigned_count < empty_labs_count` | prev round (may be 0) | **Overshoot**: round *n* created more empty labs than students remain; stopping one round earlier keeps Phase 2b feasible |
+| `unassigned_count > 0` AND `unassigned_count == empty_labs_count` | round *n* | **Exact parity**: run this round, then switch to backfill |
 
-The computed *k* is stored in `meta` as `k_crit_static` and shown in the Phase 0 status panel. If the stopping criterion never fires during the dry-run, *k* equals the total number of rounds (the tiered rounds process runs to completion and the backfill phase handles zero students).
+*k* = 0 is valid: it means round 1 itself overshoots (U₁ < E₁), so no tiered rounds are shown and the GUI jumps directly to backfill using the full preference list. The computed *k* is stored in `meta` as `k_crit_static` and displayed in the Phase 0 status panel. If the criterion never fires, *k* equals the total number of rounds (backfill receives zero students).
 
 ---
 
@@ -60,29 +60,36 @@ After each round completes, the app checks whether the round number has reached 
 
 ## Phase 2 — Backfill (Automatic)
 
-The backfill phase runs non-interactively. The algorithm differs between GUI and CLI modes, but in both modes the switch happens automatically without operator confirmation.
+The backfill phase runs non-interactively immediately after round *k* completes. It operates on each student's preferences from position *k+1* onward (`prefs[k:]`). The algorithm is identical between GUI and CLI modes (GUI: `tiered_ll_backfill`; CLI: `tiered_ll_cpi_backfill` wrapping the same two-phase logic).
 
-### GUI mode — LL-HP Backfill
+### Phase 2a — Highest-preferred with capacity (while U > E)
 
-Processes unassigned students in descending CPI order using preferences from position *k+1* onward (preferences 1..k are exhausted).
+While the number of remaining unassigned students exceeds the number of empty labs:
 
-**Assignment rule:** scan remaining preferences and assign to the **least-loaded advisor with remaining capacity** (LL rule). Ties between equally-loaded advisors are broken by preference rank (highest preferred wins).
+1. Take the highest-CPI remaining student.
+2. Scan their `prefs[k:]` and assign them to the **first advisor with remaining capacity** (highest preference, any load level).
+3. If no advisor in `prefs[k:]` has capacity, defer the student to Phase 2b.
+4. Recount empty labs and repeat.
 
-### CLI (auto) mode — CPI-Fill Backfill
+Phase 2a stops when `unassigned == empty_labs`.
 
-Uses CPI-Fill Phase 1 + Phase 2 semantics on the remaining unassigned students:
+### Phase 2b — Highest-preferred empty lab (when U == E)
 
-**Phase 2a (CPI-Fill Phase 1 on `prefs[k:]`):** process unassigned students in descending CPI order; assign each to their highest-preferred advisor with remaining capacity (scanning from position *k+1* onward). Stop when `unassigned == empty_labs`. Because the switch criterion fires at `unassigned > 0 and unassigned ≤ empty_labs`, Phase 2a typically has zero or very few assignments to make.
+When unassigned students equal empty labs exactly:
 
-**Phase 2b (CPI-Fill Phase 2 on full preference list):** each remaining student is assigned to their highest-preferred **empty lab**, scanning their *full* preference list (advisors in positions 1..k that are still empty are eligible). This guarantees all empty labs are filled when S_remaining ≥ E_remaining.
+- Each remaining student (in CPI order) is assigned to their **highest-preferred empty lab** in `prefs[k:]`.
+- One student per lab; once a lab is filled it is removed from the candidate set.
+- Students whose `prefs[k:]` contains no empty lab become **overflow**.
 
-Snapshot ranks recorded during Phase 2a are global (e.g., rank *k+1* for the first preference in `prefs[k:]`), keeping the trace consistent with Phase 1.
+### Both phases
 
-### Both modes
+- Faculty `max_load` constraints from Phase 0 are enforced throughout.
+- Snapshot `phase` labels distinguish `TieredLL_Backfill_P2a` and `TieredLL_Backfill_P2b` so the two-phase trace is visible in the replay slider.
+- If any students remain unassigned after Phase 2b (no empty lab in their `prefs[k:]`), they are flagged as **overflow** — same treatment as a `tiered_rounds` stall.
 
-- Faculty `max_load` constraints from Phase 0 are enforced.
-- Backfill snapshots are appended to the shared snapshot list so the full two-phase trace is visible in the replay slider.
-- If any students remain unassigned after backfill (all remaining preferences are at capacity), they are flagged as **overflow** — same treatment as a `tiered_rounds` stall.
+### CLI (auto) mode
+
+Uses `cpi_fill_phase1` on `prefs[k:]` for Phase 2a and `cpi_fill_phase2` (scanning the full preference list) for Phase 2b, with automatic CPI tie-breaking throughout.
 
 ---
 

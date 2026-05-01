@@ -1946,34 +1946,45 @@ def tiered_rounds_dry_run(
 
 def find_critical_round(dry_run_states: List[Dict]) -> int:
     """
-    Return the last round k where the stopping criterion has NOT yet fired.
+    Return round k after which tiered_ll switches to the two-phase backfill.
 
-    Stopping criterion fires when ANY of:
-      - unreachable_faculty_count > 0  (some advisor with capacity is unreachable), OR
-      - is_stall is True               (zero new assignments with students remaining), OR
-      - unassigned_count <= empty_labs_count and unassigned_count > 0
-          (remaining students ≤ remaining empty labs — backfill can handle them
-           one-to-one, and continuing rounds risks leaving labs unfillable).
+    Stopping rules (applied in order for each round n):
 
-    If the criterion never fires, k = total rounds (tiered rounds run to
-    completion and backfill will have no students to process).
-    If the criterion fires immediately at round 1, k = 1 (minimum).
+      1. unreachable_faculty_count > 0 OR is_stall
+           Structural problem; k = prev round (min 1 — at least one round ran).
+      2. unassigned_count > 0 AND unassigned_count < empty_labs_count
+           Overshoot: round n created more empty labs than students remain.
+           Running it would leave labs unfillable, so k = prev round (may be 0 —
+           skip tiered rounds entirely and backfill on the full pref list).
+      3. unassigned_count > 0 AND unassigned_count == empty_labs_count
+           Exact parity: this round is the last tiered round; k = round_no.
+
+    If the criterion never fires, k = last round (all tiered rounds ran).
+    k = 0 is valid when round 1 itself overshoots (U_1 < E_1).
     """
     if not dry_run_states:
         return 1
-    k = 1
+
+    prev_round = 0
     for entry in dry_run_states:
-        unassigned   = entry["unassigned_count"]
-        empty_labs   = entry.get("empty_labs_count", 0)
-        fires = (
-            entry["unreachable_faculty_count"] > 0
-            or entry["is_stall"]
-            or (unassigned > 0 and unassigned <= empty_labs)
-        )
-        if fires:
-            break
-        k = entry["round_no"]
-    return k
+        round_no   = entry["round_no"]
+        unassigned = entry["unassigned_count"]
+        empty_labs = entry.get("empty_labs_count", 0)
+
+        if entry["unreachable_faculty_count"] > 0 or entry["is_stall"]:
+            return max(prev_round, 1)
+
+        if unassigned > 0 and unassigned < empty_labs:
+            # overshot — stop before this round
+            return max(prev_round, 0)
+
+        if unassigned > 0 and unassigned == empty_labs:
+            # exact parity — this is the last tiered round
+            return round_no
+
+        prev_round = round_no
+
+    return prev_round
 
 
 def tiered_ll_backfill(
@@ -1985,65 +1996,137 @@ def tiered_ll_backfill(
     snapshots: SnapshotList,
 ) -> Tuple[Dict[str, Optional[str]], Dict[str, int], List[str]]:
     """
-    LL-HP backfill phase for tiered_ll: assign unassigned students using
-    prefs[k:] (preferences beyond the k completed tiered rounds) in CPI order.
+    Two-phase CPI-Fill backfill for tiered_ll GUI mode, operating on prefs[k:].
 
-    Appends snapshots. Returns (assignments, faculty_loads, overflow_ids) where
-    overflow_ids lists students whose remaining preferences were all exhausted.
+    Phase 2a: while unassigned > empty_labs, take the highest-CPI remaining student
+              and assign them to their highest-preferred advisor with remaining capacity
+              in prefs[k:].
+    Phase 2b: when unassigned == empty_labs, assign each remaining student to their
+              highest-preferred empty lab in prefs[k:] (one student per lab).
+
+    Students with no eligible advisor in Phase 2a are deferred to Phase 2b.
+    Students with no empty lab in Phase 2b become overflow.
+
+    Appends snapshots. Returns (assignments, faculty_loads, overflow_ids).
     """
     faculty_map = {f.id: f for f in faculty}
     step = snapshots.last().step if snapshots.last() else 0
     step += 1
+
+    U = len(unassigned_students)
+    E = sum(1 for f in faculty if faculty_loads[f.id] == 0)
+
     snapshots.append(AllocationSnapshot(
         step=step,
         phase="TieredLL_Backfill",
         event=(
-            f"LL-HP backfill begins | {len(unassigned_students)} students | "
-            f"prefs[{k}:] (rounds {k+1}… onward)"
+            f"Two-phase backfill begins | U={U} students | E={E} empty labs | "
+            f"prefs[{k}:] (from position {k + 1} onward)"
         ),
         assignments=copy.copy(assignments),
         faculty_loads=copy.copy(faculty_loads),
         unassigned={s.id for s in unassigned_students},
     ))
 
-    for s in _sorted_by_cpi(unassigned_students):
-        remaining_prefs = s.preferences[k:]
-        result = _least_loaded_choice(s, remaining_prefs, faculty_map, faculty_loads)
-        if result:
-            fid, rank = result   # rank is already global 1-based in s.preferences
-            assignments[s.id] = fid
-            faculty_loads[fid] += 1
+    remaining    = list(_sorted_by_cpi(unassigned_students))
+    overflow_p2a = []
+    p2a_assigned = 0
+
+    # ── Phase 2a: highest-preferred with capacity while U > E ────────────────
+    while True:
+        empty_count = sum(1 for f in faculty if faculty_loads[f.id] == 0)
+        if not remaining or len(remaining) == empty_count:
+            break
+        s = remaining.pop(0)  # highest CPI
+        preferred = next(
+            (fid for fid in s.preferences[k:]
+             if fid in faculty_map and faculty_loads[fid] < faculty_map[fid].max_load),
+            None,
+        )
+        if preferred is not None:
+            rank = s.preferences.index(preferred) + 1
+            assignments[s.id] = preferred
+            faculty_loads[preferred] += 1
+            p2a_assigned += 1
             step += 1
             snapshots.append(AllocationSnapshot(
                 step=step,
-                phase="TieredLL_Backfill",
+                phase="TieredLL_Backfill_P2a",
                 event=(
-                    f"Backfill | {s.name} ({s.id}, CPI {s.cpi:.2f}) → "
-                    f"{faculty_map[fid].name} ({fid}) | "
-                    f"pref rank {rank} | load now {faculty_loads[fid]}"
+                    f"Phase 2a | {s.name} ({s.id}, CPI {s.cpi:.2f}) → "
+                    f"{faculty_map[preferred].name} ({preferred}) | "
+                    f"pref rank {rank} | load now {faculty_loads[preferred]}"
                 ),
                 assignments=copy.copy(assignments),
                 faculty_loads=copy.copy(faculty_loads),
-                unassigned={sid for sid, fid2 in assignments.items() if fid2 is None},
+                unassigned={sid for sid, fid in assignments.items() if fid is None},
                 preference_rank={s.id: rank},
             ))
+        else:
+            overflow_p2a.append(s)
 
-    overflow = [s.id for s in unassigned_students if assignments[s.id] is None]
+    # ── Phase 2b: highest-preferred empty lab when U == E ────────────────────
+    phase2b_students = remaining + overflow_p2a
+    empty_lab_ids    = {f.id for f in faculty if faculty_loads[f.id] == 0}
+
+    step += 1
+    snapshots.append(AllocationSnapshot(
+        step=step,
+        phase="TieredLL_Backfill_P2b",
+        event=(
+            f"Phase 2b begins | {len(phase2b_students)} students | "
+            f"{len(empty_lab_ids)} empty labs"
+        ),
+        assignments=copy.copy(assignments),
+        faculty_loads=copy.copy(faculty_loads),
+        unassigned={s.id for s in phase2b_students},
+    ))
+
+    p2b_assigned = 0
+    overflow_p2b = []
+    for s in phase2b_students:
+        preferred_empty = next(
+            (fid for fid in s.preferences[k:] if fid in empty_lab_ids), None
+        )
+        if preferred_empty is not None:
+            rank = s.preferences.index(preferred_empty) + 1
+            assignments[s.id] = preferred_empty
+            faculty_loads[preferred_empty] += 1
+            empty_lab_ids.discard(preferred_empty)
+            p2b_assigned += 1
+            step += 1
+            snapshots.append(AllocationSnapshot(
+                step=step,
+                phase="TieredLL_Backfill_P2b",
+                event=(
+                    f"Phase 2b | {s.name} ({s.id}, CPI {s.cpi:.2f}) → "
+                    f"{faculty_map[preferred_empty].name} ({preferred_empty}) | "
+                    f"pref rank {rank}"
+                ),
+                assignments=copy.copy(assignments),
+                faculty_loads=copy.copy(faculty_loads),
+                unassigned={sid for sid, fid in assignments.items() if fid is None},
+                preference_rank={s.id: rank},
+            ))
+        else:
+            overflow_p2b.append(s)
+
+    overflow_ids = [s.id for s in overflow_p2b]
     step += 1
     snapshots.append(AllocationSnapshot(
         step=step,
         phase="TieredLL_Backfill",
         event=(
-            f"LL-HP backfill complete | "
-            f"{len(unassigned_students) - len(overflow)} assigned | "
-            f"{len(overflow)} overflow"
+            f"Two-phase backfill complete | "
+            f"P2a={p2a_assigned} P2b={p2b_assigned} assigned | "
+            f"overflow={len(overflow_ids)}"
         ),
         assignments=copy.copy(assignments),
         faculty_loads=copy.copy(faculty_loads),
-        unassigned=set(overflow),
+        unassigned=set(overflow_ids),
     ))
 
-    return assignments, faculty_loads, overflow
+    return assignments, faculty_loads, overflow_ids
 
 
 def tiered_ll_cpi_backfill(
