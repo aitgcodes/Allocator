@@ -108,6 +108,7 @@ from .allocation import (
     simulate_tiers_ab,
     tiered_ll_backfill,
     tiered_rounds_apply_picks,
+    tiered_rounds_continue_unconstrained,
     tiered_rounds_dry_run,
     tiered_rounds_resume,
     tiered_rounds_start,
@@ -2731,18 +2732,8 @@ def cb_tr_continue_unconstrained(n_clicks):
     tr_state = _app_state.get("tr_state")
     if tr_state is None or tr_state.status != "switch_to_backfill":
         return no_up7
-    from dataclasses import replace as _dc_replace
-    # Resume in manual mode from the current round (no stop_at_round)
-    next_state = _dc_replace(
-        tr_state,
-        status="running",
-        pending_round_groups={},
-        pending_tie=None,
-        pending_tie_queue=[],
-    )
-    from .allocation import _tr_prepare_round
     try:
-        tr_state = _tr_prepare_round(next_state, stop_at_round=None)
+        tr_state = tiered_rounds_continue_unconstrained(tr_state)
     except Exception as e:
         return no_up7[0], f"✗ Error: {e}", *no_up7[2:]
     _app_state["tr_state"]  = tr_state
@@ -2812,7 +2803,7 @@ def cb_reset_r1(n_clicks):
     if ALLOCATION_POLICY in ("tiered_rounds", "tiered_ll"):
         _app_state["phase"] = "phase0_done"
         _app_state["tr_state"] = None
-        msg = "Reset — Phase 0 complete. Click 'Run full allocation' to restart preference rounds."
+        msg = "Reset — Phase 0 complete. Use 'Start preference rounds (manual)' or 'Auto-run' below."
         panel = html.Span("Allocation reset. Ready to run preference rounds.", className="text-muted")
         return msg, "phase0_done", slider_max, marks, slider_val, panel
 
@@ -3754,10 +3745,18 @@ def _render_tiered_rounds_panel(tr_state: "TieredRoundsState") -> "html.Div":
         manual_n = len(entry["manual_decisions"])
         forwarded_n = len(entry["forwarded_to_next_round"])
         tie_n = len(entry["ties"])
-        # In manual mode every pick appears in both assigned_this_round AND
-        # manual_decisions, so use manual_n alone to avoid double-counting.
-        display_assigned = manual_n if manual_n > 0 else assigned_n
-        display_picks    = manual_n if manual_n > 0 else tie_n
+        # In fully-manual rounds every pick appears in both assigned_this_round
+        # AND manual_decisions (assigned_n == manual_n), so count once.
+        # In auto-run rounds with ties, assigned_this_round has unambiguous picks
+        # and manual_decisions has only tie-break picks — they are disjoint, so sum.
+        if manual_n > 0 and assigned_n == manual_n:
+            # Fully manual round: all assignments are manual decisions
+            display_assigned = manual_n
+            display_picks    = manual_n
+        else:
+            # Auto-run (unambiguous + optional tie-break): counts are disjoint
+            display_assigned = assigned_n + manual_n
+            display_picks    = tie_n
         trace_rows.append(html.Tr([
             html.Td(rn),
             html.Td(display_assigned),

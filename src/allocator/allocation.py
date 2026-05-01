@@ -1327,7 +1327,7 @@ def _tr_prepare_round(
     student_map = {s.id: s for s in state.students}
     unassigned = [sid for sid, fid in state.assignments.items() if fid is None]
 
-    groups: Dict[str, List[str]] = {}        # fid -> [sids sorted CPI desc]
+    groups_s: Dict[str, List[Student]] = {}  # fid -> [Student objects]
     students_no_pref: List[str] = []
     targeted_saturated: Set[str] = set()
 
@@ -1340,10 +1340,12 @@ def _tr_prepare_round(
             if fid in state.saturated_advisors:
                 targeted_saturated.add(fid)
             else:
-                groups.setdefault(fid, []).append(s)
+                groups_s.setdefault(fid, []).append(s)
 
-    for fid in groups:
-        groups[fid] = [s.id for s in sorted(groups[fid], key=lambda s: (-s.cpi, s.id))]
+    groups: Dict[str, List[str]] = {
+        fid: [s.id for s in sorted(slist, key=lambda s: (-s.cpi, s.id))]
+        for fid, slist in groups_s.items()
+    }
 
     if not groups:
         if students_no_pref:
@@ -1425,12 +1427,20 @@ def tiered_rounds_apply_picks(
     assigned_this_round: Dict[str, str] = {}
     manual_decisions = []
 
-    # Validate all picks
+    # Validate completeness and correctness of picks
+    expected = set(state.pending_round_groups.keys())
+    provided = set(picks.keys())
+    missing = expected - provided
+    extra   = provided - expected
+    if missing:
+        raise ValueError(
+            f"Round {round_no}: picks missing for advisor(s): {sorted(missing)}."
+        )
+    if extra:
+        raise ValueError(
+            f"Round {round_no}: picks provided for unknown advisor(s): {sorted(extra)}."
+        )
     for fid, sid in picks.items():
-        if fid not in state.pending_round_groups:
-            raise ValueError(
-                f"Advisor {fid!r} is not in pending_round_groups for round {round_no}."
-            )
         if sid not in state.pending_round_groups[fid]:
             raise ValueError(
                 f"Student {sid!r} is not a candidate for advisor {fid!r} in round {round_no}."
@@ -1446,7 +1456,7 @@ def tiered_rounds_apply_picks(
     for fid, sid in sorted_picks:
         s = student_map[sid]
         f = faculty_map[fid]
-        rank = s.preferences.index(fid) + 1
+        rank = round_no  # candidate is at their round_no-th preference by construction
         assignments[sid] = fid
         faculty_loads[fid] += 1
         assigned_this_round[sid] = fid
@@ -1605,6 +1615,32 @@ def tiered_rounds_start_interactive(
         stall_unassigned=[],
     )
     return _tr_prepare_round(initial, stop_at_round=stop_at_round)
+
+
+def tiered_rounds_continue_unconstrained(state: TieredRoundsState) -> TieredRoundsState:
+    """
+    Resume interactive tiered rounds with no stop_at_round limit.
+
+    Called when the operator chooses to continue past the tiered_ll critical
+    round instead of switching to LL-HP backfill.  The state must have status
+    ``"switch_to_backfill"``; the returned state has status
+    ``"awaiting_round_picks"`` (or ``"complete"``/``"stalled"`` if the
+    allocation resolves immediately).
+    """
+    from dataclasses import replace as _dc_replace
+    if state.status != "switch_to_backfill":
+        raise ValueError(
+            f"tiered_rounds_continue_unconstrained requires status='switch_to_backfill' "
+            f"(got {state.status!r})."
+        )
+    next_state = _dc_replace(
+        state,
+        status="running",
+        pending_round_groups={},
+        pending_tie=None,
+        pending_tie_queue=[],
+    )
+    return _tr_prepare_round(next_state, stop_at_round=None)
 
 
 def tiered_rounds_start(
