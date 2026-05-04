@@ -71,6 +71,18 @@ were already in the codebase. Real data anonymization can now be re-run cleanly.
 
 ---
 
+---
+
+## Step 6 — tiered_ll Backfill Refinement (independent; can start now)
+
+| File | Description |
+|------|-------------|
+| [`tiered_ll_backfill_refinement.md`](tiered_ll_backfill_refinement.md) | Two-phase LL-HP backfill (Phase 1: non-empty labs while U > E; Phase 2: empty labs when U ≤ E) + `find_critical_round` overshoot fix (k_crit = n−1 when U_n < E_n). Includes tests, doc update, re-running 5-policy study, and regenerating presentation PDF. |
+
+**Blocks:** nothing (self-contained refinement to an existing policy).
+
+---
+
 ## Dependency Summary
 
 ```

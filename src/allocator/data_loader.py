@@ -73,18 +73,26 @@ def _pref_columns(df: pd.DataFrame) -> List[str]:
     )
 
 
-def _normalise_raw_form_columns(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]]:
+def _normalise_raw_form_columns(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str], List[int]]:
     """
     Rename raw Google Form column names to the standard names expected by
     preprocess_students (student_id, name, cpi, pref_1, pref_2, …).
 
     Handles common form column patterns:
-      - student_id ← Roll No., Roll Number, Roll, ID, student_id
+      - student_id ← Roll No., Roll Number, Roll, ID, student_id (optional)
       - name       ← Name, Student Name, Full Name
       - cpi        ← CPI (as on date), CPI, CGPA, GPA
-      - pref_N     ← Preference N, Preference  N, Pref N, Choice N  (regex)
+      - pref_N     ← any column whose name starts with "preference" (case-insensitive)
+                     and contains at least one digit; columns are numbered positionally
+                     (first match → pref_1, second → pref_2, …) regardless of the
+                     embedded number.
 
-    Returns the renamed DataFrame and a list of warning strings.
+    Returns
+    -------
+    (renamed_df, warnings, pref_embedded_numbers)
+        pref_embedded_numbers : list of the last integer found in each detected
+            preference column name, in positional order. Used by
+            preprocess_students strict mode to verify column ordering.
     """
     import re as _re
 
@@ -112,8 +120,7 @@ def _normalise_raw_form_columns(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[st
         if found:
             rename[found] = "student_id"
             warnings.append(f"Mapped column '{found}' → 'student_id'.")
-        else:
-            warnings.append("Could not find a 'student_id' / 'Roll No.' column.")
+        # No warning when student_id is absent — raw files often have only a name column.
 
     if "cpi" not in cols:
         found = _find(["cpi (as on date)", "cpi", "cgpa", "gpa"])
@@ -123,28 +130,35 @@ def _normalise_raw_form_columns(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[st
         else:
             warnings.append("Could not find a 'cpi' / 'CPI' column.")
 
-    # Preference columns: match 'preference N', 'pref N', 'choice N' etc.
-    _pref_pat = _re.compile(r'(?:preference|pref\.?|choice)\s*(\d+)', _re.IGNORECASE)
-    pref_matches = []
-    for c in cols:
-        m = _pref_pat.search(c)
-        if m and c not in rename and c not in ("pref_1",):
-            pref_matches.append((int(m.group(1)), c))
+    # Preference columns: any column whose name starts with "preference" (case-insensitive)
+    # and contains at least one digit. Columns are assigned pref_1, pref_2, … in the
+    # order they appear in the file (positional), not by their embedded number.
+    _pref_start   = _re.compile(r'^preference', _re.IGNORECASE)
+    _last_int     = _re.compile(r'(\d+)(?!.*\d)')   # last integer in the string
 
-    if pref_matches:
-        pref_matches.sort(key=lambda x: x[0])
-        for rank, col in pref_matches:
-            standard = f"pref_{rank}"
+    pref_cols_ordered: List[str] = []
+    pref_embedded:     List[int] = []
+    for c in cols:
+        if _pref_start.match(c) and c not in rename:
+            m = _last_int.search(c)
+            if m:
+                pref_cols_ordered.append(c)
+                pref_embedded.append(int(m.group(1)))
+
+    if pref_cols_ordered:
+        for i, col in enumerate(pref_cols_ordered, start=1):
+            standard = f"pref_{i}"
             if col != standard:
                 rename[col] = standard
         warnings.append(
-            f"Mapped {len(pref_matches)} preference column(s) to pref_1…pref_{pref_matches[-1][0]}."
+            f"Mapped {len(pref_cols_ordered)} preference column(s) to "
+            f"pref_1…pref_{len(pref_cols_ordered)}."
         )
 
     if rename:
         df = df.rename(columns=rename)
 
-    return df, warnings
+    return df, warnings, pref_embedded
 
 
 def _clean_id(val) -> str:
@@ -306,6 +320,7 @@ def load_faculty(path: str | Path) -> List[Faculty]:
 def preprocess_students(
     path: str | Path,
     faculty: List[Faculty],
+    strict: bool = False,
 ) -> Tuple[pd.DataFrame, List[str], int]:
     """
     Load a raw student file (CSV or Excel), apply three cleaning steps, and
@@ -313,13 +328,14 @@ def preprocess_students(
     human-readable warning strings describing what changed.
 
     Accepts both pre-processed files (with student_id / cpi / pref_N columns)
-    and raw Google Form exports (with Roll No. / CPI (as on date) /
-    Preference N columns) — column names are normalised automatically.
+    and raw form exports (with Name / CPI / Preference N columns) — column
+    names are normalised automatically.  A student_id column is optional; when
+    absent the name column is used as the identifier.
 
     Cleaning steps (in order):
     0. Normalise raw form column names to standard names (student_id, cpi, pref_N).
-    1. Map faculty names → IDs using the faculty list.  Any value already
-       matching a faculty ID is passed through unchanged.
+    1. Map faculty names → IDs using the faculty list.  Unknown values pass
+       through unchanged.
     2. Remove duplicate preferences per student (shift remaining entries up).
     3. Backfill trailing empty slots with faculty the student did not mention,
        in alphabetical order by name, so every student has a complete ranking
@@ -329,6 +345,10 @@ def preprocess_students(
     ----------
     path    : path to the raw students CSV or Excel file
     faculty : authoritative faculty list — defines the full set for backfill
+    strict  : if True (CLI mode), raise ValueError immediately when column
+              names are unrecognisable or preference columns are not in the
+              expected sequential order.  If False (default / app mode), emit
+              warnings and continue best-effort.
 
     Returns
     -------
@@ -344,23 +364,55 @@ def preprocess_students(
     else:
         df = pd.read_csv(path, dtype=str)
 
-    df.columns = [c.strip().lower() for c in df.columns]
+    # Strip leading BOM and whitespace; normalise to lowercase.
+    df.columns = [c.strip().lstrip('﻿').lower() for c in df.columns]
 
     # Step 0 — normalise raw form column names to standard names
-    df, norm_warnings = _normalise_raw_form_columns(df)
+    df, norm_warnings, pref_embedded = _normalise_raw_form_columns(df)
 
-    required = {"student_id", "name", "cpi"}
+    # --- strict: validate preference column ordering -------------------------
+    if strict and pref_embedded:
+        bad = [
+            (i + 1, pref_embedded[i])
+            for i in range(len(pref_embedded))
+            if pref_embedded[i] != i + 1
+        ]
+        if bad:
+            detail = ", ".join(
+                f"position {pos} has embedded number {num}" for pos, num in bad
+            )
+            raise ValueError(
+                f"Preference columns are not in sequential order: {detail}. "
+                "Ensure that the preference columns appear in the file in the "
+                "same order as their embedded numbers (1, 2, 3, …)."
+            )
+
+    # --- strict: fail on unrecognisable required columns --------------------
+    if strict:
+        unrecog = [w for w in norm_warnings if w.startswith("Could not find")]
+        if unrecog:
+            raise ValueError(
+                "Column names in the file are not recognisable:\n"
+                + "\n".join(f"  • {w}" for w in unrecog)
+            )
+
+    required = {"name", "cpi"}
     missing = required - set(df.columns)
     if missing:
         raise ValueError(
             f"Students file is missing columns: {missing}. "
-            "Expected 'student_id' (or 'Roll No.'), 'name', 'cpi' (or 'CPI (as on date)'), "
-            "and preference columns ('pref_1' or 'Preference 1')."
+            "Expected 'name' and 'cpi' (or recognised aliases such as "
+            "'CPI (as on date)', 'CGPA', 'GPA'), plus preference columns "
+            "whose headings start with 'Preference' and contain a number."
         )
+
+    # Synthesize student_id from name when not present.
+    if "student_id" not in df.columns:
+        df["student_id"] = df["name"]
 
     pref_cols = _pref_columns(df)
     if not pref_cols:
-        raise ValueError("students file must have at least one pref_1 column")
+        raise ValueError("students file must have at least one preference column")
 
     # Build name→ID and ID→name maps from the faculty list
     name_to_id: Dict[str, str] = {f.name: f.id for f in faculty}
@@ -382,8 +434,6 @@ def preprocess_students(
     def _map_name_to_id(val: str) -> str:
         if not val or pd.isna(val):
             return ""
-        if val in all_fids:
-            return val          # already an ID
         return name_to_id.get(val, val)  # map name; unknown values pass through
 
     before_map = out[pref_out_cols].copy()
