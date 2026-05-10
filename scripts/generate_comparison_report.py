@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """
 Generate multi-policy allocation comparison report for 2019 and 2020 cohorts.
-Policies: cpi_fill, least_loaded, tiered_rounds
+Policies: least_loaded, adaptive_ll, cpi_fill, tiered_rounds, tiered_ll
 Outputs:
-  test/allocation_comparison_2019_2020.md
-  test/allocation_comparison_2019_2020.pdf
-  test/figures/heatmap_<year>_<policy>.png  (one per policy per year)
+  reports/comparison/real_data_report.md
+  reports/comparison/real_data_report.pdf
+  reports/comparison/figures/heatmap_<year>_<policy>.png  (one per policy per year)
 """
 
 import re
+import statistics
 import subprocess
 import sys
 import textwrap
@@ -30,19 +31,22 @@ from allocator.data_loader import load_faculty, preprocess_students
 from allocator.metrics import compute_metrics
 from allocator.state import Student
 
-POLICIES = ["cpi_fill", "least_loaded", "tiered_rounds"]
+POLICIES = ["least_loaded", "adaptive_ll", "cpi_fill", "tiered_rounds", "tiered_ll"]
 POLICY_LABELS = {
-    "cpi_fill":      "CPI-Fill",
     "least_loaded":  "Least Loaded",
+    "adaptive_ll":   "Adaptive LL",
+    "cpi_fill":      "CPI-Fill",
     "tiered_rounds": "Tiered Rounds",
+    "tiered_ll":     "Tiered LL",
 }
 YEAR_DIRS = {
     "2019": ROOT / "test" / "2019",
     "2020": ROOT / "test" / "2020",
 }
-FIGURES_DIR = ROOT / "test" / "figures"
-OUT_MD  = ROOT / "test" / "allocation_comparison_2019_2020.md"
-OUT_PDF = ROOT / "test" / "allocation_comparison_2019_2020.pdf"
+OUT_DIR     = ROOT / "reports" / "comparison"
+FIGURES_DIR = OUT_DIR / "figures"
+OUT_MD      = OUT_DIR / "real_data_report.md"
+OUT_PDF     = OUT_DIR / "real_data_report.pdf"
 
 # LaTeX unicode header (written to a temp location at runtime)
 _UNICODE_TEX = textwrap.dedent(r"""
@@ -124,7 +128,10 @@ def run_standard_policy(
     faculty = load_faculty(faculty_path)
     students, orig = load_year_students(students_path, faculty)
     assignments, _, meta, metrics = run_full_allocation(students, faculty, policy=policy)
-    return dict(assignments=assignments, students=students, faculty=faculty,
+    # phase0 (called internally by run_full_allocation) returns new student objects
+    # with tier set; re-run it here to get tiered students for reporting tables.
+    students_tiered, _, _, _ = phase0(list(students), list(faculty))
+    return dict(assignments=assignments, students=students_tiered, faculty=faculty,
                 meta=meta, metrics=metrics, original_pref_counts=orig)
 
 
@@ -160,12 +167,102 @@ def run_tiered_rounds(students_path: Path, faculty_path: Path) -> dict:
 def run_year(year_dir: Path) -> dict:
     sp, fp = year_dir / "anonymized_preferences.csv", year_dir / "faculty.csv"
     results = {}
-    for policy in ("cpi_fill", "least_loaded"):
+    auto_policies = [p for p in POLICIES if p != "tiered_rounds"]
+    for policy in auto_policies:
         print(f"    {policy}...", flush=True)
         results[policy] = run_standard_policy(sp, fp, policy)
-    print("    tiered_rounds...", flush=True)
-    results["tiered_rounds"] = run_tiered_rounds(sp, fp)
+    if "tiered_rounds" in POLICIES:
+        print("    tiered_rounds...", flush=True)
+        results["tiered_rounds"] = run_tiered_rounds(sp, fp)
     return results
+
+
+# ---------------------------------------------------------------------------
+# Cohort profile
+# ---------------------------------------------------------------------------
+
+def _percentile(sorted_vals: list[float], pct: float) -> float:
+    if not sorted_vals:
+        return 0.0
+    idx = pct / 100 * (len(sorted_vals) - 1)
+    lo, hi = int(idx), min(int(idx) + 1, len(sorted_vals) - 1)
+    return sorted_vals[lo] + (idx - lo) * (sorted_vals[hi] - sorted_vals[lo])
+
+
+def build_cohort_profile(year: str, year_dir: Path) -> str:
+    sp, fp = year_dir / "anonymized_preferences.csv", year_dir / "faculty.csv"
+    faculty = load_faculty(fp)
+    students_raw, _ = load_year_students(sp, faculty)
+
+    # Run phase0 to get tier assignments.
+    students_ph0, faculty_ph0, meta, _ = phase0(students_raw, faculty)
+
+    cpis   = sorted(s.cpi for s in students_ph0)
+    prefs  = sorted(len(s.preferences) for s in students_ph0)
+    loads  = [f.max_load for f in faculty_ph0 if f.max_load and f.max_load > 0]
+    S, F   = len(students_ph0), len(faculty_ph0)
+
+    tier_counts: dict[str, int] = {}
+    for s in students_ph0:
+        tier_counts[s.tier or "?"] = tier_counts.get(s.tier or "?", 0) + 1
+
+    lines: list[str] = [
+        f"### {year} Cohort Profile",
+        "",
+        f"| Parameter | Value |",
+        f"|-----------|-------|",
+        f"| Students (S) | {S} |",
+        f"| Faculty (F) | {F} |",
+        f"| S/F ratio | {S/F:.2f} |",
+        f"| Tiering mode | {meta.get('mode', '?')} |",
+        f"| N_A (tier window) | {meta.get('N_A', '?')} |",
+        f"| N_B (tier window) | {meta.get('N_B', '?')} |",
+        f"| Capacity/advisor (formula) | {meta.get('common_max_load', '?')} |",
+        "",
+        "**CPI distribution:**",
+        "",
+        "| Min | Max | Mean | Std | p70 | p90 |",
+        "|-----|-----|------|-----|-----|-----|",
+        "| {:.2f} | {:.2f} | {:.2f} | {:.2f} | {:.2f} | {:.2f} |".format(
+            min(cpis), max(cpis),
+            statistics.mean(cpis),
+            statistics.stdev(cpis) if len(cpis) > 1 else 0.0,
+            _percentile(cpis, 70),
+            _percentile(cpis, 90),
+        ),
+        "",
+        "**Tier breakdown:**",
+        "",
+        "| Tier | Count |",
+        "|------|-------|",
+    ]
+    for tier in ["A", "B", "B1", "B2", "C"]:
+        cnt = tier_counts.get(tier, 0)
+        if cnt:
+            lines.append(f"| {tier} | {cnt} |")
+    lines += [
+        "",
+        "**Preference list length** (explicit + backfill):",
+        "",
+        "| Min | Max | Mean | Median |",
+        "|-----|-----|------|--------|",
+        "| {} | {} | {:.1f} | {:.1f} |".format(
+            min(prefs), max(prefs),
+            statistics.mean(prefs),
+            statistics.median(prefs),
+        ),
+        "",
+    ]
+    if loads:
+        lines += [
+            "**Faculty max-load distribution:**",
+            "",
+            "| Min | Max | Mean |",
+            "|-----|-----|------|",
+            "| {} | {} | {:.1f} |".format(min(loads), max(loads), statistics.mean(loads)),
+            "",
+        ]
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -441,7 +538,7 @@ def build_tier_mixing_table(policy_metrics: dict) -> str:
 # ---------------------------------------------------------------------------
 
 def build_year_section(year: str, results: dict, figures_dir: Path) -> str:
-    ref   = results["cpi_fill"]
+    ref   = results[POLICIES[0]]
     meta  = ref["meta"]
     n_s   = len(ref["students"])
     n_f   = len(ref["faculty"])
@@ -460,7 +557,7 @@ def build_year_section(year: str, results: dict, figures_dir: Path) -> str:
     )
 
     # Tiered-rounds notes
-    tr = results["tiered_rounds"]
+    tr = results.get("tiered_rounds", {})
     if tr.get("stalled"):
         ua = ", ".join(tr["stall_unassigned"])
         lines.append(
@@ -478,6 +575,25 @@ def build_year_section(year: str, results: dict, figures_dir: Path) -> str:
                 f"chose **{t['chosen']}**"
             )
         lines.append("")
+
+    # Tiered-LL notes
+    tll = results.get("tiered_ll", {})
+    if tll:
+        k_crit = tll.get("meta", {}).get("k_crit_static")
+        if k_crit is not None:
+            lines.append(f"> **Tiered LL:** k_crit = {k_crit} "
+                         f"(switched to CPI-Fill backfill after round {k_crit}).\n")
+
+    # Adaptive-LL notes
+    all_res = results.get("adaptive_ll", {})
+    if all_res:
+        all_meta = all_res.get("meta", {})
+        e_base = all_meta.get("E_baseline_excess")
+        if e_base is not None and e_base > 0:
+            lines.append(
+                f"> **Adaptive LL:** cap optimization applied "
+                f"(N_A→{all_meta.get('N_A', '?')}, N_B→{all_meta.get('N_B', '?')}).\n"
+            )
 
     ref_students = ref["students"]
     orig_counts  = ref["original_pref_counts"]
@@ -575,28 +691,43 @@ def build_summary_table(all_results: dict) -> str:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+
     all_results: dict[str, dict] = {}
     for year, year_dir in YEAR_DIRS.items():
         print(f"Running {year}...", flush=True)
         all_results[year] = run_year(year_dir)
         print(f"  {year} done.", flush=True)
 
+    pol_labels = ", ".join(f"**{POLICY_LABELS[p]}**" for p in POLICIES)
     report: list[str] = [
         "# MS Thesis Allocation — Policy Comparison (2019 & 2020)",
         "",
-        "Policies compared: **CPI-Fill**, **Least Loaded**, **Tiered Rounds**",
+        f"Policies compared: {pol_labels}",
         "",
         "Preference ranks appear in parentheses beside each assigned advisor ID "
         "(1 = student's top choice).",
         "",
-        "> **Tie-breaking (tiered_rounds):** equal-CPI students competing for the same "
-        "advisor in the same round are resolved by lowest student number.",
+        "> **Tie-breaking (tiered_rounds / tiered_ll):** equal-CPI students competing "
+        "for the same advisor in the same round are resolved by lowest student number.",
         "",
         "> **Preference backfilling (2019):** students submitted only 8 preferences. "
         "Remaining faculty are appended alphabetically to complete the ranking "
         "(standard protocol). Backfill assignments are marked **†**.",
         "",
+        "---",
+        "",
+        "## Cohort Profiles",
+        "",
     ]
+
+    for year, year_dir in YEAR_DIRS.items():
+        report.append(build_cohort_profile(year, year_dir))
+        report.append("")
+
+    report.append("---")
+    report.append("")
 
     for year in ("2019", "2020"):
         report.append(build_year_section(year, all_results[year], FIGURES_DIR))
@@ -621,7 +752,7 @@ def main() -> None:
     print(f"\nMarkdown report → {OUT_MD}")
 
     # --- Generate PDF ---
-    tex_header = ROOT / "test" / "_unicode_symbols.tex"
+    tex_header = OUT_DIR / "_unicode_symbols.tex"
     tex_header.write_text(_UNICODE_TEX, encoding="utf-8")
     result = subprocess.run(
         [

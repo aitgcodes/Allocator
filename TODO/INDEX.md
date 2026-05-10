@@ -40,16 +40,13 @@ were already in the codebase. Real data anonymization can now be re-run cleanly.
 
 ---
 
-## Step 4 — Comparative Study (needs Steps 1 + 3; full matrix also needs Step 2)
+## Step 4 — Comparative Study (needs Steps 1 + 3; full matrix also needs Step 2) ✓ COMPLETE
 
 | File | Description |
 |------|-------------|
 | [`comparative_study.md`](comparative_study.md) | Run LL, adaptive-LL, CPI-Fill, tiered_rounds, tiered_ll on 2019 and 2020 real cohort data; collect all metrics; produce `reports/comparison/real_data_report.md` and PDF. |
 
-**Notes:**
-- 4-policy run (excluding `tiered_ll`) can proceed once Steps 1 + 3 (`--auto-tiebreak`) are done.
-- Full 5-policy matrix requires Step 2 (`tiered_ll`) and Step 3 (full CLI) to be complete.
-- Real data must be preprocessed and anonymized before running (see Step 1).
+**Completed 2026-05-10.** `scripts/generate_comparison_report.py` extended to all 5 policies with cohort profiles, 10 tier heatmaps, per-year allocation/metrics tables, and cross-cohort summary. Outputs to `reports/comparison/real_data_report.{md,pdf}`.
 
 **Blocks:** Step 5 (docs — policy report section).
 
