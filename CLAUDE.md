@@ -41,14 +41,50 @@ PYTHONPATH=src python -m allocator.allocation --phase0-only \
 PYTHONPATH=src python -m allocator.allocation \
   --students data/sample_students.csv \
   --faculty data/sample_faculty.csv \
-  --policy least_loaded   # or: adaptive_ll, cpi_fill, tiered_rounds, tiered_ll
+  --policy least_loaded   # or: adaptive_ll, cpi_fill
   --out reports/
+
+# tiered_rounds and tiered_ll require --auto-tiebreak for CLI use:
+PYTHONPATH=src python -m allocator.allocation \
+  --students data/sample_students.csv \
+  --faculty data/sample_faculty.csv \
+  --policy tiered_ll --auto-tiebreak \
+  --out reports/
+
+# --metrics prints advisor metrics and writes metrics.json:
+PYTHONPATH=src python -m allocator.allocation ... --metrics
+
+# --format json writes allocation_result.json in addition to CSV:
+PYTHONPATH=src python -m allocator.allocation ... --format json
 ```
 
-**Policy comparison study (stats folder):**
+**Analysis CLI (`python -m allocator.analyze`):**
+```bash
+# Recompute metrics for an existing allocation result:
+PYTHONPATH=src python -m allocator.analyze metrics \
+  --students data/sample_students.csv \
+  --faculty  data/sample_faculty.csv \
+  --result   reports/allocation_result.csv \
+  --out      reports/
+
+# Compare all five policies on one dataset:
+PYTHONPATH=src python -m allocator.analyze compare \
+  --students data/sample_students.csv \
+  --faculty  data/sample_faculty.csv \
+  --policies least_loaded adaptive_ll cpi_fill tiered_rounds tiered_ll \
+  --out      reports/comparison/
+
+# Run the 5-policy × 6-dataset comparison study:
+PYTHONPATH=src python -m allocator.analyze study \
+  --students data/sample_students.csv \
+  --faculty  data/sample_faculty.csv \
+  --out      stats/
+```
+
+**Policy comparison study (stats folder, direct):**
 ```bash
 PYTHONPATH=src python stats/run_study.py
-# → generates 4 synthetic datasets + runs both policies on all 5 datasets
+# → generates 4 synthetic datasets + runs all 5 policies on all datasets
 # → writes stats/policy_report.md
 ```
 

@@ -179,12 +179,19 @@ def _best(by_policy: Dict[str, float], higher_better: bool) -> str:
 # Report builder
 # ---------------------------------------------------------------------------
 
-def build_report(all_results: Dict[str, dict], scenario_labels: Dict[str, str]) -> str:
+def build_report(
+    all_results: Dict[str, dict],
+    scenario_labels: Dict[str, str],
+    policies: Optional[List[str]] = None,
+) -> str:
+    if policies is None:
+        policies = POLICIES
     lines: List[str] = []
-    abbr_legend = ", ".join(f"{v} = `{k}`" for k, v in ABBREV.items())
+    abbr_legend = ", ".join(f"{ABBREV[p]} = `{p}`" for p in policies if p in ABBREV)
 
+    n_policies = len(policies)
     lines += [
-        "# Allocation Policy Comparison Study — 5-Policy Matrix",
+        f"# Allocation Policy Comparison Study — {n_policies}-Policy Matrix",
         "",
         f"**Policies:** {abbr_legend}  ",
         "**Datasets:** 2019 cohort, 2020 cohort + 4 synthetic (random, clustered, polarised, uniform_high_cpi)  ",
@@ -326,10 +333,12 @@ def build_report(all_results: Dict[str, dict], scenario_labels: Dict[str, str]) 
     ]
 
     collectors: Dict[str, Dict[str, List[float]]] = {
-        name: {p: [] for p in POLICIES} for name, _, _ in metric_keys
+        name: {p: [] for p in policies} for name, _, _ in metric_keys
     }
     for ds_key, policy_results in all_results.items():
         for policy, res in _policy_items(policy_results):
+            if policy not in policies:
+                continue
             m   = res["metrics"]
             adv = m["advisor"]
             n   = res["n_students"]
@@ -341,15 +350,15 @@ def build_report(all_results: Dict[str, dict], scenario_labels: Dict[str, str]) 
                     if v is not None:
                         collectors[name][policy].append(v)
 
-    header = " | ".join(f"{ABBREV[p]}" for p in POLICIES)
+    header = " | ".join(f"{ABBREV.get(p, p)}" for p in policies)
     lines.append(f"| Metric | {header} | Best |")
-    lines.append("|--------|" + "--------|" * len(POLICIES) + "------|")
+    lines.append("|--------|" + "--------|" * len(policies) + "------|")
 
     for name, higher_better, _ in metric_keys:
         by_policy = collectors[name]
         means_map = {p: mean(v) for p, v in by_policy.items() if v}
         row_cells = []
-        for p in POLICIES:
+        for p in policies:
             vals = by_policy[p]
             if vals:
                 row_cells.append(f"{mean(vals):.3f} ± {stdev(vals):.3f}")
@@ -371,8 +380,8 @@ def build_report(all_results: Dict[str, dict], scenario_labels: Dict[str, str]) 
         "",
     ]
 
-    other_policies = [p for p in POLICIES if p != "least_loaded"]
-    delta_header = " | ".join(f"Δ{ABBREV[p]}" for p in other_policies)
+    other_policies = [p for p in policies if p != "least_loaded"]
+    delta_header = " | ".join(f"Δ{ABBREV.get(p, p)}" for p in other_policies)
 
     delta_metrics = [
         ("NPSS",        True,  lambda res: res["metrics"]["npss"]),
@@ -382,24 +391,30 @@ def build_report(all_results: Dict[str, dict], scenario_labels: Dict[str, str]) 
         ("Equity Ret%", True,  lambda res: res["metrics"]["advisor"].get("equity_retention", 100.0)),
         ("Avg MSES",    False, lambda res: res["metrics"]["advisor"].get("avg_mses") or 0.0),
     ]
-    for idx, (metric_name, higher_better, fn) in enumerate(delta_metrics):
-        sub = chr(ord('a') + idx)
-        lines.append(f"### 5{sub}. {metric_name}")
-        lines.append("")
-        lines.append(f"| Dataset | LL | {delta_header} |")
-        lines.append("|---------|----" + "|--------" * len(other_policies) + "|")
-        for ds_key, policy_results in all_results.items():
-            label = scenario_labels[ds_key]
-            ll_val = fn(policy_results["least_loaded"])
-            cells = [f"{ll_val:.3f}"]
-            for p in other_policies:
-                if p in policy_results:
-                    delta = fn(policy_results[p]) - ll_val
-                    cells.append(f"{delta:+.3f}")
-                else:
-                    cells.append("N/A")
-            lines.append(f"| {label} | " + " | ".join(cells) + " |")
-        lines += [""]
+    if "least_loaded" not in policies:
+        lines += ["> Section 5 omitted — `least_loaded` not in the policy set (no baseline).", ""]
+    else:
+        for idx, (metric_name, higher_better, fn) in enumerate(delta_metrics):
+            sub = chr(ord('a') + idx)
+            lines.append(f"### 5{sub}. {metric_name}")
+            lines.append("")
+            lines.append(f"| Dataset | LL | {delta_header} |")
+            lines.append("|---------|----" + "|--------" * len(other_policies) + "|")
+            for ds_key, policy_results in all_results.items():
+                label  = scenario_labels[ds_key]
+                ll_res = policy_results.get("least_loaded")
+                if ll_res is None:
+                    continue
+                ll_val = fn(ll_res)
+                cells  = [f"{ll_val:.3f}"]
+                for p in other_policies:
+                    if p in policy_results:
+                        delta = fn(policy_results[p]) - ll_val
+                        cells.append(f"{delta:+.3f}")
+                    else:
+                        cells.append("N/A")
+                lines.append(f"| {label} | " + " | ".join(cells) + " |")
+            lines += [""]
 
     # ------------------------------------------------------------------ #
     # Section 6 — Rank distributions
@@ -434,12 +449,13 @@ def build_report(all_results: Dict[str, dict], scenario_labels: Dict[str, str]) 
     # ------------------------------------------------------------------ #
     THRESHOLDS = {"NPSS": 0.04, "PSI": 0.025, "Avg MSES": 0.5, "Equity Ret%": 5.0}
     win_counts: Dict[str, Dict[str, int]] = {
-        name: {p: 0 for p in POLICIES + ["draw"]}
+        name: {p: 0 for p in policies + ["draw"]}
         for name in THRESHOLDS
     }
 
     for ds_key, policy_results in all_results.items():
-        metrics_by_policy = {p: res["metrics"] for p, res in _policy_items(policy_results)}
+        metrics_by_policy = {p: res["metrics"] for p, res in _policy_items(policy_results)
+                             if p in policies}
         for metric_name, threshold in THRESHOLDS.items():
             higher_better = metric_name != "Avg MSES"
             vals = {}
@@ -457,7 +473,6 @@ def build_report(all_results: Dict[str, dict], scenario_labels: Dict[str, str]) 
                 continue
             best_p = _best(vals, higher_better)
             best_v = vals[best_p]
-            # check if best is clearly ahead of all others by threshold
             runner_up = sorted(vals.items(), key=lambda x: x[1], reverse=higher_better)
             if len(runner_up) > 1:
                 second_v = runner_up[1][1]
@@ -479,12 +494,12 @@ def build_report(all_results: Dict[str, dict], scenario_labels: Dict[str, str]) 
         "A win is counted only when the best policy exceeds the runner-up by ≥ threshold.",
         "",
     ]
-    win_header = " | ".join(ABBREV[p] for p in POLICIES)
+    win_header = " | ".join(ABBREV.get(p, p) for p in policies)
     lines.append(f"| Metric | Threshold | {win_header} | Draw |")
-    lines.append("|--------|-----------|" + "---|" * len(POLICIES) + "-----|")
+    lines.append("|--------|-----------|" + "---|" * len(policies) + "-----|")
     for metric_name, threshold in THRESHOLDS.items():
         wc = win_counts[metric_name]
-        counts = " | ".join(str(wc[p]) for p in POLICIES)
+        counts = " | ".join(str(wc[p]) for p in policies)
         lines.append(f"| {metric_name} | ≥ {threshold} | {counts} | {wc['draw']} |")
 
     # ------------------------------------------------------------------ #
@@ -591,17 +606,17 @@ def build_report(all_results: Dict[str, dict], scenario_labels: Dict[str, str]) 
             fac_names  = meta_block.get("faculty_names", {})
 
             if roster:
-                pol_header = " | ".join(f"{ABBREV[p]}" for p in POLICIES)
+                pol_header = " | ".join(f"{ABBREV.get(p, p)}" for p in policies)
                 lines += [
                     f"**Per-student assignments — {label}** *(faculty ID, preference rank in brackets)*",
                     "",
                     f"| # | Student ID | CPI | {pol_header} |",
-                    "|---|------------|-----|" + "------|" * len(POLICIES),
+                    "|---|------------|-----|" + "------|" * len(policies),
                 ]
                 for i, s in enumerate(roster, 1):
                     sid   = s["id"]
                     cells = []
-                    for p in POLICIES:
+                    for p in policies:
                         res  = pr.get(p, {})
                         fid  = res.get("assignments", {}).get(sid)
                         rank = res.get("metrics", {}).get("per_student", {}).get(sid, {}).get("assigned_rank")
@@ -693,11 +708,14 @@ def _policy_items(policy_results: dict):
     return ((p, r) for p, r in policy_results.items() if p != "_meta")
 
 
-def _run_dataset_from_files(students_path, faculty_path, label, all_results, key, scenario_labels):
+def _run_dataset_from_files(students_path, faculty_path, label, all_results, key, scenario_labels,
+                            policies=None):
+    if policies is None:
+        policies = POLICIES
     print(f"\n[{label}]")
     all_results[key] = {}
     faculty = load_faculty(str(faculty_path))
-    for p in POLICIES:
+    for p in policies:
         print(f"  {p}…", end=" ", flush=True)
         students = load_students(str(students_path))
         res = _run_policy(students, faculty, p)
@@ -707,8 +725,10 @@ def _run_dataset_from_files(students_path, faculty_path, label, all_results, key
 
 
 def _run_dataset_raw(students_raw_path, faculty_path, label, all_results, key, scenario_labels,
-                     preprocessed_out: Path):
+                     preprocessed_out: Path, policies=None):
     """Load a raw Google Form export via preprocess_students, save cleaned CSV, then run."""
+    if policies is None:
+        policies = POLICIES
     print(f"\n[{label}]")
     faculty = load_faculty(str(faculty_path))
     random.seed(RANDOM_SEED)  # make backfill order deterministic
@@ -721,7 +741,7 @@ def _run_dataset_raw(students_raw_path, faculty_path, label, all_results, key, s
     students_loaded = load_students(str(preprocessed_out))
     roster, fac_names = _dataset_roster(students_loaded, faculty)
     all_results[key]["_meta"] = {"roster": roster, "faculty_names": fac_names}
-    for p in POLICIES:
+    for p in policies:
         print(f"  {p}…", end=" ", flush=True)
         students = load_students(str(preprocessed_out))
         res = _run_policy(students, faculty, p)
@@ -730,12 +750,38 @@ def _run_dataset_raw(students_raw_path, faculty_path, label, all_results, key, s
     scenario_labels[key] = label
 
 
-def main():
-    rng = random.Random(RANDOM_SEED)
+def run_study_with_params(
+    base_students_path: Path,
+    faculty_path: Path,
+    out_dir: Path,
+    policies: Optional[List[str]] = None,
+    random_seed: int = RANDOM_SEED,
+    real_datasets: Optional[List[Tuple]] = None,
+    verbose: bool = True,
+) -> str:
+    """
+    Parametric study runner; returns the Markdown report text.
 
-    template_students = load_students(str(BASE_STUDENTS))
-    faculty_raw       = load_faculty(str(FACULTY_FILE))
+    Parameters
+    ----------
+    base_students_path : students CSV used as template for synthetic generation
+    faculty_path       : faculty CSV (used for both synthetic and real datasets)
+    out_dir            : directory for policy_report.md and synthetic CSVs
+    policies           : list of policy names to run (default: all five)
+    random_seed        : seed for synthetic generation
+    real_datasets      : list of (students_path, faculty_path, label, is_raw) tuples
+                         is_raw=True → load via preprocess_students (Google Form export)
+    verbose            : print progress to stdout
+    """
+    if policies is None:
+        policies = POLICIES
+    rng = random.Random(random_seed)
+
+    template_students = load_students(str(base_students_path))
+    faculty_raw       = load_faculty(str(faculty_path))
     faculty_ids       = [f.id for f in faculty_raw]
+
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     synthetic_specs = [
         ("random",           "Synthetic 1 (Random)"),
@@ -744,66 +790,81 @@ def main():
         ("uniform_high_cpi", "Synthetic 4 (High-CPI)"),
     ]
 
-    synthetic_paths = {}
-    print("Generating synthetic datasets…")
+    synthetic_paths: Dict[str, Tuple[Path, str]] = {}
+    if verbose:
+        print("Generating synthetic datasets…")
     for scenario_key, label in synthetic_specs:
-        out_path = STATS_DIR / f"students_{scenario_key}.csv"
-        generate_random_preference_sheet(
-            template_students, faculty_ids, rng, scenario_key, out_path
-        )
-        synthetic_paths[scenario_key] = (out_path, label)
-        print(f"  {out_path.name}")
+        sp = out_dir / f"students_{scenario_key}.csv"
+        generate_random_preference_sheet(template_students, faculty_ids, rng, scenario_key, sp)
+        synthetic_paths[scenario_key] = (sp, label)
+        if verbose:
+            print(f"  {sp.name}")
 
-    all_results     = {}
-    scenario_labels = {}
+    all_results:     Dict[str, dict] = {}
+    scenario_labels: Dict[str, str]  = {}
 
-    n_datasets = 2 + len(synthetic_specs)  # 2019, 2020, + 4 synthetic
-    print(f"\nRunning {len(POLICIES)} policies × {n_datasets} datasets…")
+    n_datasets = len(synthetic_specs) + len(real_datasets or [])
+    if verbose:
+        print(f"\nRunning {len(policies)} policies × {n_datasets} datasets…")
 
-    # Real cohort data — 2019
-    _run_dataset_raw(
-        TEST_DIR / "2019" / "anonymized_preferences.csv",
-        TEST_DIR / "2019" / "faculty.csv",
-        "2019 Cohort",
-        all_results, "2019", scenario_labels,
-        preprocessed_out=STATS_DIR / "students_2019_cleaned.csv",
-    )
+    for sp, fp, label, is_raw in (real_datasets or []):
+        key = label.replace(" ", "_").lower()
+        if is_raw:
+            _run_dataset_raw(
+                Path(sp), Path(fp), label, all_results, key, scenario_labels,
+                preprocessed_out=out_dir / f"students_{key}_cleaned.csv",
+                policies=policies,
+            )
+        else:
+            _run_dataset_from_files(Path(sp), Path(fp), label, all_results, key, scenario_labels,
+                                    policies=policies)
 
-    # Real cohort data — 2020
-    _run_dataset_raw(
-        TEST_DIR / "2020" / "anonymized_preferences.csv",
-        TEST_DIR / "2020" / "faculty.csv",
-        "2020 Cohort",
-        all_results, "2020", scenario_labels,
-        preprocessed_out=STATS_DIR / "students_2020_cleaned.csv",
-    )
+    for scenario_key, (sp, label) in synthetic_paths.items():
+        _run_dataset_from_files(sp, faculty_path, label, all_results, scenario_key, scenario_labels,
+                                policies=policies)
 
-    # Synthetic datasets
-    for scenario_key, (students_path, label) in synthetic_paths.items():
-        _run_dataset_from_files(
-            students_path, FACULTY_FILE, label,
-            all_results, scenario_key, scenario_labels,
-        )
-
-    print("\nBuilding report…")
-    report_text = build_report(all_results, scenario_labels)
-    report_path = STATS_DIR / "policy_report.md"
+    if verbose:
+        print("\nBuilding report…")
+    report_text = build_report(all_results, scenario_labels, policies=policies)
+    report_path = out_dir / "policy_report.md"
     report_path.write_text(report_text)
-    print(f"Report written to: {report_path}")
+    if verbose:
+        print(f"Report written to: {report_path}")
 
     # Quick console summary
-    print(f"\n{'Dataset':<26} {'Policy':<15} {'NPSS':>8} {'PSI':>8} {'Overflow':>9} {'Empty':>6}")
-    print("-" * 80)
-    for ds_key, policy_results in all_results.items():
-        ds_label = scenario_labels[ds_key]
-        for policy, res in _policy_items(policy_results):
-            m = res["metrics"]
-            k = f" k={res['k_crit']}" if res["k_crit"] is not None else ""
-            print(
-                f"{ds_label:<26} {policy:<15} {m['npss']:>8.4f} {m['mean_psi']:>8.4f} "
-                f"{m['overflow_count']:>9} {res['empty_labs']:>6}{k}"
-            )
-        print()
+    if verbose:
+        print(f"\n{'Dataset':<26} {'Policy':<15} {'NPSS':>8} {'PSI':>8} {'Overflow':>9} {'Empty':>6}")
+        print("-" * 80)
+        for ds_key, policy_results in all_results.items():
+            ds_label = scenario_labels[ds_key]
+            for policy, res in _policy_items(policy_results):
+                m = res["metrics"]
+                k = f" k={res['k_crit']}" if res["k_crit"] is not None else ""
+                print(
+                    f"{ds_label:<26} {policy:<15} {m['npss']:>8.4f} {m['mean_psi']:>8.4f} "
+                    f"{m['overflow_count']:>9} {res['empty_labs']:>6}{k}"
+                )
+            print()
+
+    return report_text
+
+
+def main():
+    real_datasets = [
+        (TEST_DIR / "2019" / "anonymized_preferences.csv",
+         TEST_DIR / "2019" / "faculty.csv",
+         "2019 Cohort", True),
+        (TEST_DIR / "2020" / "anonymized_preferences.csv",
+         TEST_DIR / "2020" / "faculty.csv",
+         "2020 Cohort", True),
+    ]
+    run_study_with_params(
+        base_students_path=BASE_STUDENTS,
+        faculty_path=FACULTY_FILE,
+        out_dir=STATS_DIR,
+        policies=POLICIES,
+        real_datasets=real_datasets,
+    )
 
 
 if __name__ == "__main__":

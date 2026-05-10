@@ -28,15 +28,13 @@ were already in the codebase. Real data anonymization can now be re-run cleanly.
 
 ---
 
-## Step 3 — CLI Extension (needs Step 2 for full coverage)
+## Step 3 — CLI Extension ✓ COMPLETE
 
 | File | Description |
 |------|-------------|
 | [`cli_all_policies.md`](cli_all_policies.md) | Extend `python -m allocator.allocation` to cover all five policies; add `--auto-tiebreak` and `--dynamic-k` flags; add `python -m allocator.analyze` with `metrics`, `compare`, and `study` subcommands. |
 
-**Notes:**
-- `--auto-tiebreak` for `tiered_rounds` can be implemented without Step 2 and unblocks a 4-policy comparative run.
-- Full CLI coverage (including `tiered_ll`) requires Step 2 to be complete.
+**Completed 2026-05-10.** `--auto-tiebreak`, `--dynamic-k`, `--metrics`, `--format` added to `allocation.py` CLI; interactive-policy validation; `allocation_result.csv` always written, `metrics.json` under `--metrics`. New `src/allocator/analyze.py` with `metrics`, `compare`, `study` subcommands. `stats/run_study.py` refactored with `run_study_with_params()` used by `analyze study`. CLAUDE.md updated.
 
 **Blocks:** Step 4 (comparative study).
 
