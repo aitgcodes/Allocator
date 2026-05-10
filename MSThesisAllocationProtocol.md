@@ -225,3 +225,42 @@ In such cases, the load‑balancing rule may assign several students to the **le
 This combination keeps the policy **simple, fair, and predictable**, while aligning with your goal:
 
 > “At every round, prefer as balanced a distribution as possible, and only give that up if it is not possible within 1 → N_tier.”
+
+---
+
+## 5. Available Allocation Policies
+
+The system implements five allocation policies. Sections 3–4 above describe the **`least_loaded`** policy in detail. A summary of all five is given below:
+
+| Policy | Pipeline | Core rule | Empty-lab guarantee |
+|--------|----------|-----------|---------------------|
+| **`least_loaded`** *(default)* | Phase 0 → Round 1 → Class A→B→C | Least-loaded eligible advisor within N_tier window; ties by preference rank | Indirect (Class C fallback) |
+| **`adaptive_ll`** | Phase 0a+0b → Round 1 → Class A→B→C | Same LL rule; Phase 0b widens N_A/N_B caps to ensure E_after_B ≤ \|C_remaining\| | Yes, when S ≥ F (unless structural deficit) |
+| **`cpi_fill`** | Phase 0 → CPI-Fill Phase 1 → Phase 2 | Students processed in strict descending CPI; Phase 2 fills empty labs | Yes, when S ≥ F |
+| **`tiered_rounds`** | Phase 0 → Preference Rounds | In round n each student offers their n-th preference; highest CPI wins; ties require manual pick (GUI) or auto-resolve (`--auto-tiebreak` CLI) | Implicit |
+| **`tiered_ll`** | Phase 0a+0b → Tiered Rounds 1..k → Backfill | Interactive rounds up to the critical round k (dry-run pre-computed), then automatic LL-HP backfill | Yes, when S ≥ F |
+
+Full policy specifications: `docs/policy_*.md`.
+
+---
+
+## 6. Post-Allocation Metrics
+
+After each run, the system computes the following metrics for evaluation and comparison across policies:
+
+### 6.1 Student Satisfaction
+
+| Metric | Formula | Interpretation |
+|--------|---------|----------------|
+| **NPSS** (Normalized Preference Satisfaction Score) | Σ w_i · (F − p_i + 1) / F, where w_i = CPI_i / Σ CPI | CPI-weighted satisfaction; higher is better. F is the full faculty count, used as denominator for all policies. |
+| **PSI** (Preference Satisfaction Index) | Mean of (1 − (p_i − 1) / (F − 1)) across all students | Equal-weighted rank score; higher is better. |
+| **Overflow count** | Number of students with rank p_i > N_tier | Protocol-compliance diagnostic. Does not affect NPSS. |
+
+### 6.2 Advisor-Level Metrics
+
+| Metric | Definition | Interpretation |
+|--------|-----------|----------------|
+| **MSES** (Mean Student Enthusiasm Score) | Per advisor: mean rank at which their students listed them | Lower MSES = students are more enthusiastic about this advisor |
+| **LUR** (Load Utilisation Rate) | actual_load / max_load per advisor | How fully each advisor's capacity is used |
+| **ERR** (Equity Retention Rate) | H̄_norm / H_baseline × 100 % | Fraction of theoretically achievable tier diversity retained; bounded [0, 100 %]. H_norm = per-advisor Shannon entropy normalised to [0, 1]; H_baseline = expected ceiling given the actual load distribution. |
+| **CPI Skewness** | Skewness of the CPI distribution of assigned students per advisor | Detects advisors whose cohort is systematically high or low CPI |

@@ -219,13 +219,15 @@ Sample files are in `data/`.
 ```
 src/allocator/
   app.py          – Dash application and callbacks
-  allocation.py   – Phase 0 / Round 1 / main allocation / CPI-Fill logic
+  allocation.py   – Phase 0 / Round 1 / main allocation / all five policy engines
+  analyze.py      – CLI analysis tool: metrics, compare, study subcommands
   data_loader.py  – CSV/Excel ingestion and Phase-0 report I/O
   state.py        – Data classes (Student, Faculty, AllocationSnapshot)
   visualizer.py   – Plotly figure builders
-  metrics.py      – NPSS and PSI satisfaction metrics
+  metrics.py      – NPSS, PSI, MSES, LUR, ERR, and CPI-skewness metrics
 scripts/
-  make_preference_sheet.py – Convert a form-export CSV into preference_sheet.csv and faculty_list.csv
+  make_preference_sheet.py      – Convert a form-export CSV into preference_sheet.csv and faculty_list.csv
+  generate_comparison_report.py – Run all 5 policies on real cohort data; write reports/comparison/
 data/             – Sample student and faculty CSV files
 docs/             – User manual (PDF) and policy reference docs
   policy_least_loaded.md  – least_loaded policy specification
@@ -234,10 +236,11 @@ docs/             – User manual (PDF) and policy reference docs
   policy_tiered_rounds.md – tiered_rounds policy specification
   policy_tiered_ll.md     – tiered_ll policy specification
 stats/            – Policy comparison study
-  run_study.py        – Generates synthetic datasets and runs both policies
+  run_study.py        – Generates synthetic datasets and runs all 5 policies
   policy_report.md    – Comparison report (tables, deltas, recommendations)
   students_*.csv      – Synthetic preference sheets used in the study
-reports/          – Phase-0 reports written here
-test/             – Real preference data (preference_sheet.csv, faculty_list.csv)
+reports/          – Phase-0 reports and allocation outputs written here
+  comparison/     – Real-cohort 5-policy comparison (real_data_report.md/pdf)
+test/             – Real preference data (anonymized_preferences.csv, faculty.csv)
 tests/            – Pytest test suite
 ```

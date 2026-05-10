@@ -22,11 +22,17 @@ Phase 0a  →  Phase 0b (cap optimization)  →  Round 1  →  Main Allocation (
 
 After Phase 0a, a cheap dry-run (`simulate_tiers_ab`) simulates Round 1 and Tiers A+B using the LL rule to count the number of faculty with zero students after those tiers (`E_after_B`).
 
+**`|C_remaining|` definition:**
+
+`|C_remaining|` = the number of Class-C students who were **not** assigned during the simulated Round 1. In most cohorts this equals `|C|` (because Round 1 only assigns one student per advisor and Class-C students rarely list a popular advisor as their first choice). It can be less than `|C|` if some C-tier students happened to win Round 1 picks.
+
 **Condition checked:**
-| E_after_B vs \|C\| | Meaning |
-|---------------------|---------|
-| E_after_B ≤ \|C\|  | No optimization needed. All empty labs will be filled by Class-C students. |
-| E_after_B > \|C\|  | Empty labs guaranteed. Cap optimization runs. |
+| E_after_B vs \|C_remaining\| | Meaning |
+|------------------------------|---------|
+| E_after_B ≤ \|C_remaining\|  | No optimization needed. All empty labs will be filled by Class-C students. |
+| E_after_B > \|C_remaining\|  | Empty labs guaranteed. Cap optimization runs. |
+
+The excess — `E_after_B − |C_remaining|` when positive — is stored in `meta["E_baseline_excess"]` and shown in the Phase 0 modal.
 
 **Cap search loop:**
 
@@ -34,10 +40,10 @@ After Phase 0a, a cheap dry-run (`simulate_tiers_ab`) simulates Round 1 and Tier
 N_A, N_B = baseline caps
 loop:
     E = simulate_tiers_ab(students, faculty, N_A, N_B)
-    if E ≤ |C|: done (converged)
+    if E ≤ |C_remaining|: done (converged)
     if N_B < F:  N_B += 1          # expand B first
     elif N_A < N_B: N_A += 1       # expand A only after B reaches F
-    else:                          # N_A = N_B = F, still E > |C|
+    else:                          # N_A = N_B = F, still E > |C_remaining|
         → STRUCTURAL ISSUE
 ```
 

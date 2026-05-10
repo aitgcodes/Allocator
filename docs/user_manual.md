@@ -293,7 +293,7 @@ The page renders:
 
 ### 2.6 CLI usage (no GUI)
 
-For scripted or batch runs, the allocation engine can be driven entirely from the command line. Note that `tiered_rounds` requires the Dash UI for manual tie-breaking and is not available via CLI.
+For scripted or batch runs, the allocation engine can be driven entirely from the command line. Note that `tiered_rounds` and `tiered_ll` require the `--auto-tiebreak` flag in CLI mode — without it the engine will refuse to run those policies and explain what to add.
 
 **Phase 0 only:**
 ```bash

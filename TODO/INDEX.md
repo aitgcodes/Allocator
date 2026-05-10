@@ -52,17 +52,13 @@ were already in the codebase. Real data anonymization can now be re-run cleanly.
 
 ---
 
-## Step 5 — Documentation Update (needs all prior steps)
+## Step 5 — Documentation Update (needs all prior steps) ✓ COMPLETE
 
 | File | Description |
 |------|-------------|
 | [`docs_update.md`](docs_update.md) | Audit and rewrite all docs (`policy_*.md`, `NPSS_Metric.md`, `MSThesisAllocationProtocol.md`, `user_manual.md`, `policy_report.md`, `CLAUDE.md`) to reflect current code. Add `docs/policy_tiered_ll.md`. Regenerate PDFs. |
 
-**Notes:**
-- Existing policy docs (LL, adaptive-LL, CPI-Fill, tiered_rounds) and metric
-  docs can be updated as soon as their implementations are stable — no need to wait for
-  Steps 2–4 to complete those sections.
-- `tiered_ll` doc and the updated `policy_report.md` must wait for Steps 2 and 4.
+**Completed 2026-05-10.** Policy docs audited and corrected: `tiered_rounds` CLI unavailability fixed (now available with `--auto-tiebreak`); `adaptive_ll` updated with `C_remaining` distinction and `E_baseline_excess` meta field; `least_loaded` and `tiered_rounds` cross-references added. `MSThesisAllocationProtocol.md` extended with 5-policy enumeration and advisor-metrics table (MSES, LUR, ERR, CPI skewness). `README.md` project structure updated. `stats/policy_report.md` already covers all 5 policies. PDFs regenerated for all changed docs.
 
 ---
 

@@ -95,3 +95,9 @@ PYTHONPATH=src python -m allocator.allocation \
   --faculty  data/sample_faculty.csv  \
   --policy   least_loaded
 ```
+
+---
+
+## See also
+
+- [`adaptive_ll`](policy_adaptive_ll.md) — drop-in replacement that adds a structural empty-lab guarantee by iteratively widening tier caps before the main allocation; produces an identical result when the baseline caps are already sufficient.

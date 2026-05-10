@@ -103,7 +103,7 @@ A round-by-round trace is recorded and shown in a collapsible section of the com
 | **MSES** | High in balanced cohorts — students advance down their list only when earlier preferences are taken, so assignments tend to reflect genuine enthusiasm |
 | **Equity Retention Rate** | Variable — no load-balancing mechanism; popular advisors fill early, which can concentrate CPI tiers |
 | **Transparency / auditability** | Highest — every assignment, every tie, and every manual decision is recorded in the trace log |
-| **Interactivity** | Required — the operator must resolve all CPI ties manually; the run cannot complete unattended if ties exist |
+| **Interactivity** | Required in GUI — the operator must resolve all CPI ties manually. Unattended CLI runs are available via `--auto-tiebreak`. |
 
 ---
 
@@ -116,7 +116,7 @@ A round-by-round trace is recorded and shown in a collapsible section of the com
 | Competition resolution | Manual tie-break if CPI equal | Automatic (least-load preference) | Automatic (first-come first-served in CPI order) |
 | Load balancing | Implicit (at most 1 per advisor per round) | Explicit (least-load criterion) | Weak (first-preference greedy) |
 | Empty-lab guarantee | Implicit | Indirect | Explicit (Phase 2 design) |
-| Operator involvement | Required for ties | Optional override | Optional override |
+| Operator involvement | Required for ties in GUI; auto with `--auto-tiebreak` in CLI | Optional override | Optional override |
 
 ---
 
@@ -128,7 +128,12 @@ A round-by-round trace is recorded and shown in a collapsible section of the com
 
 ## Known limitations
 
-- **Cannot run unattended** — CPI ties (even a single one) halt the run until manually resolved.
-- **No explicit load balancing** — an advisor that receives a student in round 1 may receive another in round 2 if they still have capacity, potentially diverging from load-balanced outcomes.
-- **CLI unavailable** — the policy requires the Dash UI.
+- **GUI requires manual tie resolution** — CPI ties halt the Dash UI until the operator makes a pick. For unattended batch runs, use `--auto-tiebreak` (CLI), which resolves all ties by highest CPI automatically.
+- **No explicit load balancing** — an advisor that receives a student in round 1 may receive another in round 2 if they still has capacity, potentially diverging from load-balanced outcomes.
 - **Overflow count is structural, not anomalous** — because N_tier windows are never applied during assignment, students may be placed at a rank > N_tier whenever their earlier preferences are taken. The completion panel shows this as a **blue informational badge** ("outside N-tier window — expected for tiered rounds") rather than a red error. The NPSS score is not affected.
+
+---
+
+## See also
+
+- [`tiered_ll`](policy_tiered_ll.md) — hybrid variant: runs tiered rounds 1..k (same tie-break mechanics), then switches to an automatic LL-HP backfill; adds an empty-lab guarantee.
